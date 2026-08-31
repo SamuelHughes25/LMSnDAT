@@ -57,6 +57,22 @@ export type Slide = {
   id: string;
   lesson: string;
   slide_type: SlideType;
+  // Sanitized HTML string authored by the same TipTap rich-text editor as
+  // `config.body`/`body2` above (bold/italic/underline/font-size marks,
+  // single line only — see slide-faces/content-slide-face.tsx's
+  // RichTextTitle) — not plain text. The backend's `title` is a plain
+  // CharField with no shape validation (the same situation `config`
+  // JSONField was already in), so this widened from plain text to HTML with
+  // no backend change. Rows written before this change store plain text
+  // with no wrapping tags; that's fine to read as-is, since ProseMirror's
+  // HTML parser auto-wraps loose top-level text into a paragraph the same
+  // way it would `<p>...</p>` — old titles keep displaying correctly and
+  // only get rewritten in the `<p>` shape once a user actually edits them.
+  // Any non-interactive render of this value MUST sanitize with DOMPurify
+  // before use (e.g. dangerouslySetInnerHTML) — same reasoning as
+  // `config.body` above: authored by trusted admins today, but
+  // course-preview-viewer.tsx already renders it to arbitrary learners once
+  // a course is published.
   title: string;
   order: number;
   config: SlideConfig;

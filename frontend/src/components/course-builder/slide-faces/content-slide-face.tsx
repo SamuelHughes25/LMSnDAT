@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { TextStyle } from "@tiptap/extension-text-style";
@@ -10,18 +10,19 @@ import DOMPurify from "dompurify";
 import type { ContentSlideLayout } from "@/lib/course-types";
 import { FontSize } from "@/lib/tiptap-font-size";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
-import { cn } from "@/lib/utils";
+import { cn, stripHtml } from "@/lib/utils";
 import { useActiveEditorContext } from "../active-editor-context";
 import type { SlideFaceProps } from "./index";
 
-// Local title state updates every keystroke for instant feedback; the network
-// PATCH (routed through onTitleChange/onConfigChange, which course-builder.tsx
-// wires to the updateSlide Server Action) is debounced so typing doesn't
-// fire a request per character. The canvas mounts this component with
+// Every interactive TipTap instance below (title and body alike) commits to
+// the parent via a debounced onUpdate — ProseMirror owns its own DOM and
+// keystroke-level state, so this only governs how often the network PATCH
+// (routed through onTitleChange/onConfigChange, which course-builder.tsx
+// wires to the updateSlide Server Action) actually fires, not how the
+// editor itself feels while typing. The canvas mounts this component with
 // key={slide.id} (see slide-canvas.tsx), so switching slides fully remounts
-// it — local state initializes fresh from the new slide's props and any
-// pending debounced call from the previous slide is cancelled by the hook's
-// unmount cleanup rather than firing stale.
+// it — any pending debounced call from the previously selected slide is
+// cancelled by the hook's unmount cleanup rather than firing stale.
 const CHANGE_DEBOUNCE_MS = 500;
 
 const FIELD_CLASSES =
@@ -53,29 +54,12 @@ function useIsClient() {
 export function ContentSlideFace({ slide, interactive, onTitleChange, onConfigChange }: SlideFaceProps) {
   const layout: ContentSlideLayout = slide.config.layout ?? "title-body";
 
-  const [localTitle, setLocalTitle] = useState(slide.title);
-  const title = interactive ? localTitle : slide.title;
-
-  const debouncedTitleChange = useDebouncedCallback((value: string) => {
-    onTitleChange?.(value);
-  }, CHANGE_DEBOUNCE_MS);
-
-  function handleTitleChange(value: string) {
-    setLocalTitle(value);
-    debouncedTitleChange(value);
-  }
-
-  const titleNode = interactive ? (
-    <input
-      value={title}
-      onChange={(e) => handleTitleChange(e.target.value)}
-      placeholder="Click to add title"
-      className={cn(FIELD_CLASSES, "text-4xl font-bold")}
+  const titleNode = (
+    <EditableTitle
+      value={slide.title}
+      interactive={interactive}
+      onCommit={(title) => onTitleChange?.(title)}
     />
-  ) : (
-    <div className={cn(FIELD_CLASSES, "text-4xl font-bold pointer-events-none")}>
-      {title || <span className="text-muted-foreground/50">Click to add title</span>}
-    </div>
   );
 
   // "two-column" renders two genuinely separate text boxes side by side
@@ -144,27 +128,63 @@ function EditableBody({
   className?: string;
 }) {
   if (!interactive) {
-    return <StaticBody value={value} className={className} />;
+    return <StaticField value={value} placeholder="Click to add text" className={cn(BODY_TYPOGRAPHY, className)} />;
   }
   return <RichTextBody value={value} onCommit={onCommit} className={className} />;
 }
 
-// Shared between the interactive TipTap editor and the sanitized static
+// Same dispatch shape as EditableBody above, for the on-canvas slide title.
+// Kept as a separate sibling (not folded into EditableBody with a "isTitle"
+// flag) because the two fields genuinely differ in extensions, typography,
+// and placeholder copy — a shared component would just be an if/else wearing
+// a trenchcoat.
+function EditableTitle({
+  value,
+  interactive,
+  onCommit,
+}: {
+  value: string;
+  interactive: boolean;
+  onCommit: (value: string) => void;
+}) {
+  if (!interactive) {
+    return <StaticField value={value} placeholder="Click to add title" className="text-4xl font-bold" />;
+  }
+  return <RichTextTitle value={value} onCommit={onCommit} />;
+}
+
+// Shared between the interactive TipTap body editor and the sanitized static
 // render (thumbnails, preview), so bullet/numbered lists look the same in
 // both. Tailwind's base reset strips default <ul>/<ol> list-style and
 // padding, so without this a bulletList/orderedList mark still produces
-// valid <ul>/<ol> markup but renders with no visible marker at all.
+// valid <ul>/<ol> markup but renders with no visible marker at all. Not used
+// by the title field at all — titles don't carry this typography, and (per
+// the current, deliberately-unrestricted title extension set) a title could
+// in principle contain a list, in which case it should look like whatever a
+// bare, unstyled list looks like rather than adopting body copy's spacing.
 const BODY_TYPOGRAPHY =
   "h-full overflow-y-auto text-lg leading-relaxed [&_p]:my-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-6 [&_ol]:pl-6 [&_li]:my-0.5";
 
-// Non-interactive render path (thumbnails, the learner-facing preview in
-// course-preview-viewer.tsx). `config.body`/`body2` are HTML strings authored
-// by the rich-text editor below; this content is only ever authored by
-// trusted admins today, but course-preview-viewer.tsx already renders this
-// same face to arbitrary learners once a course is published, so stored HTML
-// is sanitized with DOMPurify before it ever reaches dangerouslySetInnerHTML
-// — never render it raw.
-function StaticBody({ value, className }: { value: string | undefined; className?: string }) {
+// Non-interactive render path for any sanitized-HTML field on this face —
+// title and body/body2 alike (thumbnails, the learner-facing preview in
+// course-preview-viewer.tsx). This content is only ever authored by trusted
+// admins today, but course-preview-viewer.tsx already renders this same face
+// to arbitrary learners once a course is published, so stored HTML is
+// sanitized with DOMPurify before it ever reaches dangerouslySetInnerHTML —
+// never render it raw. `placeholder` and `className` let each caller supply
+// its own empty-state copy and typography (EditableBody passes
+// BODY_TYPOGRAPHY + "Click to add text", EditableTitle passes
+// "text-4xl font-bold" + "Click to add title") rather than this component
+// assuming either one.
+function StaticField({
+  value,
+  className,
+  placeholder,
+}: {
+  value: string | undefined;
+  className?: string;
+  placeholder: string;
+}) {
   // DOMPurify needs a real `window`/DOM to sanitize against; it has neither
   // during server rendering (Next.js still SSRs "use client" components for
   // the initial HTML) and its documented fallback there is to hand back the
@@ -179,12 +199,24 @@ function StaticBody({ value, className }: { value: string | undefined; className
   // unsanitized HTML reach the DOM.
   const isClient = useIsClient();
   const sanitized = isClient ? DOMPurify.sanitize(value ?? "") : "";
-  const classes = cn(FIELD_CLASSES, BODY_TYPOGRAPHY, "pointer-events-none", className);
+  const classes = cn(FIELD_CLASSES, "pointer-events-none", className);
 
-  if (!sanitized) {
+  // A field that was typed into and then fully cleared out doesn't
+  // round-trip through TipTap as `""` — `editor.getHTML()` on an empty doc
+  // returns `"<p></p>"` (an empty-but-valid paragraph), which
+  // `DOMPurify.sanitize` passes through unchanged since it's perfectly
+  // valid markup. A plain `!sanitized` check therefore misses this case and
+  // would render a blank, tag-only `<p></p>` instead of the placeholder.
+  // stripHtml (a real DOM-based tag strip, not a regex) gives the actual
+  // rendered text content regardless of how many empty wrapper tags survive
+  // sanitization, so "no visible text" is what's actually being checked
+  // here, not "the string happens to be empty."
+  const isEmpty = !sanitized || stripHtml(sanitized).trim().length === 0;
+
+  if (isEmpty) {
     return (
       <div className={classes}>
-        <span className="text-muted-foreground/50">Click to add text</span>
+        <span className="text-muted-foreground/50">{placeholder}</span>
       </div>
     );
   }
@@ -284,6 +316,102 @@ function RichTextBody({
     //     the Select instead sets this ref directly (see slide-text-toolbar.tsx)
     //     whenever it's opening/open, sidestepping the portal question
     //     entirely in favor of explicit "we're mid-interaction" state.
+    onBlur: ({ editor, event }) => {
+      const toolbarEl = toolbarRef.current;
+      const nextFocus = event.relatedTarget;
+      const focusMovedIntoToolbar = !!(toolbarEl && nextFocus instanceof Node && toolbarEl.contains(nextFocus));
+      if (focusMovedIntoToolbar || toolbarInteractingRef.current) {
+        return;
+      }
+      setActiveEditor((current) => (current === editor ? null : current));
+    },
+  });
+
+  return <EditorContent editor={editor} />;
+}
+
+// Interactive (canvas) render path for the slide title — a single-line
+// TipTap instance sharing SlideTextToolbar with RichTextBody above (that's
+// the whole point: selecting part of a title pops up the same Bold/Italic/
+// Underline/list/font-size toolbar as selecting part of the body does), so
+// its focus/blur wiring is identical to RichTextBody's — see the comments
+// there for why the toolbarRef/toolbarInteractingRef guards on onBlur exist.
+//
+// Differs from RichTextBody in exactly three ways: the placeholder copy,
+// the typography class (`text-4xl font-bold` instead of BODY_TYPOGRAPHY —
+// the title's default, unformatted look is unchanged from the old plain
+// <input>), and `editorProps.handleKeyDown` below, which is what actually
+// keeps this a single line.
+//
+// Judgment call: this does NOT also disable bulletList/orderedList in the
+// StarterKit config below (they're left exactly as RichTextBody configures
+// them). A title selection can still, in principle, be toggled into a
+// bullet/numbered list via the shared toolbar — it won't create a second
+// line (Enter is still suppressed), just wrap the single line in a list
+// marker, which is a cosmetic edge case the brief didn't ask about, not a
+// correctness violation of "single line." Deliberately not touching
+// StarterKit's list config to avoid an orphaned-schema risk (disabling
+// bulletList/orderedList while leaving listItem enabled, or vice versa) for
+// a case that wasn't requested.
+function RichTextTitle({
+  value,
+  onCommit,
+}: {
+  value: string;
+  onCommit: (value: string) => void;
+}) {
+  const { setActiveEditor, toolbarRef, toolbarInteractingRef } = useActiveEditorContext();
+  const debouncedCommit = useDebouncedCallback(onCommit, CHANGE_DEBOUNCE_MS);
+
+  const editor = useEditor({
+    immediatelyRender: false,
+    editable: true,
+    // Pre-existing rows may hold plain text with no wrapping tags (rows
+    // written before this change) — ProseMirror's HTML parser auto-wraps
+    // loose top-level text into a paragraph the same way it would
+    // `<p>...</p>`, so this needs no special-casing (see the comment on
+    // `Slide.title` in course-types.ts).
+    content: value ?? "",
+    extensions: [
+      StarterKit.configure({
+        heading: false,
+        blockquote: false,
+        code: false,
+        codeBlock: false,
+        horizontalRule: false,
+        link: false,
+      }),
+      TextStyle,
+      FontSize,
+      Placeholder.configure({ placeholder: "Click to add title" }),
+    ],
+    editorProps: {
+      attributes: {
+        class: cn(
+          FIELD_CLASSES,
+          "text-4xl font-bold",
+          "[&_.is-empty]:before:pointer-events-none [&_.is-empty]:before:float-left [&_.is-empty]:before:h-0 [&_.is-empty]:before:text-muted-foreground/50 [&_.is-empty]:before:content-[attr(data-placeholder)]",
+        ),
+      },
+      // A title is one line. Confirmed against prosemirror-view's actual
+      // EditorProps type (node_modules/prosemirror-view/dist/index.d.ts):
+      // `handleKeyDown?: (this: P, view: EditorView, event: KeyboardEvent)
+      // => boolean | void` — returning `true` tells ProseMirror the key was
+      // handled, suppressing its default paragraph-split/line-break
+      // behavior. `event.key === "Enter"` alone covers both bare Enter and
+      // Shift+Enter: Shift is only a modifier flag on the event, not a
+      // different `key` value, so one check catches both.
+      handleKeyDown: (_view, event) => {
+        if (event.key === "Enter") return true;
+        return false;
+      },
+    },
+    onUpdate: ({ editor }) => {
+      debouncedCommit(editor.getHTML());
+    },
+    onFocus: ({ editor }) => {
+      setActiveEditor(editor);
+    },
     onBlur: ({ editor, event }) => {
       const toolbarEl = toolbarRef.current;
       const nextFocus = event.relatedTarget;

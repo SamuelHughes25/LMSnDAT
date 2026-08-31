@@ -26,6 +26,15 @@ type ActiveEditorContextValue = {
   // conditionally mount the toolbar row itself rather than only toggling its
   // internal contents.
   hasSelection: boolean;
+  // The current selection's on-screen bounding box (native Selection API,
+  // not TipTap's coordsAtPos — simpler, and already correct by the time
+  // `selectionUpdate` fires, since that only fires after ProseMirror has
+  // synced its selection to the DOM). `null` whenever there's no active
+  // editor, no selection, or the browser's Selection API couldn't produce
+  // a usable rect (see the guarded computation in the provider below).
+  // SlideTextToolbar uses this to float itself near the selection
+  // (`position: fixed`) instead of at a fixed spot on the page.
+  selectionRect: DOMRect | null;
   // The toolbar's own root DOM node, so an editor's onBlur handler can tell
   // "focus moved into the toolbar itself" (e.g. clicking a plain button)
   // apart from "focus moved somewhere else entirely" — see the comment on
@@ -46,6 +55,7 @@ const ActiveEditorContext = createContext<ActiveEditorContextValue | null>(null)
 export function ActiveEditorProvider({ children }: { children: ReactNode }) {
   const [activeEditor, setActiveEditor] = useState<Editor | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
+  const [selectionRect, setSelectionRect] = useState<DOMRect | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const toolbarInteractingRef = useRef(false);
 
@@ -59,10 +69,37 @@ export function ActiveEditorProvider({ children }: { children: ReactNode }) {
   // nothing (no listener to attach) rather than resetting `hasSelection`
   // itself — that reset is instead *derived* below (`activeEditor !==
   // null && hasSelection`), since "no active editor" trivially implies "no
-  // visible selection" without needing an effect to say so.
+  // visible selection" without needing an effect to say so. Same reasoning
+  // applies to `selectionRect`.
   useEffect(() => {
     if (!activeEditor) return;
-    const updateSelection = () => setHasSelection(!activeEditor.state.selection.empty);
+    const updateSelection = () => {
+      const empty = activeEditor.state.selection.empty;
+      setHasSelection(!empty);
+      if (empty) {
+        setSelectionRect(null);
+        return;
+      }
+      // Native Selection API, not TipTap's coordsAtPos — simpler, and the
+      // native selection is already correct here since selectionUpdate
+      // fires after ProseMirror has synced its selection to the DOM.
+      // getRangeAt(0) throws if rangeCount is 0 even when `sel` itself is
+      // non-null, so that's checked explicitly; the try/catch is
+      // belt-and-suspenders for any other browser-specific edge case.
+      try {
+        const domSelection = window.getSelection();
+        if (!domSelection || domSelection.rangeCount === 0) {
+          setSelectionRect(null);
+          return;
+        }
+        const rect = domSelection.getRangeAt(0).getBoundingClientRect();
+        // A zero-size rect (e.g. a selection that collapses onto an empty
+        // inline node) isn't useful to anchor the toolbar to.
+        setSelectionRect(rect.width > 0 || rect.height > 0 ? rect : null);
+      } catch {
+        setSelectionRect(null);
+      }
+    };
     updateSelection();
     activeEditor.on("selectionUpdate", updateSelection);
     return () => {
@@ -75,10 +112,11 @@ export function ActiveEditorProvider({ children }: { children: ReactNode }) {
       activeEditor,
       setActiveEditor,
       hasSelection: activeEditor !== null && hasSelection,
+      selectionRect: activeEditor !== null ? selectionRect : null,
       toolbarRef,
       toolbarInteractingRef,
     }),
-    [activeEditor, hasSelection],
+    [activeEditor, hasSelection, selectionRect],
   );
 
   return <ActiveEditorContext.Provider value={value}>{children}</ActiveEditorContext.Provider>;

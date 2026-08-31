@@ -195,11 +195,7 @@ export function CourseBuilder({
   return (
     <ActiveEditorProvider>
       <div className="flex h-full flex-col">
-        {/* `relative` so SlideTextToolbar can anchor to this header's bottom
-            edge via `top-full` and float there — see the comment on its root
-            element for why it must be an absolutely-positioned overlay
-            rather than a normal-flow block. */}
-        <div className="relative mb-4 flex items-center justify-between">
+        <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Button
               variant="ghost"
@@ -224,7 +220,11 @@ export function CourseBuilder({
               a non-empty selection (see slide-text-toolbar.tsx), so this
               mounts unconditionally here rather than needing
               course-builder.tsx to also read active-editor-context.tsx just
-              to decide whether to include it. */}
+              to decide whether to include it. It positions itself via
+              `position: fixed` off the current selection's own screen
+              coordinates (see active-editor-context.tsx's `selectionRect`),
+              not off this header's layout, so where it's mounted in the
+              tree no longer matters for where it visually appears. */}
           <SlideTextToolbar />
         </div>
 

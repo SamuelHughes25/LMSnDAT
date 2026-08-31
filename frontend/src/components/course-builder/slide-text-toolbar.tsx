@@ -1,10 +1,26 @@
 "use client";
 
+import { useLayoutEffect, useState, type CSSProperties } from "react";
 import { Bold, Italic, List, ListOrdered, Underline as UnderlineIcon } from "lucide-react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useActiveEditorContext } from "./active-editor-context";
+
+// Gap (px) kept between the toolbar and the selection it's floating next
+// to, on whichever side it ends up rendering.
+const GAP = 8;
+
+// Fallback box size used only for the very first synchronous render after
+// the toolbar mounts, before the layout effect below has measured its real
+// box. Because that measurement happens in a *layout* effect (not a plain
+// effect), the correction lands before the browser paints — so this
+// estimate is never actually visible, it only has to be in the right
+// ballpark so the first computed position isn't wildly wrong for that one
+// discarded pass. Height (~44px) matches the toolbar's actual h-7 buttons +
+// p-1.5 padding + border-2; width is harder to eyeball precisely because of
+// the variable-width font-size Select, so this is intentionally generous.
+const ESTIMATED_SIZE = { width: 320, height: 44 };
 
 // "Normal" intentionally maps to *unsetting* the fontSize mark rather than
 // to an explicit `18px` value — the field's default body text is Tailwind's
@@ -61,19 +77,58 @@ function ToolbarButton({
 // it appear/disappear, so no wrapper component needs to reach into this
 // context on the toolbar's behalf.
 //
-// Positioned `absolute` (anchored to the header's `relative` container via
-// `top-full`), not a normal-flow block: mounting/unmounting this must never
-// shift the layout of anything below it. It first shipped as a normal flow
-// element, which caused a real click-miss bug — clicking a properties-panel
-// button (e.g. the layout picker) blurs the editor, which clears
-// `activeEditor`, which unmounts this toolbar; as a flow element that
-// shift moved everything below it (including the button being clicked) up
-// by this toolbar's height in the middle of the mousedown→click gesture, so
-// the click's mouseup landed on empty space instead of the button. Confirmed
-// by instrumenting the click handler (it silently never fired) before fixing
-// this, not assumed.
+// Positioned `fixed`, floating near the current text selection (Google
+// Docs/Notion-style) rather than anchored to a fixed spot on the page — see
+// the position math below. `fixed` is, like the `absolute` positioning this
+// replaced, *always* taken out of normal document flow (confirmed, not
+// assumed: no ancestor between this component and the document root sets
+// `transform`/`filter`/`will-change: transform` or anything else that would
+// give `fixed` a containing block other than the viewport), so
+// mounting/unmounting this still can never shift the layout of anything
+// else on the page. It first shipped as a normal flow element, which caused
+// a real click-miss bug — clicking a properties-panel button (e.g. the
+// layout picker) blurs the editor, which clears `activeEditor`, which
+// unmounts this toolbar; as a flow element that shift moved everything
+// below it (including the button being clicked) up by this toolbar's height
+// in the middle of the mousedown→click gesture, so the click's mouseup
+// landed on empty space instead of the button. Confirmed by instrumenting
+// the click handler (it silently never fired) before fixing this, not
+// assumed.
 export function SlideTextToolbar() {
-  const { activeEditor, hasSelection, toolbarRef, toolbarInteractingRef } = useActiveEditorContext();
+  const { activeEditor, hasSelection, selectionRect, toolbarRef, toolbarInteractingRef } = useActiveEditorContext();
+  const [size, setSize] = useState(ESTIMATED_SIZE);
+
+  // Hooks must run unconditionally before the early return below (Rules of
+  // Hooks), so this measures on every render regardless of whether the
+  // toolbar is currently visible — `toolbarRef.current` is simply null
+  // while invisible (the early return below skips rendering the div, but
+  // this component's own instance never unmounts just because it returned
+  // null on some prior render — it's mounted once, unconditionally, in
+  // course-builder.tsx), in which case this is a no-op and `size` just
+  // keeps its last known value.
+  //
+  // Deliberately no dependency array — and specifically *not* `[toolbarRef]`
+  // as eslint-plugin-react-hooks suggests, which would be actively wrong
+  // here: `toolbarRef` is a ref *object* whose identity never changes, so
+  // listing it would make this effect fire exactly once, on this
+  // component's true first mount — while `hasSelection` is still false and
+  // `toolbarRef.current` is still null (nothing has rendered into it yet).
+  // It would never fire again afterward (same stable identity forever), so
+  // `size` would permanently stick at the fallback ESTIMATED_SIZE and never
+  // get corrected once real selections start happening. Running after every
+  // render is what actually re-measures each time the toolbar transitions
+  // from hidden to visible; it's cheap (one getBoundingClientRect call) and
+  // self-limiting (the setSize call below bails out via Object.is-style
+  // equality once the measured box stops changing, which it does
+  // immediately since the toolbar's box is otherwise constant).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const el = toolbarRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    setSize((prev) => (prev.width === rect.width && prev.height === rect.height ? prev : { width: rect.width, height: rect.height }));
+  });
 
   if (!activeEditor || !hasSelection) return null;
 
@@ -90,11 +145,33 @@ export function SlideTextToolbar() {
     }
   }
 
+  // `window.innerWidth`/`window.getSelection()`-derived `selectionRect` are
+  // safe to read unguarded here (unlike e.g. StaticBody's DOMPurify call,
+  // which runs unconditionally on every render including SSR): this whole
+  // branch only ever executes once `activeEditor && hasSelection` are both
+  // true, which requires a live, client-mounted TipTap editor with a real
+  // selection — never true during server rendering.
+  //
+  // Float above the selection by default (`top - GAP - height`); flip to
+  // below (`bottom + GAP`) when there isn't enough room above, so `top`
+  // never goes negative. Clamp `left` so the toolbar's right edge never
+  // overflows `window.innerWidth` (and, for free, so its left edge never
+  // goes negative either). If `selectionRect` is null (the guarded
+  // edge-case in active-editor-context.tsx), fall back to no explicit
+  // top/left at all — CSS resolves that to this element's "static
+  // position," i.e. roughly where its DOM parent (the header) is, a
+  // reasonable degrade rather than pinning to the viewport corner.
+  let style: CSSProperties = { position: "fixed" };
+  if (selectionRect) {
+    const spaceAbove = selectionRect.top - GAP - size.height;
+    const top = spaceAbove >= 0 ? spaceAbove : selectionRect.bottom + GAP;
+    const maxLeft = window.innerWidth - size.width - GAP;
+    const left = Math.min(Math.max(selectionRect.left, GAP), Math.max(GAP, maxLeft));
+    style = { ...style, top, left };
+  }
+
   return (
-    <div
-      ref={toolbarRef}
-      className="absolute left-0 top-full z-20 mt-2 flex items-center gap-1 rounded-lg border-2 border-border bg-card p-1.5 shadow-sm"
-    >
+    <div ref={toolbarRef} style={style} className="z-20 flex items-center gap-1 rounded-lg border-2 border-border bg-card p-1.5 shadow-sm">
       <ToolbarButton
         label="Bold"
         active={activeEditor.isActive("bold")}
