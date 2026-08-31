@@ -84,13 +84,29 @@ function SlideProperties({
   );
 }
 
-const LAYOUT_OPTIONS: { value: ContentSlideLayout; label: string }[] = [
-  { value: "title-body", label: "Title & body" },
-  { value: "two-column", label: "Two column" },
-  { value: "title-only", label: "Title only" },
-  { value: "title-subtitle", label: "Title & subtitle" },
-  { value: "title-top", label: "Title top" },
-  { value: "title-bottom", label: "Title bottom" },
+// Grouped by what the layout is *for*, not just listed flat — "Title
+// pages" are cover/section-divider slides with no body text (a title,
+// positioned somewhere, optionally with a subtitle); "Text pages" are the
+// ones with a real body-text box the author writes into. Splitting the
+// picker into two labeled groups makes that distinction visible instead of
+// leaving the author to infer it from six unlabeled icons in a row.
+const LAYOUT_CATEGORIES: { label: string; options: { value: ContentSlideLayout; label: string }[] }[] = [
+  {
+    label: "Title pages",
+    options: [
+      { value: "title-only", label: "Title only" },
+      { value: "title-subtitle", label: "Title & subtitle" },
+      { value: "title-top", label: "Title top" },
+      { value: "title-bottom", label: "Title bottom" },
+    ],
+  },
+  {
+    label: "Text pages",
+    options: [
+      { value: "title-body", label: "Title & body" },
+      { value: "two-column", label: "Two column" },
+    ],
+  },
 ];
 
 // Tiny CSS-glyph icon buttons (no icon assets needed) previewing each
@@ -104,28 +120,33 @@ function ContentLayoutPicker({
   onChange: (layout: ContentSlideLayout) => void;
 }) {
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-3">
       <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Layout</div>
-      <div className="flex flex-wrap gap-1.5">
-        {LAYOUT_OPTIONS.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => onChange(opt.value)}
-            aria-label={opt.label}
-            aria-pressed={layout === opt.value}
-            title={opt.label}
-            className={cn(
-              "flex h-10 w-12 items-center justify-center rounded-md border-2 text-muted-foreground transition-colors",
-              layout === opt.value
-                ? "border-primary text-primary"
-                : "border-border hover:border-muted-foreground/40",
-            )}
-          >
-            <LayoutGlyph value={opt.value} />
-          </button>
-        ))}
-      </div>
+      {LAYOUT_CATEGORIES.map((category) => (
+        <div key={category.label} className="space-y-1.5">
+          <div className="text-[11px] font-medium text-muted-foreground/70">{category.label}</div>
+          <div className="flex flex-wrap gap-1.5">
+            {category.options.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => onChange(opt.value)}
+                aria-label={opt.label}
+                aria-pressed={layout === opt.value}
+                title={opt.label}
+                className={cn(
+                  "flex h-10 w-12 items-center justify-center rounded-md border-2 text-muted-foreground transition-colors",
+                  layout === opt.value
+                    ? "border-primary text-primary"
+                    : "border-border hover:border-muted-foreground/40",
+                )}
+              >
+                <LayoutGlyph value={opt.value} />
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
