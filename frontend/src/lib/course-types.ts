@@ -32,12 +32,21 @@ export type ContentSlideLayout = "title-body" | "two-column" | "title-only";
 export type SlideConfig = {
   // content
   layout?: ContentSlideLayout;
+  // Sanitized HTML string authored by the TipTap rich-text editor in
+  // slide-faces/content-slide-face.tsx (bold/italic/underline/lists/font-size
+  // marks) — not plain text. `Slide.config` is an untyped JSONField on the
+  // backend, so this widened from plain text to HTML with no schema change.
+  // Any non-interactive render of this value MUST sanitize with DOMPurify
+  // before use (e.g. dangerouslySetInnerHTML) — it's authored by trusted
+  // admins today, but course-preview-viewer.tsx already renders it to
+  // arbitrary learners once a course is published.
   body?: string;
   // Second column's text, used only when layout is "two-column" — a genuinely
   // separate field/text box (not one field CSS-split into columns): CSS
   // `columns` only wraps text into a second column once it overflows the
   // container's height, so a short body would render identically to
   // "title-body" and the layout picker would look like it did nothing.
+  // Same sanitized-HTML-string shape and rules as `body` above.
   body2?: string;
   image_url?: string | null;
   image_position?: "top" | "bottom" | "left" | "right";

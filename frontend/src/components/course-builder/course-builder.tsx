@@ -21,9 +21,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Course, CourseVersion, Lesson, Slide, SlideType } from "@/lib/course-types";
+import { ActiveEditorProvider } from "./active-editor-context";
 import { PropertiesPanel, type PropertiesPanelProps } from "./properties-panel";
 import { SlideCanvas } from "./slide-canvas";
 import { SlideRail } from "./slide-rail";
+import { SlideTextToolbar } from "./slide-text-toolbar";
 
 type Selection =
   | { type: "lesson"; lessonId: string }
@@ -191,64 +193,77 @@ export function CourseBuilder({
     : "empty";
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="mb-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            render={<Link href={`/courses/${course.id}`} aria-label="Back to course" />}
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div>
-            <h1 className="text-2xl font-semibold">{course.name}</h1>
-            <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
-              <Badge variant="secondary">Draft</Badge>
-              <span>Version {initialVersion.version_number}</span>
+    <ActiveEditorProvider>
+      <div className="flex h-full flex-col">
+        {/* `relative` so SlideTextToolbar can anchor to this header's bottom
+            edge via `top-full` and float there — see the comment on its root
+            element for why it must be an absolutely-positioned overlay
+            rather than a normal-flow block. */}
+        <div className="relative mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              render={<Link href={`/courses/${course.id}`} aria-label="Back to course" />}
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <div>
+              <h1 className="text-2xl font-semibold">{course.name}</h1>
+              <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+                <Badge variant="secondary">Draft</Badge>
+                <span>Version {initialVersion.version_number}</span>
+              </div>
             </div>
           </div>
-        </div>
-        <Button disabled={publishing} onClick={handlePublish}>
-          {publishing ? "Publishing…" : "Publish"}
-        </Button>
-      </div>
+          <Button disabled={publishing} onClick={handlePublish}>
+            {publishing ? "Publishing…" : "Publish"}
+          </Button>
 
-      <div className="flex min-h-0 flex-1 gap-4">
-        <div className="w-60 shrink-0">
-          <SlideRail
-            lessons={lessons}
-            selectedLessonId={selection?.type === "lesson" ? selection.lessonId : null}
-            selectedSlideId={selection?.type === "slide" ? selection.slideId : null}
-            onSelectLesson={(lessonId) => setSelection({ type: "lesson", lessonId })}
-            onSelectSlide={(lessonId, slideId) => setSelection({ type: "slide", lessonId, slideId })}
-            onLessonTitleChange={handleLessonTitleChange}
-            onDeleteLesson={handleDeleteLesson}
-            onDeleteSlide={handleDeleteSlide}
-            onSlideDragEnd={handleSlideDragEnd}
-            onLessonDragEnd={handleLessonDragEnd}
-            onAddSlide={handleAddSlide}
-            onAddLesson={handleAddLesson}
+          {/* Self-contained: renders nothing until an editor is focused with
+              a non-empty selection (see slide-text-toolbar.tsx), so this
+              mounts unconditionally here rather than needing
+              course-builder.tsx to also read active-editor-context.tsx just
+              to decide whether to include it. */}
+          <SlideTextToolbar />
+        </div>
+
+        <div className="flex min-h-0 flex-1 gap-4">
+          <div className="w-60 shrink-0">
+            <SlideRail
+              lessons={lessons}
+              selectedLessonId={selection?.type === "lesson" ? selection.lessonId : null}
+              selectedSlideId={selection?.type === "slide" ? selection.slideId : null}
+              onSelectLesson={(lessonId) => setSelection({ type: "lesson", lessonId })}
+              onSelectSlide={(lessonId, slideId) => setSelection({ type: "slide", lessonId, slideId })}
+              onLessonTitleChange={handleLessonTitleChange}
+              onDeleteLesson={handleDeleteLesson}
+              onDeleteSlide={handleDeleteSlide}
+              onSlideDragEnd={handleSlideDragEnd}
+              onLessonDragEnd={handleLessonDragEnd}
+              onAddSlide={handleAddSlide}
+              onAddLesson={handleAddLesson}
+            />
+          </div>
+
+          <SlideCanvas
+            slide={selectedSlide}
+            onTitleChange={(title) => {
+              if (selectedLesson && selectedSlide) handleSlideChange(selectedLesson.id, selectedSlide.id, { title });
+            }}
+            onConfigChange={(config) => {
+              if (selectedLesson && selectedSlide)
+                handleSlideChange(selectedLesson.id, selectedSlide.id, {
+                  config: { ...selectedSlide.config, ...config },
+                });
+            }}
           />
-        </div>
 
-        <SlideCanvas
-          slide={selectedSlide}
-          onTitleChange={(title) => {
-            if (selectedLesson && selectedSlide) handleSlideChange(selectedLesson.id, selectedSlide.id, { title });
-          }}
-          onConfigChange={(config) => {
-            if (selectedLesson && selectedSlide)
-              handleSlideChange(selectedLesson.id, selectedSlide.id, {
-                config: { ...selectedSlide.config, ...config },
-              });
-          }}
-        />
-
-        <div className="w-64 shrink-0 overflow-y-auto rounded-lg border-2 border-border bg-card shadow-sm">
-          <PropertiesPanel key={panelKey} {...panelProps} />
+          <div className="w-64 shrink-0 overflow-y-auto rounded-lg border-2 border-border bg-card shadow-sm">
+            <PropertiesPanel key={panelKey} {...panelProps} />
+          </div>
         </div>
       </div>
-    </div>
+    </ActiveEditorProvider>
   );
 }
