@@ -2,16 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import {
-  DndContext,
-  closestCenter,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import { SortableContext, arrayMove, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { Plus } from "lucide-react";
+import type { DragEndEvent } from "@dnd-kit/core";
+import { arrayMove } from "@dnd-kit/sortable";
 
 import {
   createLesson,
@@ -27,8 +19,9 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Course, CourseVersion, Lesson, Slide, SlideType } from "@/lib/course-types";
-import { LessonCard } from "./lesson-card";
 import { PropertiesPanel, type PropertiesPanelProps } from "./properties-panel";
+import { SlideCanvas } from "./slide-canvas";
+import { SlideRail } from "./slide-rail";
 
 type Selection =
   | { type: "lesson"; lessonId: string }
@@ -49,7 +42,6 @@ export function CourseBuilder({
   const [publishing, setPublishing] = useState(false);
   const [, startTransition] = useTransition();
   const router = useRouter();
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   const selectedLesson = selection ? (lessons.find((l) => l.id === selection.lessonId) ?? null) : null;
   const selectedSlide =
@@ -196,7 +188,7 @@ export function CourseBuilder({
     : "empty";
 
   return (
-    <div>
+    <div className="flex h-full flex-col">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">{course.name}</h1>
@@ -210,46 +202,38 @@ export function CourseBuilder({
         </Button>
       </div>
 
-      <div className="flex items-start gap-6">
-        <div className="min-w-0 flex-1 space-y-4">
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleLessonDragEnd}>
-            <SortableContext items={lessons.map((l) => l.id)} strategy={verticalListSortingStrategy}>
-              <div className="space-y-4">
-                {lessons.map((lesson) => (
-                  <LessonCard
-                    key={lesson.id}
-                    lesson={lesson}
-                    isSelected={selection?.type === "lesson" && selection.lessonId === lesson.id}
-                    selectedSlideId={
-                      selection?.type === "slide" && selection.lessonId === lesson.id
-                        ? selection.slideId
-                        : null
-                    }
-                    onSelect={() => setSelection({ type: "lesson", lessonId: lesson.id })}
-                    onSelectSlide={(slideId) =>
-                      setSelection({ type: "slide", lessonId: lesson.id, slideId })
-                    }
-                    onTitleChange={(title) => handleLessonTitleChange(lesson.id, title)}
-                    onDelete={() => handleDeleteLesson(lesson.id)}
-                    onDeleteSlide={(slideId) => handleDeleteSlide(lesson.id, slideId)}
-                    onSlideTitleChange={(slideId, title) =>
-                      handleSlideChange(lesson.id, slideId, { title })
-                    }
-                    onSlideDragEnd={(event) => handleSlideDragEnd(lesson.id, event)}
-                    onAddSlide={(type) => handleAddSlide(lesson.id, type)}
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
-
-          <Button variant="outline" onClick={handleAddLesson} className="w-full">
-            <Plus className="mr-1 h-4 w-4" />
-            Add lesson
-          </Button>
+      <div className="flex min-h-0 flex-1 gap-4">
+        <div className="w-60 shrink-0">
+          <SlideRail
+            lessons={lessons}
+            selectedLessonId={selection?.type === "lesson" ? selection.lessonId : null}
+            selectedSlideId={selection?.type === "slide" ? selection.slideId : null}
+            onSelectLesson={(lessonId) => setSelection({ type: "lesson", lessonId })}
+            onSelectSlide={(lessonId, slideId) => setSelection({ type: "slide", lessonId, slideId })}
+            onLessonTitleChange={handleLessonTitleChange}
+            onDeleteLesson={handleDeleteLesson}
+            onDeleteSlide={handleDeleteSlide}
+            onSlideDragEnd={handleSlideDragEnd}
+            onLessonDragEnd={handleLessonDragEnd}
+            onAddSlide={handleAddSlide}
+            onAddLesson={handleAddLesson}
+          />
         </div>
 
-        <div className="sticky top-6 w-80 shrink-0 rounded-lg border-2 border-border bg-card shadow-sm">
+        <SlideCanvas
+          slide={selectedSlide}
+          onTitleChange={(title) => {
+            if (selectedLesson && selectedSlide) handleSlideChange(selectedLesson.id, selectedSlide.id, { title });
+          }}
+          onConfigChange={(config) => {
+            if (selectedLesson && selectedSlide)
+              handleSlideChange(selectedLesson.id, selectedSlide.id, {
+                config: { ...selectedSlide.config, ...config },
+              });
+          }}
+        />
+
+        <div className="w-64 shrink-0 overflow-y-auto rounded-lg border-2 border-border bg-card shadow-sm">
           <PropertiesPanel key={panelKey} {...panelProps} />
         </div>
       </div>

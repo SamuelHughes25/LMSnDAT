@@ -17,13 +17,28 @@ export type TransitionStyle = "none" | "fade" | "slide";
 
 export type AssetKind = "image" | "video" | "other";
 
+// Curated layout presets for the "content" slide_type — the author picks
+// one, then fills in that layout's fixed placeholders (title + one shared
+// body field). "image-left"/"image-right" are deliberately not modeled yet:
+// there's no asset upload wired up until Stage 3, so building those layouts
+// now would just be dead UI. See slide-faces/content-slide-face.tsx for the
+// arrangement each value renders.
+export type ContentSlideLayout = "title-body" | "two-column" | "title-only";
+
 // Type-specific slide content. Only the "content" slide_type's shape is
 // modeled concretely this stage; the index signature keeps this open for
 // the other slide_types' config shapes (options, buckets/items, etc.) added
 // in later stages, same approach as QuestionConfig in lib/types.ts.
 export type SlideConfig = {
   // content
+  layout?: ContentSlideLayout;
   body?: string;
+  // Second column's text, used only when layout is "two-column" — a genuinely
+  // separate field/text box (not one field CSS-split into columns): CSS
+  // `columns` only wraps text into a second column once it overflows the
+  // container's height, so a short body would render identically to
+  // "title-body" and the layout picker would look like it did nothing.
+  body2?: string;
   image_url?: string | null;
   image_position?: "top" | "bottom" | "left" | "right";
   [key: string]: unknown;
