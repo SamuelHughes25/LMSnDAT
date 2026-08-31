@@ -4,12 +4,12 @@
 // templates/questions domain) so the two authoring domains stay
 // independently legible.
 
-// "content", "multiple_choice", and "missing_word" are buildable so far
-// (Stage 3). Typed as a string union (not a single string literal alias) so
-// later stages can widen it to also include "categorize" | "survey_rating" |
-// "number_slider" | "game_rapid_fire" without touching call sites — mirrors
-// backend/apps/courses/constants.py's SlideType enum.
-export type SlideType = "content" | "multiple_choice" | "missing_word";
+// "content", "multiple_choice", "missing_word", and "match_pairs" are
+// buildable so far (Stage 4). Typed as a string union (not a single string
+// literal alias) so later stages can widen it to also include "categorize" |
+// "survey_rating" | "number_slider" | "game_rapid_fire" without touching
+// call sites — mirrors backend/apps/courses/constants.py's SlideType enum.
+export type SlideType = "content" | "multiple_choice" | "missing_word" | "match_pairs";
 
 export type CourseVersionStatus = "draft" | "published" | "archived";
 
@@ -52,6 +52,16 @@ export type MissingWordBlank = {
   text: string;
 };
 
+// A single match_pairs keyword/definition pair. `id` is the join key used
+// to score a present-mode match (a click-to-pair attempt is "correct" iff
+// the selected keyword's pair id equals the selected definition's pair id)
+// — same denormalized-id-as-join-key shape as MissingWordBlank above.
+export type MatchPair = {
+  id: string;
+  keyword: string;
+  definition: string;
+};
+
 // Type-specific slide content. The "content" and "multiple_choice"
 // slide_types' shapes are modeled concretely so far; the index signature
 // keeps this open for the other slide_types' config shapes (blanks, pairs,
@@ -88,6 +98,12 @@ export type SlideConfig = {
   // missing_word
   paragraph?: string;
   blanks?: MissingWordBlank[];
+  // match_pairs
+  // Optional prompt shown above the two columns in "present"/"static" modes
+  // (e.g. "Match each term to its definition.") — blank is fine, same
+  // optional-with-no-fallback-copy treatment as feedback_incorrect above.
+  instructions?: string;
+  pairs?: MatchPair[];
   [key: string]: unknown;
 };
 
@@ -161,4 +177,5 @@ export const SLIDE_TYPE_LABELS: Record<SlideType, string> = {
   content: "Content",
   multiple_choice: "Multiple Choice",
   missing_word: "Missing Word",
+  match_pairs: "Match the Pair",
 };

@@ -13,8 +13,12 @@ export type SlideInteractionResult = {
   isCorrect: boolean;
   // 0-1, fraction correct — always 0 or 1 for multiple_choice (single
   // answer, no partial credit; those literal values still satisfy this
-  // wider type). missing_word (this stage) reports a genuine fraction —
-  // e.g. 2 of 3 blanks correct — and match-the-pair (later) will too.
+  // wider type). missing_word reports a genuine fraction — e.g. 2 of 3
+  // blanks correct. match_pairs always reports 1 once reported at all (see
+  // match-pairs-slide-face.tsx: mismatches bounce back for another try
+  // rather than being scored as wrong, so "reported" already means
+  // "completed" for this type — there is no partial-credit final state to
+  // represent).
   score: number;
   answeredAt: string; // ISO timestamp
   detail: unknown; // type-specific raw answer payload, for future review/debugging

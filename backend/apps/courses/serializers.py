@@ -91,6 +91,48 @@ class SlideSerializer(serializers.ModelSerializer):
                         )
                 ranges.append((start, end))
 
+        elif slide_type == SlideType.MATCH_PAIRS:
+            instructions = config.get('instructions')
+            pairs = config.get('pairs')
+            # Same leniency reasoning as MISSING_WORD above, and for the same
+            # reason: a slide is created with `pairs: []` and authored
+            # progressively (add a pair, type the keyword, type the
+            # definition, add another...), so hard-enforcing the spec's "min
+            # 2 pairs" on every save would reject the initial creation
+            # request and every legitimate single-pair intermediate state
+            # before the author finishes — exactly the bug class already hit
+            # and fixed twice (multiple_choice, then missing_word). This
+            # codebase has no separate "submit for real" step distinct from
+            # "save" (every PATCH is a real save), so there is no safe point
+            # at which to start applying a hard minimum; the "min 2" rule is
+            # therefore UI guidance only (see match-pairs-slide-face.tsx),
+            # never a save-time rejection. What IS enforced here is
+            # structural validity: once a pair exists it must be a
+            # well-formed object with string "keyword"/"definition" fields
+            # (empty string is fine — that's mid-typing, not malformed; a
+            # missing/non-string field is what actually indicates corrupt
+            # data), and the list must not exceed the max of 8 (a real
+            # product constraint, not an authoring-in-progress concern, so
+            # rejecting over-the-cap is safe at any time).
+            if instructions is not None and not isinstance(instructions, str):
+                raise serializers.ValidationError({'config': '"instructions" must be a string.'})
+            if pairs is not None and not isinstance(pairs, list):
+                raise serializers.ValidationError({'config': '"pairs" must be a list.'})
+            if pairs:
+                if len(pairs) > 8:
+                    raise serializers.ValidationError(
+                        {'config': 'match_pairs slides allow at most 8 pairs.'}
+                    )
+                for pair in pairs:
+                    if not isinstance(pair, dict):
+                        raise serializers.ValidationError({'config': 'each pair must be an object.'})
+                    keyword = pair.get('keyword')
+                    definition = pair.get('definition')
+                    if not isinstance(keyword, str) or not isinstance(definition, str):
+                        raise serializers.ValidationError(
+                            {'config': 'each pair must have "keyword" and "definition" strings.'}
+                        )
+
         return attrs
 
 

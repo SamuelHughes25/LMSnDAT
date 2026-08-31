@@ -3,6 +3,7 @@ import type { ComponentType } from "react";
 import type { Slide, SlideConfig, SlideType } from "@/lib/course-types";
 import type { SlideInteractionResult } from "@/lib/slide-interaction";
 import { ContentSlideFace } from "./content-slide-face";
+import { MatchPairsSlideFace } from "./match-pairs-slide-face";
 import { MissingWordSlideFace } from "./missing-word-slide-face";
 import { MultipleChoiceSlideFace } from "./multiple-choice-slide-face";
 
@@ -34,11 +35,11 @@ export type SlideFaceProps = {
   onInteraction?: (result: SlideInteractionResult) => void;
 };
 
-// "content", "multiple_choice", and "missing_word" are buildable so far
-// (Stage 3) — match_the_pair lands in the next stage and just adds one entry
-// here.
+// "content", "multiple_choice", "missing_word", and "match_pairs" are all
+// buildable now (Stage 4 completes the three interactive types).
 export const SLIDE_TYPE_FACES: Record<SlideType, ComponentType<SlideFaceProps>> = {
   content: ContentSlideFace,
   multiple_choice: MultipleChoiceSlideFace,
   missing_word: MissingWordSlideFace,
+  match_pairs: MatchPairsSlideFace,
 };

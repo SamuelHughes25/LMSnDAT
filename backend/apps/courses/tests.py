@@ -212,6 +212,56 @@ class CourseBuilderFlowTests(APIAuthTestCase):
         self.assertEqual(resp.status_code, 201, resp.content)
         missing_word_slide_id = resp.data['id']
 
+        # --- match_pairs config validation ---
+        # a brand-new slide (empty pairs list) must be creatable — the same
+        # regression class as missing_word's "Fresh Missing Word" case
+        # above, written and run FIRST for this slide type per the stage
+        # instructions, so this exact "can't create a fresh slide" bug
+        # (already hit twice) doesn't recur a third time here
+        resp = admin_client.post('/api/v1/slides/', {
+            'lesson': lesson_id, 'slide_type': 'match_pairs', 'title': 'Fresh Match Pairs', 'order': 5,
+            'config': {'instructions': '', 'pairs': []},
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.content)
+        admin_client.delete(f"/api/v1/slides/{resp.data['id']}/")
+
+        # a single mid-authoring pair (about to add a second) is also
+        # accepted — the backend deliberately does not enforce "at least 2"
+        # at save time, only structural well-formedness (see serializers.py)
+        resp = admin_client.post('/api/v1/slides/', {
+            'lesson': lesson_id, 'slide_type': 'match_pairs', 'title': 'Mid Authoring Match Pairs', 'order': 5,
+            'config': {
+                'instructions': 'Match each term to its definition.',
+                'pairs': [{'id': 'pair_1_x1', 'keyword': 'PPE', 'definition': ''}],
+            },
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.content)
+        admin_client.delete(f"/api/v1/slides/{resp.data['id']}/")
+
+        # a pair missing its definition entirely (structurally malformed,
+        # not just mid-typing) is rejected
+        resp = admin_client.post('/api/v1/slides/', {
+            'lesson': lesson_id, 'slide_type': 'match_pairs', 'title': 'Bad Match Pairs', 'order': 5,
+            'config': {
+                'instructions': 'Match each term to its definition.',
+                'pairs': [{'id': 'pair_1_x1', 'keyword': 'PPE'}],
+            },
+        }, format='json')
+        self.assertEqual(resp.status_code, 400, resp.content)
+
+        resp = admin_client.post('/api/v1/slides/', {
+            'lesson': lesson_id, 'slide_type': 'match_pairs', 'title': 'Good Match Pairs', 'order': 5,
+            'config': {
+                'instructions': 'Match each term to its definition.',
+                'pairs': [
+                    {'id': 'pair_1_x1', 'keyword': 'PPE', 'definition': 'Personal Protective Equipment'},
+                    {'id': 'pair_2_y2', 'keyword': 'LOTO', 'definition': 'Lockout/Tagout'},
+                ],
+            },
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.content)
+        match_pairs_slide_id = resp.data['id']
+
         # --- asset upload (multipart) ---
         upload = SimpleUploadedFile('rung.jpg', b'fake-image-bytes', content_type='image/jpeg')
         resp = admin_client.post('/api/v1/course-assets/', {
@@ -249,7 +299,7 @@ class CourseBuilderFlowTests(APIAuthTestCase):
 
         resp = admin_client.get(f'/api/v1/slides/?lesson={cloned_lesson_id}')
         cloned_by_title = {s['title']: s for s in resp.data['results']}
-        self.assertEqual(len(cloned_by_title), 5)
+        self.assertEqual(len(cloned_by_title), 6)
         self.assertEqual(cloned_by_title['Good MC']['config']['options'][0]['is_correct'], True)
         self.assertEqual(
             cloned_by_title['Good Categorize']['config']['items'][0]['correct_bucket_id'], 'bucket_2'
@@ -257,10 +307,14 @@ class CourseBuilderFlowTests(APIAuthTestCase):
         self.assertEqual(
             cloned_by_title['Good Missing Word']['config']['blanks'][0]['text'], 'hard hat'
         )
+        self.assertEqual(
+            cloned_by_title['Good Match Pairs']['config']['pairs'][0]['keyword'], 'PPE'
+        )
         # cloned slides are new rows, not the same ids as the published version's
         self.assertNotEqual(cloned_by_title['Good MC']['id'], mc_slide_id)
         self.assertNotEqual(cloned_by_title['Good Categorize']['id'], categorize_slide_id)
         self.assertNotEqual(cloned_by_title['Good Missing Word']['id'], missing_word_slide_id)
+        self.assertNotEqual(cloned_by_title['Good Match Pairs']['id'], match_pairs_slide_id)
 
         # --- publishing v2 archives v1 ---
         resp = admin_client.post(f'/api/v1/course-versions/{draft_v2_id}/publish/', format='json')

@@ -74,12 +74,20 @@ export async function reorderLessons(lessons: { id: string; order: number }[]): 
 // --- Slides ---
 
 // Default config per slide_type on creation. "content", "multiple_choice",
-// and "missing_word" exist this stage — the switch is structured so later
-// slide types (match_the_pair, ...) slot in as new cases without a rewrite.
+// "missing_word", and "match_pairs" exist this stage — the switch is
+// structured so later slide types slot in as new cases without a rewrite.
 function defaultSlideConfig(slideType: SlideType): SlideConfig {
   switch (slideType) {
     case "missing_word":
       return { paragraph: "", blanks: [] };
+    case "match_pairs":
+      // Empty pairs list on creation, matching missing_word's empty-blanks
+      // default above — the backend's match_pairs validation is
+      // deliberately built to accept `pairs: []` from the start (see
+      // backend/apps/courses/serializers.py), so this never fails its own
+      // creation request the way an over-strict default once did for the
+      // other two types.
+      return { instructions: "", pairs: [] };
     case "multiple_choice":
       // The backend requires at least one option marked correct on every
       // save (not just at publish), so the first option defaults to

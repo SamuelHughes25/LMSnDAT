@@ -22,11 +22,11 @@ import { SlideTypeIcon } from "./slide-type-icon";
 // slide_types that are actually buildable — "game_rapid_fire" and any other
 // enum-only type stay excluded until built, same convention
 // slide-type-icon.tsx and course-types.ts already follow. Structured as
-// named groups (not one flat list) so Missing Word and Match the Pair can
-// slot into "Assessment" later as one-line additions, no rewrite.
+// named groups (not one flat list) so a future buildable type can slot into
+// an existing group as a one-line addition, no rewrite.
 const GROUPS: { label: string; types: SlideType[] }[] = [
   { label: "Content", types: ["content"] },
-  { label: "Assessment", types: ["multiple_choice", "missing_word"] },
+  { label: "Assessment", types: ["multiple_choice", "missing_word", "match_pairs"] },
 ];
 
 export function AddSlideMenu({ onSelect }: { onSelect: (type: SlideType) => void }) {
