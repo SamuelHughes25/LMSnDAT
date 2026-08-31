@@ -32,6 +32,11 @@ export async function publishVersion(courseId: string, versionId: string): Promi
   return version;
 }
 
+export async function deleteCourse(courseId: string): Promise<void> {
+  await djangoFetch<void>(`/courses/${courseId}/`, { method: "DELETE" });
+  revalidatePath("/courses");
+}
+
 // --- Lessons ---
 // No revalidatePath below: the builder page keeps its own client-side state
 // (needed for drag-and-drop) and syncs it directly from each action's

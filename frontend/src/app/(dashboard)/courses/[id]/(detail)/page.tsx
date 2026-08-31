@@ -1,12 +1,11 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CreateCourseDraftButton } from "@/components/create-course-draft-button";
 import { PublishCourseButton } from "@/components/publish-course-button";
-import type { Course, CourseVersion } from "@/lib/course-types";
-import { DjangoApiError, djangoFetch } from "@/lib/django";
+import type { CourseVersion } from "@/lib/course-types";
+import { djangoFetch } from "@/lib/django";
 import type { Paginated } from "@/lib/types";
 
 const STATUS_VARIANT: Record<CourseVersion["status"], "default" | "secondary" | "outline"> = {
@@ -15,16 +14,10 @@ const STATUS_VARIANT: Record<CourseVersion["status"], "default" | "secondary" | 
   archived: "outline",
 };
 
-export default async function CourseDetailPage({ params }: { params: Promise<{ id: string }> }) {
+// Course existence/404 is already handled by the (detail) layout, which
+// fetches the course itself — this page only needs the version list.
+export default async function CourseOverviewPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-
-  let course: Course;
-  try {
-    course = await djangoFetch<Course>(`/courses/${id}/`);
-  } catch (err) {
-    if (err instanceof DjangoApiError && err.status === 404) notFound();
-    throw err;
-  }
 
   const versions = await djangoFetch<Paginated<CourseVersion>>(`/course-versions/?course=${id}`);
   const sorted = [...versions.results].sort((a, b) => b.version_number - a.version_number);
@@ -33,11 +26,6 @@ export default async function CourseDetailPage({ params }: { params: Promise<{ i
 
   return (
     <div className="max-w-2xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">{course.name}</h1>
-        {course.description && <p className="mt-1 text-muted-foreground">{course.description}</p>}
-      </div>
-
       <div className="flex items-center justify-between rounded-lg border-2 border-border bg-card p-4 shadow-sm">
         <div>
           <div className="font-medium">Draft</div>

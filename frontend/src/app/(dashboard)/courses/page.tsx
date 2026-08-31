@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { DeleteCourseButton } from "@/components/delete-course-button";
 import { NewCourseDialog } from "@/components/new-course-dialog";
 import {
   Table,
@@ -29,6 +30,7 @@ export default async function CoursesPage() {
               <TableHead>Name</TableHead>
               <TableHead>Description</TableHead>
               <TableHead>Created</TableHead>
+              <TableHead className="w-10" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -41,11 +43,14 @@ export default async function CoursesPage() {
                 </TableCell>
                 <TableCell>{course.description || "—"}</TableCell>
                 <TableCell>{new Date(course.created_at).toLocaleDateString()}</TableCell>
+                <TableCell>
+                  <DeleteCourseButton courseId={course.id} courseName={course.name} />
+                </TableCell>
               </TableRow>
             ))}
             {data.results.length === 0 && (
               <TableRow>
-                <TableCell colSpan={3} className="text-center text-muted-foreground">
+                <TableCell colSpan={4} className="text-center text-muted-foreground">
                   No courses yet.
                 </TableCell>
               </TableRow>

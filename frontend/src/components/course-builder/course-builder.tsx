@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { arrayMove } from "@dnd-kit/sortable";
+import { ArrowLeft } from "lucide-react";
 
 import {
   createLesson,
@@ -84,14 +86,16 @@ export function CourseBuilder({
   function handleLessonDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    setLessons((prev) => {
-      const oldIndex = prev.findIndex((l) => l.id === active.id);
-      const newIndex = prev.findIndex((l) => l.id === over.id);
-      const reordered = arrayMove(prev, oldIndex, newIndex).map((l, index) => ({ ...l, order: index }));
-      startTransition(() => {
-        reorderLessons(reordered.map((l) => ({ id: l.id, order: l.order }))).catch(() => {});
-      });
-      return reordered;
+    // Compute the reordered array up front and call setLessons/startTransition
+    // as separate statements — calling startTransition from inside a setState
+    // updater function is invalid (React: "Cannot call startTransition while
+    // rendering"), since updater functions must be pure.
+    const oldIndex = lessons.findIndex((l) => l.id === active.id);
+    const newIndex = lessons.findIndex((l) => l.id === over.id);
+    const reordered = arrayMove(lessons, oldIndex, newIndex).map((l, index) => ({ ...l, order: index }));
+    setLessons(reordered);
+    startTransition(() => {
+      reorderLessons(reordered.map((l) => ({ id: l.id, order: l.order }))).catch(() => {});
     });
   }
 
@@ -135,19 +139,18 @@ export function CourseBuilder({
   function handleSlideDragEnd(lessonId: string, event: DragEndEvent) {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    setLessons((prev) =>
-      prev.map((l) => {
-        if (l.id !== lessonId) return l;
-        const slides = [...l.slides].sort((a, b) => a.order - b.order);
-        const oldIndex = slides.findIndex((s) => s.id === active.id);
-        const newIndex = slides.findIndex((s) => s.id === over.id);
-        const reordered = arrayMove(slides, oldIndex, newIndex).map((s, index) => ({ ...s, order: index }));
-        startTransition(() => {
-          reorderSlides(reordered.map((s) => ({ id: s.id, order: s.order }))).catch(() => {});
-        });
-        return { ...l, slides: reordered };
-      }),
-    );
+    const lesson = lessons.find((l) => l.id === lessonId);
+    if (!lesson) return;
+    // Same fix as handleLessonDragEnd: compute first, then setLessons and
+    // startTransition as separate statements (not nested in the updater).
+    const slides = [...lesson.slides].sort((a, b) => a.order - b.order);
+    const oldIndex = slides.findIndex((s) => s.id === active.id);
+    const newIndex = slides.findIndex((s) => s.id === over.id);
+    const reordered = arrayMove(slides, oldIndex, newIndex).map((s, index) => ({ ...s, order: index }));
+    setLessons((prev) => prev.map((l) => (l.id === lessonId ? { ...l, slides: reordered } : l)));
+    startTransition(() => {
+      reorderSlides(reordered.map((s) => ({ id: s.id, order: s.order }))).catch(() => {});
+    });
   }
 
   // --- Publish ---
@@ -190,11 +193,20 @@ export function CourseBuilder({
   return (
     <div className="flex h-full flex-col">
       <div className="mb-4 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">{course.name}</h1>
-          <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
-            <Badge variant="secondary">Draft</Badge>
-            <span>Version {initialVersion.version_number}</span>
+        <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            render={<Link href={`/courses/${course.id}`} aria-label="Back to course" />}
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div>
+            <h1 className="text-2xl font-semibold">{course.name}</h1>
+            <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+              <Badge variant="secondary">Draft</Badge>
+              <span>Version {initialVersion.version_number}</span>
+            </div>
           </div>
         </div>
         <Button disabled={publishing} onClick={handlePublish}>
