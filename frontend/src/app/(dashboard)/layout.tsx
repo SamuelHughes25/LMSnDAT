@@ -6,6 +6,7 @@ import { getCurrentUser } from "@/lib/dal";
 const NAV_LINKS = [
   { href: "/", label: "Dashboard" },
   { href: "/templates", label: "Templates" },
+  { href: "/courses", label: "Courses" },
 ];
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
