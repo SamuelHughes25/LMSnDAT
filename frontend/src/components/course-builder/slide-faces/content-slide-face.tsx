@@ -62,6 +62,49 @@ export function ContentSlideFace({ slide, mode, onTitleChange, onConfigChange }:
     />
   );
 
+  // The four title-page layouts (cover/section-divider slides, no body
+  // text) are each their own branch rather than folded into one generic
+  // "positioned title" path — the four are genuinely different arrangements
+  // (centered vs. pinned top/bottom, with or without a subtitle), and a
+  // shared abstraction over "where do the flex alignment classes go" would
+  // end up harder to read than just writing out each one.
+  if (layout === "title-only") {
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center bg-white px-16 py-12 text-center text-foreground">
+        {titleNode}
+      </div>
+    );
+  }
+
+  if (layout === "title-subtitle") {
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-white px-16 py-12 text-center text-foreground">
+        {titleNode}
+        <EditableSubtitle
+          value={slide.config.subtitle}
+          mode={mode}
+          onCommit={(subtitle) => onConfigChange?.({ subtitle })}
+        />
+      </div>
+    );
+  }
+
+  if (layout === "title-top") {
+    return (
+      <div className="flex h-full w-full flex-col justify-start bg-white px-16 py-12 text-foreground">
+        {titleNode}
+      </div>
+    );
+  }
+
+  if (layout === "title-bottom") {
+    return (
+      <div className="flex h-full w-full flex-col justify-end bg-white px-16 py-12 text-foreground">
+        {titleNode}
+      </div>
+    );
+  }
+
   // "two-column" renders two genuinely separate text boxes side by side
   // (config.body / config.body2), not one field CSS-split into columns —
   // CSS `columns` only wraps text into a second column once it overflows
@@ -90,14 +133,6 @@ export function ContentSlideFace({ slide, mode, onTitleChange, onConfigChange }:
         onCommit={(body) => onConfigChange?.({ body })}
       />
     );
-
-  if (layout === "title-only") {
-    return (
-      <div className="flex h-full w-full flex-col items-center justify-center bg-white px-16 py-12 text-center text-foreground">
-        {titleNode}
-      </div>
-    );
-  }
 
   return (
     <div className="flex h-full w-full flex-col bg-white px-16 py-12 text-foreground">
@@ -153,6 +188,25 @@ function EditableTitle({
     return <RichTextTitle value={value} onCommit={onCommit} />;
   }
   return <StaticField value={value} placeholder="Click to add title" className="text-4xl font-bold" />;
+}
+
+// Same dispatch shape again, for the "title-subtitle" layout's subtitle
+// field — used only by that one layout (see ContentSlideFace above).
+function EditableSubtitle({
+  value,
+  mode,
+  onCommit,
+}: {
+  value: string | undefined;
+  mode: SlideFaceProps["mode"];
+  onCommit: (value: string) => void;
+}) {
+  if (mode === "edit") {
+    return <RichTextSubtitle value={value} onCommit={onCommit} />;
+  }
+  return (
+    <StaticField value={value} placeholder="Click to add subtitle" className="text-xl text-muted-foreground" />
+  );
 }
 
 // Shared between the interactive TipTap body editor and the sanitized static
@@ -352,22 +406,23 @@ function RichTextBody({
   return <EditorContent editor={editor} className={className} />;
 }
 
-// Interactive (canvas) render path for the slide title — a single-line
+// Shared by every single-line field on this face (title, subtitle) — a
 // TipTap instance sharing SlideTextToolbar with RichTextBody above (that's
-// the whole point: selecting part of a title pops up the same Bold/Italic/
-// Underline/list/font-size toolbar as selecting part of the body does), so
-// its focus/blur wiring is identical to RichTextBody's — see the comments
-// there for why the toolbarRef/toolbarInteractingRef guards on onBlur exist.
+// the whole point: selecting part of a title/subtitle pops up the same
+// Bold/Italic/Underline/list/font-size toolbar as selecting part of the
+// body does), so its focus/blur wiring is identical to RichTextBody's — see
+// the comments there for why the toolbarRef/toolbarInteractingRef guards on
+// onBlur exist.
 //
-// Differs from RichTextBody in exactly three ways: the placeholder copy,
-// the typography class (`text-4xl font-bold` instead of BODY_TYPOGRAPHY —
-// the title's default, unformatted look is unchanged from the old plain
+// Differs from RichTextBody in exactly three ways: the placeholder copy and
+// typography class are caller-supplied instead of BODY_TYPOGRAPHY (each
+// field's default, unformatted look is unchanged from its old plain
 // <input>), and `editorProps.handleKeyDown` below, which is what actually
-// keeps this a single line.
+// keeps every caller of this hook a single line.
 //
 // Judgment call: this does NOT also disable bulletList/orderedList in the
 // StarterKit config below (they're left exactly as RichTextBody configures
-// them). A title selection can still, in principle, be toggled into a
+// them). A selection here can still, in principle, be toggled into a
 // bullet/numbered list via the shared toolbar — it won't create a second
 // line (Enter is still suppressed), just wrap the single line in a list
 // marker, which is a cosmetic edge case the brief didn't ask about, not a
@@ -375,24 +430,28 @@ function RichTextBody({
 // StarterKit's list config to avoid an orphaned-schema risk (disabling
 // bulletList/orderedList while leaving listItem enabled, or vice versa) for
 // a case that wasn't requested.
-function RichTextTitle({
+function useSingleLineSlideEditor({
   value,
   onCommit,
+  typographyClass,
+  placeholder,
 }: {
   value: string;
   onCommit: (value: string) => void;
+  typographyClass: string;
+  placeholder: string;
 }) {
   const { setActiveEditor, toolbarRef, toolbarInteractingRef } = useActiveEditorContext();
   const debouncedCommit = useDebouncedCallback(onCommit, CHANGE_DEBOUNCE_MS);
 
-  const editor = useEditor({
+  return useEditor({
     immediatelyRender: false,
     editable: true,
     // Pre-existing rows may hold plain text with no wrapping tags (rows
-    // written before this change) — ProseMirror's HTML parser auto-wraps
-    // loose top-level text into a paragraph the same way it would
-    // `<p>...</p>`, so this needs no special-casing (see the comment on
-    // `Slide.title` in course-types.ts).
+    // written before TipTap replaced the old plain <input>s) — ProseMirror's
+    // HTML parser auto-wraps loose top-level text into a paragraph the same
+    // way it would `<p>...</p>`, so this needs no special-casing (see the
+    // comment on `Slide.title` in course-types.ts).
     content: value ?? "",
     extensions: [
       StarterKit.configure({
@@ -405,18 +464,18 @@ function RichTextTitle({
       }),
       TextStyle,
       FontSize,
-      Placeholder.configure({ placeholder: "Click to add title" }),
+      Placeholder.configure({ placeholder }),
     ],
     editorProps: {
       attributes: {
         class: cn(
           FIELD_CLASSES,
-          "text-4xl font-bold",
+          typographyClass,
           "[&_.is-empty]:before:pointer-events-none [&_.is-empty]:before:float-left [&_.is-empty]:before:h-0 [&_.is-empty]:before:text-muted-foreground/50 [&_.is-empty]:before:content-[attr(data-placeholder)]",
         ),
       },
-      // A title is one line. Confirmed against prosemirror-view's actual
-      // EditorProps type (node_modules/prosemirror-view/dist/index.d.ts):
+      // Confirmed against prosemirror-view's actual EditorProps type
+      // (node_modules/prosemirror-view/dist/index.d.ts):
       // `handleKeyDown?: (this: P, view: EditorView, event: KeyboardEvent)
       // => boolean | void` — returning `true` tells ProseMirror the key was
       // handled, suppressing its default paragraph-split/line-break
@@ -443,6 +502,42 @@ function RichTextTitle({
       }
       setActiveEditor((current) => (current === editor ? null : current));
     },
+  });
+}
+
+function RichTextTitle({
+  value,
+  onCommit,
+}: {
+  value: string;
+  onCommit: (value: string) => void;
+}) {
+  const editor = useSingleLineSlideEditor({
+    value,
+    onCommit,
+    typographyClass: "text-4xl font-bold",
+    placeholder: "Click to add title",
+  });
+
+  return <EditorContent editor={editor} />;
+}
+
+// Used only by the "title-subtitle" layout — same single-line mechanics as
+// RichTextTitle, just smaller/muted typography and different placeholder
+// copy, so it reads as secondary text (a byline/name/date) rather than a
+// second title.
+function RichTextSubtitle({
+  value,
+  onCommit,
+}: {
+  value: string | undefined;
+  onCommit: (value: string) => void;
+}) {
+  const editor = useSingleLineSlideEditor({
+    value: value ?? "",
+    onCommit,
+    typographyClass: "text-xl text-muted-foreground",
+    placeholder: "Click to add subtitle",
   });
 
   return <EditorContent editor={editor} />;

@@ -88,6 +88,9 @@ const LAYOUT_OPTIONS: { value: ContentSlideLayout; label: string }[] = [
   { value: "title-body", label: "Title & body" },
   { value: "two-column", label: "Two column" },
   { value: "title-only", label: "Title only" },
+  { value: "title-subtitle", label: "Title & subtitle" },
+  { value: "title-top", label: "Title top" },
+  { value: "title-bottom", label: "Title bottom" },
 ];
 
 // Tiny CSS-glyph icon buttons (no icon assets needed) previewing each
@@ -103,7 +106,7 @@ function ContentLayoutPicker({
   return (
     <div className="space-y-1.5">
       <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Layout</div>
-      <div className="flex gap-1.5">
+      <div className="flex flex-wrap gap-1.5">
         {LAYOUT_OPTIONS.map((opt) => (
           <button
             key={opt.value}
@@ -131,6 +134,31 @@ function LayoutGlyph({ value }: { value: ContentSlideLayout }) {
   if (value === "title-only") {
     return (
       <div className="flex h-5 w-8 items-center justify-center">
+        <div className="h-1.5 w-5 rounded-sm bg-current" />
+      </div>
+    );
+  }
+
+  if (value === "title-subtitle") {
+    return (
+      <div className="flex h-5 w-8 flex-col items-center justify-center gap-1">
+        <div className="h-1.5 w-5 rounded-sm bg-current" />
+        <div className="h-1 w-3 rounded-sm bg-current/40" />
+      </div>
+    );
+  }
+
+  if (value === "title-top") {
+    return (
+      <div className="flex h-5 w-8 items-start justify-center pt-0.5">
+        <div className="h-1.5 w-5 rounded-sm bg-current" />
+      </div>
+    );
+  }
+
+  if (value === "title-bottom") {
+    return (
+      <div className="flex h-5 w-8 items-end justify-center pb-0.5">
         <div className="h-1.5 w-5 rounded-sm bg-current" />
       </div>
     );

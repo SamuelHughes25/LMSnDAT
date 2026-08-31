@@ -23,7 +23,18 @@ export type AssetKind = "image" | "video" | "other";
 // there's no asset upload wired up until Stage 3, so building those layouts
 // now would just be dead UI. See slide-faces/content-slide-face.tsx for the
 // arrangement each value renders.
-export type ContentSlideLayout = "title-body" | "two-column" | "title-only";
+//
+// "title-only", "title-subtitle", "title-top", and "title-bottom" are all
+// title-page variants (no body text) that differ only in where the title
+// sits and whether a subtitle is present — cover/section-divider slides,
+// not content slides, so none of them render `bodyNodes`.
+export type ContentSlideLayout =
+  | "title-body"
+  | "two-column"
+  | "title-only"
+  | "title-subtitle"
+  | "title-top"
+  | "title-bottom";
 
 // A single multiple_choice answer option. Single-answer (radio) semantics:
 // at most one option in a given `options` array should ever have
@@ -86,6 +97,11 @@ export type SlideConfig = {
   // "title-body" and the layout picker would look like it did nothing.
   // Same sanitized-HTML-string shape and rules as `body` above.
   body2?: string;
+  // Used only when layout is "title-subtitle" — a short single-line field
+  // (Enter suppressed, same as `title`) for a byline/name/date under the
+  // main title, rather than a full multi-paragraph body. Same sanitized-
+  // HTML-string shape and rules as `title`/`body` above.
+  subtitle?: string;
   image_url?: string | null;
   image_position?: "top" | "bottom" | "left" | "right";
   // multiple_choice
