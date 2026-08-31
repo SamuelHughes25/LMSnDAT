@@ -107,6 +107,17 @@ const LAYOUT_CATEGORIES: { label: string; options: { value: ContentSlideLayout; 
       { value: "two-column", label: "Two column" },
     ],
   },
+  {
+    label: "Table pages",
+    options: [{ value: "title-table", label: "Title & table" }],
+  },
+  {
+    label: "Image pages",
+    options: [
+      { value: "image-left", label: "Image left" },
+      { value: "image-right", label: "Image right" },
+    ],
+  },
 ];
 
 // Tiny CSS-glyph icon buttons (no icon assets needed) previewing each
@@ -181,6 +192,41 @@ function LayoutGlyph({ value }: { value: ContentSlideLayout }) {
     return (
       <div className="flex h-5 w-8 items-end justify-center pb-0.5">
         <div className="h-1.5 w-5 rounded-sm bg-current" />
+      </div>
+    );
+  }
+
+  if (value === "title-table") {
+    return (
+      <div className="flex h-5 w-8 flex-col gap-0.5">
+        <div className="h-1 w-5 rounded-sm bg-current" />
+        <div className="grid flex-1 grid-cols-2 grid-rows-2 gap-0.5">
+          <div className="rounded-[1px] bg-current/30" />
+          <div className="rounded-[1px] bg-current/30" />
+          <div className="rounded-[1px] bg-current/30" />
+          <div className="rounded-[1px] bg-current/30" />
+        </div>
+      </div>
+    );
+  }
+
+  if (value === "image-left" || value === "image-right") {
+    return (
+      <div className="flex h-5 w-8 flex-col gap-0.5">
+        <div className="h-1 w-5 rounded-sm bg-current" />
+        <div className="flex flex-1 gap-0.5">
+          {value === "image-left" ? (
+            <>
+              <div className="flex-1 rounded-sm bg-current/60" />
+              <div className="flex-1 rounded-sm bg-current/30" />
+            </>
+          ) : (
+            <>
+              <div className="flex-1 rounded-sm bg-current/30" />
+              <div className="flex-1 rounded-sm bg-current/60" />
+            </>
+          )}
+        </div>
       </div>
     );
   }

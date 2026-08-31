@@ -248,6 +248,7 @@ export function CourseBuilder({
 
           <SlideCanvas
             slide={selectedSlide}
+            courseVersionId={initialVersion.id}
             onTitleChange={(title) => {
               if (selectedLesson && selectedSlide) handleSlideChange(selectedLesson.id, selectedSlide.id, { title });
             }}

@@ -11,10 +11,12 @@ export const CANVAS_H = 540;
 
 export function SlideCanvas({
   slide,
+  courseVersionId,
   onTitleChange,
   onConfigChange,
 }: {
   slide: Slide | null;
+  courseVersionId: string;
   onTitleChange: (title: string) => void;
   onConfigChange: (config: Partial<SlideConfig>) => void;
 }) {
@@ -40,6 +42,7 @@ export function SlideCanvas({
             key={slide.id}
             slide={slide}
             mode="edit"
+            courseVersionId={courseVersionId}
             onTitleChange={onTitleChange}
             onConfigChange={onConfigChange}
           />

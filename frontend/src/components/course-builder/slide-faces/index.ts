@@ -33,6 +33,13 @@ export type SlideFaceProps = {
   onTitleChange?: (title: string) => void;
   onConfigChange?: (config: Partial<SlideConfig>) => void;
   onInteraction?: (result: SlideInteractionResult) => void;
+  // Needed only by content-slide-face.tsx's "image-left"/"image-right"
+  // layouts, to attach an uploaded CourseAsset to the right draft (see
+  // uploadCourseAsset in app/actions/courses.ts). Optional because every
+  // other slide type/mode ignores it — "static"/"present" renders never
+  // upload anything, so slide-thumbnail.tsx and course-preview-viewer.tsx
+  // never need to pass it.
+  courseVersionId?: string;
 };
 
 // "content", "multiple_choice", "missing_word", and "match_pairs" are all

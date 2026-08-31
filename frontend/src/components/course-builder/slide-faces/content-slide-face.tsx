@@ -12,7 +12,9 @@ import { FontSize } from "@/lib/tiptap-font-size";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { cn, stripHtml } from "@/lib/utils";
 import { useActiveEditorContext } from "../active-editor-context";
+import { EditableImage } from "./image-field";
 import type { SlideFaceProps } from "./index";
+import { EditableTable } from "./table-field";
 
 // Every interactive TipTap instance below (title and body alike) commits to
 // the parent via a debounced onUpdate — ProseMirror owns its own DOM and
@@ -51,7 +53,13 @@ function useIsClient() {
   );
 }
 
-export function ContentSlideFace({ slide, mode, onTitleChange, onConfigChange }: SlideFaceProps) {
+export function ContentSlideFace({
+  slide,
+  mode,
+  courseVersionId,
+  onTitleChange,
+  onConfigChange,
+}: SlideFaceProps) {
   const layout: ContentSlideLayout = slide.config.layout ?? "title-body";
 
   const titleNode = (
@@ -101,6 +109,72 @@ export function ContentSlideFace({ slide, mode, onTitleChange, onConfigChange }:
     return (
       <div className="flex h-full w-full flex-col justify-end bg-white px-16 py-12 text-foreground">
         {titleNode}
+      </div>
+    );
+  }
+
+  // "title-table": a title plus a structured table filling the rest of the
+  // slide, in place of the free-form rich-text body every other "Text
+  // page"/"Image page" layout uses. Its own branch (not folded into
+  // bodyNodes below) since EditableTable takes a differently-shaped value
+  // (TableConfig, not a sanitized-HTML string) and a differently-shaped
+  // onCommit.
+  if (layout === "title-table") {
+    return (
+      <div className="flex h-full w-full flex-col bg-white px-16 py-12 text-foreground">
+        {titleNode}
+        <div className="mt-8 min-h-0 flex-1">
+          <EditableTable
+            value={slide.config.table}
+            mode={mode}
+            onCommit={(table) => onConfigChange?.({ table })}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // "image-left"/"image-right": an uploaded image alongside a rich-text body
+  // box, mirroring two-column's split row but with a picture on one side
+  // instead of a second text field. Both share this one branch (rather than
+  // being two separate `if`s like the title-page layouts above) since they
+  // differ only in which side the image renders on — genuinely just a
+  // left/right swap of the same two nodes, unlike the title-page layouts'
+  // structurally different alignment.
+  if (layout === "image-left" || layout === "image-right") {
+    const imageNode = (
+      <EditableImage
+        value={slide.config.image_url}
+        mode={mode}
+        courseVersionId={courseVersionId}
+        onCommit={(image_url) => onConfigChange?.({ image_url })}
+        className="flex-1"
+      />
+    );
+    const textNode = (
+      <EditableBody
+        value={slide.config.body}
+        mode={mode}
+        onCommit={(body) => onConfigChange?.({ body })}
+        className="flex-1"
+      />
+    );
+    return (
+      <div className="flex h-full w-full flex-col bg-white px-16 py-12 text-foreground">
+        {titleNode}
+        <div className="mt-8 flex min-h-0 flex-1 gap-8">
+          {layout === "image-left" ? (
+            <>
+              {imageNode}
+              {textNode}
+            </>
+          ) : (
+            <>
+              {textNode}
+              {imageNode}
+            </>
+          )}
+        </div>
       </div>
     );
   }

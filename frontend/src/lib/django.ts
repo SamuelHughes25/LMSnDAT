@@ -27,10 +27,18 @@ export async function djangoFetch<T>(path: string, init: RequestInit = {}): Prom
   const store = await cookies();
   const accessToken = store.get(ACCESS_TOKEN_COOKIE)?.value;
 
+  // A FormData body (file uploads — see uploadCourseAsset in
+  // app/actions/courses.ts) must NOT get a hardcoded "application/json"
+  // Content-Type: fetch needs to set its own multipart/form-data header with
+  // the correct boundary, which it only does when no Content-Type is
+  // already present. Every other call site in this app passes a
+  // JSON.stringify'd body, so this only changes behavior for FormData.
+  const isFormData = init.body instanceof FormData;
+
   const res = await fetch(`${DJANGO_API_URL}${path}`, {
     ...init,
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       ...init.headers,
     },

@@ -18,23 +18,32 @@ export type TransitionStyle = "none" | "fade" | "slide";
 export type AssetKind = "image" | "video" | "other";
 
 // Curated layout presets for the "content" slide_type — the author picks
-// one, then fills in that layout's fixed placeholders (title + one shared
-// body field). "image-left"/"image-right" are deliberately not modeled yet:
-// there's no asset upload wired up until Stage 3, so building those layouts
-// now would just be dead UI. See slide-faces/content-slide-face.tsx for the
-// arrangement each value renders.
+// one, then fills in that layout's fixed placeholders. Grouped into four
+// families in the properties-panel picker (see LAYOUT_CATEGORIES there):
 //
-// "title-only", "title-subtitle", "title-top", and "title-bottom" are all
-// title-page variants (no body text) that differ only in where the title
-// sits and whether a subtitle is present — cover/section-divider slides,
-// not content slides, so none of them render `bodyNodes`.
+//  - Title pages ("title-only", "title-subtitle", "title-top",
+//    "title-bottom") — cover/section-divider slides, no body text, differ
+//    only in where the title sits and whether a subtitle is present.
+//  - Text pages ("title-body", "two-column") — a title plus one or two
+//    rich-text body boxes.
+//  - Table pages ("title-table") — a title plus a structured table
+//    (config.table), not free-form rich text.
+//  - Image pages ("image-left", "image-right") — an uploaded image
+//    (config.image_url) alongside a rich-text body box, mirroring
+//    two-column's split but with a picture on one side.
+//
+// See slide-faces/content-slide-face.tsx for the arrangement each value
+// renders.
 export type ContentSlideLayout =
   | "title-body"
   | "two-column"
   | "title-only"
   | "title-subtitle"
   | "title-top"
-  | "title-bottom";
+  | "title-bottom"
+  | "title-table"
+  | "image-left"
+  | "image-right";
 
 // A single multiple_choice answer option. Single-answer (radio) semantics:
 // at most one option in a given `options` array should ever have
@@ -73,6 +82,19 @@ export type MatchPair = {
   definition: string;
 };
 
+// A "title-table" layout's structured table. Plain strings only, both for
+// headers and cell values — no per-cell rich text, matching the same
+// plain-input treatment as multiple_choice's options and match_pairs'
+// keyword/definition fields, so the table editor stays a simple grid of
+// text inputs rather than a grid of TipTap instances. Every row is expected
+// to have exactly `headers.length` cells; the editor in table-field.tsx is
+// the sole writer of this shape and keeps that invariant, so there's no
+// need to defensively pad/truncate rows when reading it elsewhere.
+export type TableConfig = {
+  headers: string[];
+  rows: string[][];
+};
+
 // Type-specific slide content. The "content" and "multiple_choice"
 // slide_types' shapes are modeled concretely so far; the index signature
 // keeps this open for the other slide_types' config shapes (blanks, pairs,
@@ -102,8 +124,17 @@ export type SlideConfig = {
   // main title, rather than a full multi-paragraph body. Same sanitized-
   // HTML-string shape and rules as `title`/`body` above.
   subtitle?: string;
+  // Used only when layout is "image-left"/"image-right" — the uploaded
+  // CourseAsset's `file` URL (see uploadCourseAsset in app/actions/courses.ts
+  // and slide-faces/image-field.tsx), or null once removed. Deliberately
+  // just a URL string, not an asset id: Slide.config already stores every
+  // other type-specific value as a literal rather than a cross-reference
+  // (same reasoning noted on the CourseAsset model itself), and a slide
+  // never needs to look up anything else about the asset.
   image_url?: string | null;
   image_position?: "top" | "bottom" | "left" | "right";
+  // Used only when layout is "title-table".
+  table?: TableConfig;
   // multiple_choice
   question?: string;
   options?: MultipleChoiceOption[];

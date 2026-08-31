@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { djangoFetch } from "@/lib/django";
-import type { Course, CourseVersion, Lesson, Slide, SlideConfig, SlideType } from "@/lib/course-types";
+import type { Course, CourseAsset, CourseVersion, Lesson, Slide, SlideConfig, SlideType } from "@/lib/course-types";
 
 // --- Courses ---
 
@@ -140,4 +140,19 @@ export async function reorderSlides(slides: { id: string; order: number }[]): Pr
       djangoFetch(`/slides/${s.id}/`, { method: "PATCH", body: JSON.stringify({ order: s.order }) }),
     ),
   );
+}
+
+// --- Course assets ---
+
+// Called directly from image-field.tsx's client-side upload handler (a
+// Server Action can be invoked imperatively like any async function, not
+// just via a <form action>). `formData` already carries "course_version",
+// "kind", and "file" — built client-side because the file itself only
+// exists in the browser. djangoFetch forwards it to Django as-is; see the
+// isFormData branch there for why it must NOT get a JSON Content-Type.
+export async function uploadCourseAsset(formData: FormData): Promise<CourseAsset> {
+  return djangoFetch<CourseAsset>("/course-assets/", {
+    method: "POST",
+    body: formData,
+  });
 }
