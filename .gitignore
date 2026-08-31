@@ -1,0 +1,15 @@
+.claude/
+
+__pycache__/
+*.pyc
+.env
+*.sqlite3
+staticfiles/
+media/
+backend/staticfiles/
+backend/media/
+.venv/
+venv/
+node_modules/
+.DS_Store
+*.log
