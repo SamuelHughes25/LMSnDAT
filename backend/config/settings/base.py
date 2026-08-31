@@ -29,6 +29,7 @@ INSTALLED_APPS = [
     'apps.core',
     'apps.accounts',
     'apps.templates_app',
+    'apps.courses',
     'apps.assignments',
     'apps.submissions',
     'apps.corrective_actions',
