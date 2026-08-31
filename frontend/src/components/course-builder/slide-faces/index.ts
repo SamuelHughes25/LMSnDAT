@@ -8,9 +8,18 @@ import { ContentSlideFace } from "./content-slide-face";
 // canvas, later a learner-facing preview), so a thumbnail is guaranteed to
 // look exactly like the canvas. `onTitleChange`/`onConfigChange` are
 // optional because non-interactive renders (thumbnails) never call them.
+//
+// `mode` distinguishes three genuinely different render contexts:
+//  - "edit"    — the builder canvas (slide-canvas.tsx). Fully editable.
+//  - "static"  — thumbnails (slide-thumbnail.tsx). Read-only, must never
+//                mount anything interactive/expensive.
+//  - "present" — the learner-facing preview (course-preview-viewer.tsx).
+//                Not editable, but (for future slide types) genuinely
+//                interactive — distinct from "static" so a quiz-type slide
+//                can be clickable in preview while thumbnails stay inert.
 export type SlideFaceProps = {
   slide: Slide;
-  interactive: boolean;
+  mode: "edit" | "static" | "present";
   onTitleChange?: (title: string) => void;
   onConfigChange?: (config: Partial<SlideConfig>) => void;
 };

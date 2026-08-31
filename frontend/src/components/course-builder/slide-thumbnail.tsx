@@ -71,7 +71,7 @@ export function SlideThumbnail({
               pointerEvents: "none",
             }}
           >
-            <Face slide={slide} interactive={false} />
+            <Face slide={slide} mode="static" />
           </div>
 
           {/* Transparent overlay handles the click — the scaled content above

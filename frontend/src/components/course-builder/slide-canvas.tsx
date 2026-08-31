@@ -39,7 +39,7 @@ export function SlideCanvas({
             // stale request against the wrong slide.
             key={slide.id}
             slide={slide}
-            interactive
+            mode="edit"
             onTitleChange={onTitleChange}
             onConfigChange={onConfigChange}
           />

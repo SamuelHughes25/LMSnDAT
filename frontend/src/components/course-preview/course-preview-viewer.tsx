@@ -51,7 +51,7 @@ export function CoursePreviewViewer({ slides }: { slides: PreviewSlide[] }) {
           className="shrink-0 overflow-hidden rounded-sm bg-white shadow-lg"
           style={{ width: CANVAS_W, height: CANVAS_H }}
         >
-          <Face key={current.slide.id} slide={current.slide} interactive={false} />
+          <Face key={current.slide.id} slide={current.slide} mode="present" />
         </div>
       </div>
 

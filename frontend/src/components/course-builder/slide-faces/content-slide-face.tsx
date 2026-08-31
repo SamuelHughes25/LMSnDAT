@@ -51,13 +51,13 @@ function useIsClient() {
   );
 }
 
-export function ContentSlideFace({ slide, interactive, onTitleChange, onConfigChange }: SlideFaceProps) {
+export function ContentSlideFace({ slide, mode, onTitleChange, onConfigChange }: SlideFaceProps) {
   const layout: ContentSlideLayout = slide.config.layout ?? "title-body";
 
   const titleNode = (
     <EditableTitle
       value={slide.title}
-      interactive={interactive}
+      mode={mode}
       onCommit={(title) => onTitleChange?.(title)}
     />
   );
@@ -72,13 +72,13 @@ export function ContentSlideFace({ slide, interactive, onTitleChange, onConfigCh
       <div className="flex h-full gap-8">
         <EditableBody
           value={slide.config.body}
-          interactive={interactive}
+          mode={mode}
           onCommit={(body) => onConfigChange?.({ body })}
           className="flex-1"
         />
         <EditableBody
           value={slide.config.body2}
-          interactive={interactive}
+          mode={mode}
           onCommit={(body2) => onConfigChange?.({ body2 })}
           className="flex-1"
         />
@@ -86,7 +86,7 @@ export function ContentSlideFace({ slide, interactive, onTitleChange, onConfigCh
     ) : (
       <EditableBody
         value={slide.config.body}
-        interactive={interactive}
+        mode={mode}
         onCommit={(body) => onConfigChange?.({ body })}
       />
     );
@@ -108,29 +108,31 @@ export function ContentSlideFace({ slide, interactive, onTitleChange, onConfigCh
 }
 
 // Dispatches to one of two genuinely different implementations depending on
-// `interactive`, rather than branching inside a single component body — a
-// TipTap editor instance must never be created for a non-interactive render
-// (thumbnails render every slide in the rail on every keystroke elsewhere in
-// the app; mounting a full ProseMirror editor per thumbnail would be both
-// wasteful and pointless, since nothing there is ever edited). Splitting
-// into two sibling components, each with its own unconditional hook calls,
-// keeps this a plain component-selection decision rather than a conditional
-// hook call.
+// `mode`, rather than branching inside a single component body — a TipTap
+// editor instance must never be created for a non-"edit" render (thumbnails
+// render every slide in the rail on every keystroke elsewhere in the app;
+// mounting a full ProseMirror editor per thumbnail would be both wasteful
+// and pointless, since nothing there is ever edited). Splitting into two
+// sibling components, each with its own unconditional hook calls, keeps
+// this a plain component-selection decision rather than a conditional hook
+// call. Both "static" and "present" take the StaticField path here — this
+// slide type has nothing to interact with, so presentation mode behaves
+// exactly like a static (thumbnail) render.
 function EditableBody({
   value,
-  interactive,
+  mode,
   onCommit,
   className,
 }: {
   value: string | undefined;
-  interactive: boolean;
+  mode: SlideFaceProps["mode"];
   onCommit: (value: string) => void;
   className?: string;
 }) {
-  if (!interactive) {
-    return <StaticField value={value} placeholder="Click to add text" className={cn(BODY_TYPOGRAPHY, className)} />;
+  if (mode === "edit") {
+    return <RichTextBody value={value} onCommit={onCommit} className={className} />;
   }
-  return <RichTextBody value={value} onCommit={onCommit} className={className} />;
+  return <StaticField value={value} placeholder="Click to add text" className={cn(BODY_TYPOGRAPHY, className)} />;
 }
 
 // Same dispatch shape as EditableBody above, for the on-canvas slide title.
@@ -140,17 +142,17 @@ function EditableBody({
 // a trenchcoat.
 function EditableTitle({
   value,
-  interactive,
+  mode,
   onCommit,
 }: {
   value: string;
-  interactive: boolean;
+  mode: SlideFaceProps["mode"];
   onCommit: (value: string) => void;
 }) {
-  if (!interactive) {
-    return <StaticField value={value} placeholder="Click to add title" className="text-4xl font-bold" />;
+  if (mode === "edit") {
+    return <RichTextTitle value={value} onCommit={onCommit} />;
   }
-  return <RichTextTitle value={value} onCommit={onCommit} />;
+  return <StaticField value={value} placeholder="Click to add title" className="text-4xl font-bold" />;
 }
 
 // Shared between the interactive TipTap body editor and the sanitized static
