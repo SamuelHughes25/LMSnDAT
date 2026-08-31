@@ -24,6 +24,10 @@ class SlideSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {'config': 'multiple_choice slides require a non-empty "options" list.'}
                 )
+            if len(options) < 2 or len(options) > 5:
+                raise serializers.ValidationError(
+                    {'config': 'multiple_choice slides require between 2 and 5 options.'}
+                )
             if not any(isinstance(o, dict) and o.get('is_correct') for o in options):
                 raise serializers.ValidationError(
                     {'config': 'multiple_choice slides require at least one option with "is_correct": true.'}

@@ -1,11 +1,13 @@
 import type { ComponentType } from "react";
 
 import type { Slide, SlideConfig, SlideType } from "@/lib/course-types";
+import type { SlideInteractionResult } from "@/lib/slide-interaction";
 import { ContentSlideFace } from "./content-slide-face";
+import { MultipleChoiceSlideFace } from "./multiple-choice-slide-face";
 
 // Shared prop contract for every slide-type "face" component — the same
 // JSX renders the slide at three scales/interactivity levels (thumbnail,
-// canvas, later a learner-facing preview), so a thumbnail is guaranteed to
+// canvas, the learner-facing preview), so a thumbnail is guaranteed to
 // look exactly like the canvas. `onTitleChange`/`onConfigChange` are
 // optional because non-interactive renders (thumbnails) never call them.
 //
@@ -14,19 +16,27 @@ import { ContentSlideFace } from "./content-slide-face";
 //  - "static"  — thumbnails (slide-thumbnail.tsx). Read-only, must never
 //                mount anything interactive/expensive.
 //  - "present" — the learner-facing preview (course-preview-viewer.tsx).
-//                Not editable, but (for future slide types) genuinely
-//                interactive — distinct from "static" so a quiz-type slide
-//                can be clickable in preview while thumbnails stay inert.
+//                Not editable, but genuinely interactive — distinct from
+//                "static" so a quiz-type slide can be clickable in preview
+//                while thumbnails stay inert.
+//
+// `onInteraction` is only meaningful (and only ever called) in "present"
+// mode — an interactive type's present-mode component calls it once with a
+// SlideInteractionResult when the learner submits/completes their attempt.
+// Optional because "edit"/"static" renders never call it, and because
+// non-interactive types (e.g. "content") have nothing to report.
 export type SlideFaceProps = {
   slide: Slide;
   mode: "edit" | "static" | "present";
   onTitleChange?: (title: string) => void;
   onConfigChange?: (config: Partial<SlideConfig>) => void;
+  onInteraction?: (result: SlideInteractionResult) => void;
 };
 
-// Only "content" is buildable this stage (Stage 2b) — multiple_choice,
+// "content" and "multiple_choice" are buildable this stage (Stage 2) —
 // categorize, survey_rating, number_slider, and game_rapid_fire land in
-// Stage 3/4 and each just add one entry here.
+// later stages and each just add one entry here.
 export const SLIDE_TYPE_FACES: Record<SlideType, ComponentType<SlideFaceProps>> = {
   content: ContentSlideFace,
+  multiple_choice: MultipleChoiceSlideFace,
 };

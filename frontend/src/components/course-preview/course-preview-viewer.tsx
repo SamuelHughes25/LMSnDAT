@@ -1,20 +1,44 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { CANVAS_H, CANVAS_W } from "@/components/course-builder/slide-canvas";
 import { SLIDE_TYPE_FACES } from "@/components/course-builder/slide-faces";
 import { Button } from "@/components/ui/button";
 import type { Slide } from "@/lib/course-types";
+import type { SlideInteractionResult } from "@/lib/slide-interaction";
 
 export type PreviewSlide = { slide: Slide; lessonTitle: string };
 
 // Read-only "slide through the deck" viewer — reuses the exact slide faces
 // and canvas sizing the builder uses (CANVAS_W/CANVAS_H, SLIDE_TYPE_FACES)
-// so a preview looks identical to the canvas, just non-interactive.
+// so a preview looks identical to the canvas, just non-interactive (except
+// for interactive slide types' own "present" mode behavior — see
+// onInteraction below).
 export function CoursePreviewViewer({ slides }: { slides: PreviewSlide[] }) {
   const [currentIndex, setCurrentIndex] = useState(0);
+
+  // Accumulates each interactive slide's result as the learner answers it,
+  // keyed by slide id (re-answering the same slide on a later visit — not
+  // possible yet, since present-mode components are single-attempt, but a
+  // future "try again" could exist — replaces rather than duplicates).
+  // Local-only state, no backend call, no persistence — this is deliberately
+  // the entire scope of "tracking" this pass; see
+  // frontend/src/lib/slide-interaction.ts and docs/PROJECT_LOG.md for the
+  // scope decision. A real learner-facing player, backed by a real
+  // learner/assignment model, is what would actually persist these.
+  const [results, setResults] = useState<Record<string, SlideInteractionResult>>({});
+
+  const handleInteraction = useCallback((result: SlideInteractionResult) => {
+    setResults((prev) => ({ ...prev, [result.slideId]: result }));
+  }, []);
+
+  const answeredCount = Object.keys(results).length;
+  const correctCount = useMemo(
+    () => Object.values(results).filter((r) => r.isCorrect).length,
+    [results],
+  );
 
   // Defensive clamp: page.tsx already routes an empty deck to its own
   // empty state before this component ever mounts, but this keeps the
@@ -51,9 +75,19 @@ export function CoursePreviewViewer({ slides }: { slides: PreviewSlide[] }) {
           className="shrink-0 overflow-hidden rounded-sm bg-white shadow-lg"
           style={{ width: CANVAS_W, height: CANVAS_H }}
         >
-          <Face key={current.slide.id} slide={current.slide} mode="present" />
+          <Face key={current.slide.id} slide={current.slide} mode="present" onInteraction={handleInteraction} />
         </div>
       </div>
+
+      {/* Running tally, not a full end-of-deck summary screen — shows once
+          at least one interactive slide has been answered. Later stages
+          (Missing Word, Match the Pair) need no changes here: they report
+          through the same onInteraction/results shape. */}
+      {answeredCount > 0 && (
+        <div className="mt-2 text-sm text-muted-foreground">
+          Score so far: {correctCount}/{answeredCount}
+        </div>
+      )}
 
       <div className="mt-4 flex items-center gap-4">
         <Button

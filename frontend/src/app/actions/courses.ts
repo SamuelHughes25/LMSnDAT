@@ -73,11 +73,24 @@ export async function reorderLessons(lessons: { id: string; order: number }[]): 
 
 // --- Slides ---
 
-// Default config per slide_type on creation. Only "content" exists this
-// stage — the switch is structured so later slide types (multiple_choice,
-// categorize, ...) slot in as new cases without a rewrite.
+// Default config per slide_type on creation. "content" and "multiple_choice"
+// exist this stage — the switch is structured so later slide types
+// (categorize, ...) slot in as new cases without a rewrite.
 function defaultSlideConfig(slideType: SlideType): SlideConfig {
   switch (slideType) {
+    case "multiple_choice":
+      // The backend requires at least one option marked correct on every
+      // save (not just at publish), so the first option defaults to
+      // is_correct: true — otherwise a brand-new slide would fail its own
+      // creation request before the author ever gets a chance to pick one.
+      return {
+        question: "",
+        options: [
+          { id: `option_1_${Date.now().toString(36)}`, text: "", is_correct: true },
+          { id: `option_2_${Date.now().toString(36)}`, text: "", is_correct: false },
+        ],
+        feedback_incorrect: "",
+      };
     case "content":
     default:
       return { body: "", image_url: null, image_position: "top" };

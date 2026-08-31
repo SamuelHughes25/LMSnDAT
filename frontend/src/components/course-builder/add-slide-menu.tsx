@@ -3,18 +3,53 @@
 import { Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { SLIDE_TYPE_LABELS } from "@/lib/course-types";
 import type { SlideType } from "@/lib/course-types";
+import { SlideTypeIcon } from "./slide-type-icon";
 
-// Stage 2 only has one buildable slide_type ("content"), so this is a plain
-// button rather than a dropdown. Kept as a single exported component with
-// an onSelect(SlideType) callback so a later stage can swap the body for a
-// DropdownMenu (mirroring builder/add-question-menu.tsx, Base UI `render`/
-// `onClick`) without changing anything at the call site.
+// Grouped by category (mirrors builder/add-question-menu.tsx's Base UI
+// dropdown pattern — `render`/`onClick`, never `asChild`/`onSelect`, per
+// this project's Base UI (not Radix) shadcn install). Each group lists only
+// slide_types that are actually buildable — "game_rapid_fire" and any other
+// enum-only type stay excluded until built, same convention
+// slide-type-icon.tsx and course-types.ts already follow. Structured as
+// named groups (not one flat list) so Missing Word and Match the Pair can
+// slot into "Assessment" later as one-line additions, no rewrite.
+const GROUPS: { label: string; types: SlideType[] }[] = [
+  { label: "Content", types: ["content"] },
+  { label: "Assessment", types: ["multiple_choice"] },
+];
+
 export function AddSlideMenu({ onSelect }: { onSelect: (type: SlideType) => void }) {
   return (
-    <Button variant="outline" size="sm" onClick={() => onSelect("content")} className="w-full">
-      <Plus className="mr-1 h-4 w-4" />
-      Add slide
-    </Button>
+    <DropdownMenu>
+      <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="w-full" />}>
+        <Plus className="mr-1 h-4 w-4" />
+        Add slide
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        {GROUPS.map((group, index) => (
+          <DropdownMenuGroup key={group.label}>
+            {index > 0 && <DropdownMenuSeparator />}
+            <DropdownMenuLabel>{group.label}</DropdownMenuLabel>
+            {group.types.map((type) => (
+              <DropdownMenuItem key={type} onClick={() => onSelect(type)}>
+                <SlideTypeIcon type={type} className="text-muted-foreground" />
+                {SLIDE_TYPE_LABELS[type]}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuGroup>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

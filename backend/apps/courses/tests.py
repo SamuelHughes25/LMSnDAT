@@ -98,6 +98,35 @@ class CourseBuilderFlowTests(APIAuthTestCase):
         }, format='json')
         self.assertEqual(resp.status_code, 400, resp.content)
 
+        # too few options (1) is rejected on the min-count check, even with
+        # a correct option present — a distinct failure mode from "no
+        # correct option" above
+        resp = admin_client.post('/api/v1/slides/', {
+            'lesson': lesson_id, 'slide_type': 'multiple_choice', 'title': 'Too Few MC', 'order': 2,
+            'config': {
+                'question': 'Which is heaviest?',
+                'options': [{'id': 'opt_1_a', 'text': 'A', 'is_correct': True}],
+            },
+        }, format='json')
+        self.assertEqual(resp.status_code, 400, resp.content)
+
+        # too many options (6) is rejected on the max-count check
+        resp = admin_client.post('/api/v1/slides/', {
+            'lesson': lesson_id, 'slide_type': 'multiple_choice', 'title': 'Too Many MC', 'order': 2,
+            'config': {
+                'question': 'Which is heaviest?',
+                'options': [
+                    {'id': 'opt_1_a', 'text': 'A', 'is_correct': True},
+                    {'id': 'opt_2_b', 'text': 'B', 'is_correct': False},
+                    {'id': 'opt_3_c', 'text': 'C', 'is_correct': False},
+                    {'id': 'opt_4_d', 'text': 'D', 'is_correct': False},
+                    {'id': 'opt_5_e', 'text': 'E', 'is_correct': False},
+                    {'id': 'opt_6_f', 'text': 'F', 'is_correct': False},
+                ],
+            },
+        }, format='json')
+        self.assertEqual(resp.status_code, 400, resp.content)
+
         resp = admin_client.post('/api/v1/slides/', {
             'lesson': lesson_id, 'slide_type': 'multiple_choice', 'title': 'Good MC', 'order': 2,
             'config': {

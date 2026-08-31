@@ -4,12 +4,12 @@
 // templates/questions domain) so the two authoring domains stay
 // independently legible.
 
-// Only "content" is buildable so far (Stage 2). Typed as a string union
-// (not a single string literal alias) so later stages can widen it to
-// "content" | "multiple_choice" | "categorize" | "survey_rating" |
-// "number_slider" | "game_rapid_fire" without touching call sites — mirrors
+// "content" and "multiple_choice" are buildable so far (Stage 2). Typed as a
+// string union (not a single string literal alias) so later stages can
+// widen it to also include "categorize" | "survey_rating" | "number_slider"
+// | "game_rapid_fire" without touching call sites — mirrors
 // backend/apps/courses/constants.py's SlideType enum.
-export type SlideType = "content";
+export type SlideType = "content" | "multiple_choice";
 
 export type CourseVersionStatus = "draft" | "published" | "archived";
 
@@ -25,10 +25,23 @@ export type AssetKind = "image" | "video" | "other";
 // arrangement each value renders.
 export type ContentSlideLayout = "title-body" | "two-column" | "title-only";
 
-// Type-specific slide content. Only the "content" slide_type's shape is
-// modeled concretely this stage; the index signature keeps this open for
-// the other slide_types' config shapes (options, buckets/items, etc.) added
-// in later stages, same approach as QuestionConfig in lib/types.ts.
+// A single multiple_choice answer option. Single-answer (radio) semantics:
+// at most one option in a given `options` array should ever have
+// `is_correct: true` — enforced client-side by the mark-correct button in
+// multiple-choice-slide-face.tsx clearing every other option's flag, and
+// checked server-side (at least one correct, 2-5 options total) by
+// SlideSerializer.validate() in backend/apps/courses/serializers.py.
+export type MultipleChoiceOption = {
+  id: string;
+  text: string;
+  is_correct: boolean;
+};
+
+// Type-specific slide content. The "content" and "multiple_choice"
+// slide_types' shapes are modeled concretely so far; the index signature
+// keeps this open for the other slide_types' config shapes (blanks, pairs,
+// etc.) added in later stages, same approach as QuestionConfig in
+// lib/types.ts.
 export type SlideConfig = {
   // content
   layout?: ContentSlideLayout;
@@ -50,6 +63,13 @@ export type SlideConfig = {
   body2?: string;
   image_url?: string | null;
   image_position?: "top" | "bottom" | "left" | "right";
+  // multiple_choice
+  question?: string;
+  options?: MultipleChoiceOption[];
+  // Shown only when the learner picks a wrong option in "present" mode —
+  // optional (blank is fine), no "feedback_correct" counterpart this pass
+  // (not asked for, keeps the config smaller).
+  feedback_incorrect?: string;
   [key: string]: unknown;
 };
 
@@ -121,4 +141,5 @@ export type Course = {
 
 export const SLIDE_TYPE_LABELS: Record<SlideType, string> = {
   content: "Content",
+  multiple_choice: "Multiple Choice",
 };
