@@ -4,12 +4,12 @@
 // templates/questions domain) so the two authoring domains stay
 // independently legible.
 
-// "content" and "multiple_choice" are buildable so far (Stage 2). Typed as a
-// string union (not a single string literal alias) so later stages can
-// widen it to also include "categorize" | "survey_rating" | "number_slider"
-// | "game_rapid_fire" without touching call sites — mirrors
+// "content", "multiple_choice", and "missing_word" are buildable so far
+// (Stage 3). Typed as a string union (not a single string literal alias) so
+// later stages can widen it to also include "categorize" | "survey_rating" |
+// "number_slider" | "game_rapid_fire" without touching call sites — mirrors
 // backend/apps/courses/constants.py's SlideType enum.
-export type SlideType = "content" | "multiple_choice";
+export type SlideType = "content" | "multiple_choice" | "missing_word";
 
 export type CourseVersionStatus = "draft" | "published" | "archived";
 
@@ -35,6 +35,21 @@ export type MultipleChoiceOption = {
   id: string;
   text: string;
   is_correct: boolean;
+};
+
+// A single missing_word blank. `start`/`end` are character offsets into the
+// slide's `config.paragraph` string (not the word text itself — offsets are
+// precise and unambiguous even when a word repeats elsewhere in the
+// paragraph). `text` is a denormalized copy of `paragraph.slice(start, end)`
+// captured at mark-time, kept in sync client-side whenever the paragraph is
+// edited (see missing-word-slide-face.tsx's revalidateBlanks) and enforced
+// server-side by SlideSerializer.validate() in
+// backend/apps/courses/serializers.py.
+export type MissingWordBlank = {
+  id: string;
+  start: number;
+  end: number;
+  text: string;
 };
 
 // Type-specific slide content. The "content" and "multiple_choice"
@@ -70,6 +85,9 @@ export type SlideConfig = {
   // optional (blank is fine), no "feedback_correct" counterpart this pass
   // (not asked for, keeps the config smaller).
   feedback_incorrect?: string;
+  // missing_word
+  paragraph?: string;
+  blanks?: MissingWordBlank[];
   [key: string]: unknown;
 };
 
@@ -142,4 +160,5 @@ export type Course = {
 export const SLIDE_TYPE_LABELS: Record<SlideType, string> = {
   content: "Content",
   multiple_choice: "Multiple Choice",
+  missing_word: "Missing Word",
 };

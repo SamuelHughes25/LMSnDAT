@@ -51,6 +51,46 @@ class SlideSerializer(serializers.ModelSerializer):
                         {'config': 'every item must have a "correct_bucket_id" that references an existing bucket.'}
                     )
 
+        elif slide_type == SlideType.MISSING_WORD:
+            paragraph = config.get('paragraph')
+            blanks = config.get('blanks')
+            # paragraph/blanks are allowed to be empty here — a slide is
+            # created with both empty and authored progressively (type the
+            # paragraph, then mark blanks one at a time), so requiring
+            # either to be non-empty on every save would reject the initial
+            # creation request before the author ever gets to type
+            # anything. Only their *types* and, once blanks exist, their
+            # structural validity (offsets in range, no overlaps) are
+            # enforced here; "did the author actually finish this slide" is
+            # a publish-time concern, not a save-time one — same reasoning
+            # already applied to multiple_choice's default-correct-option
+            # fix.
+            if paragraph is not None and not isinstance(paragraph, str):
+                raise serializers.ValidationError({'config': '"paragraph" must be a string.'})
+            if blanks is not None and not isinstance(blanks, list):
+                raise serializers.ValidationError({'config': '"blanks" must be a list.'})
+            paragraph_len = len(paragraph or '')
+            ranges = []
+            for blank in (blanks or []):
+                if not isinstance(blank, dict):
+                    raise serializers.ValidationError({'config': 'each blank must be an object.'})
+                start = blank.get('start')
+                end = blank.get('end')
+                if not isinstance(start, int) or not isinstance(end, int) or isinstance(start, bool) or isinstance(end, bool):
+                    raise serializers.ValidationError(
+                        {'config': 'each blank must have integer "start"/"end" offsets.'}
+                    )
+                if not (0 <= start < end <= paragraph_len):
+                    raise serializers.ValidationError(
+                        {'config': 'each blank\'s "start"/"end" must satisfy 0 <= start < end <= len(paragraph).'}
+                    )
+                for other_start, other_end in ranges:
+                    if start < other_end and other_start < end:
+                        raise serializers.ValidationError(
+                            {'config': 'blanks must not overlap.'}
+                        )
+                ranges.append((start, end))
+
         return attrs
 
 

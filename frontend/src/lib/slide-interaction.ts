@@ -12,9 +12,10 @@ export type SlideInteractionResult = {
   slideType: SlideType;
   isCorrect: boolean;
   // 0-1, fraction correct — always 0 or 1 for multiple_choice (single
-  // answer, no partial credit); later types with several sub-answers
-  // (missing-word blanks, match-the-pair pairs) can report a fraction.
-  score: 0 | 1;
+  // answer, no partial credit; those literal values still satisfy this
+  // wider type). missing_word (this stage) reports a genuine fraction —
+  // e.g. 2 of 3 blanks correct — and match-the-pair (later) will too.
+  score: number;
   answeredAt: string; // ISO timestamp
   detail: unknown; // type-specific raw answer payload, for future review/debugging
 };

@@ -73,11 +73,13 @@ export async function reorderLessons(lessons: { id: string; order: number }[]): 
 
 // --- Slides ---
 
-// Default config per slide_type on creation. "content" and "multiple_choice"
-// exist this stage — the switch is structured so later slide types
-// (categorize, ...) slot in as new cases without a rewrite.
+// Default config per slide_type on creation. "content", "multiple_choice",
+// and "missing_word" exist this stage — the switch is structured so later
+// slide types (match_the_pair, ...) slot in as new cases without a rewrite.
 function defaultSlideConfig(slideType: SlideType): SlideConfig {
   switch (slideType) {
+    case "missing_word":
+      return { paragraph: "", blanks: [] };
     case "multiple_choice":
       // The backend requires at least one option marked correct on every
       // save (not just at publish), so the first option defaults to

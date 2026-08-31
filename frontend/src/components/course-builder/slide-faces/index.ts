@@ -3,6 +3,7 @@ import type { ComponentType } from "react";
 import type { Slide, SlideConfig, SlideType } from "@/lib/course-types";
 import type { SlideInteractionResult } from "@/lib/slide-interaction";
 import { ContentSlideFace } from "./content-slide-face";
+import { MissingWordSlideFace } from "./missing-word-slide-face";
 import { MultipleChoiceSlideFace } from "./multiple-choice-slide-face";
 
 // Shared prop contract for every slide-type "face" component — the same
@@ -33,10 +34,11 @@ export type SlideFaceProps = {
   onInteraction?: (result: SlideInteractionResult) => void;
 };
 
-// "content" and "multiple_choice" are buildable this stage (Stage 2) —
-// categorize, survey_rating, number_slider, and game_rapid_fire land in
-// later stages and each just add one entry here.
+// "content", "multiple_choice", and "missing_word" are buildable so far
+// (Stage 3) — match_the_pair lands in the next stage and just adds one entry
+// here.
 export const SLIDE_TYPE_FACES: Record<SlideType, ComponentType<SlideFaceProps>> = {
   content: ContentSlideFace,
   multiple_choice: MultipleChoiceSlideFace,
+  missing_word: MissingWordSlideFace,
 };

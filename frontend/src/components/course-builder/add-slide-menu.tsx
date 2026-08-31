@@ -26,7 +26,7 @@ import { SlideTypeIcon } from "./slide-type-icon";
 // slot into "Assessment" later as one-line additions, no rewrite.
 const GROUPS: { label: string; types: SlideType[] }[] = [
   { label: "Content", types: ["content"] },
-  { label: "Assessment", types: ["multiple_choice"] },
+  { label: "Assessment", types: ["multiple_choice", "missing_word"] },
 ];
 
 export function AddSlideMenu({ onSelect }: { onSelect: (type: SlideType) => void }) {

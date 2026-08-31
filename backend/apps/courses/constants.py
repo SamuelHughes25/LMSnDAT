@@ -5,6 +5,7 @@ class SlideType(models.TextChoices):
     CONTENT = 'content', 'Content'
     MULTIPLE_CHOICE = 'multiple_choice', 'Multiple choice'
     CATEGORIZE = 'categorize', 'Categorize'
+    MISSING_WORD = 'missing_word', 'Missing word'
     SURVEY_RATING = 'survey_rating', 'Survey / rating'
     NUMBER_SLIDER = 'number_slider', 'Number'
     # Enum only, not buildable yet — excluded from the add-slide menu / editor

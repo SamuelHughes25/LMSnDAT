@@ -163,6 +163,55 @@ class CourseBuilderFlowTests(APIAuthTestCase):
         self.assertEqual(resp.status_code, 201, resp.content)
         categorize_slide_id = resp.data['id']
 
+        # --- missing_word config validation ---
+        # a brand-new slide (empty paragraph, no blanks yet) must be
+        # creatable — this is the actual initial state the builder UI sends
+        # when a slide is first added, before the author has typed anything
+        resp = admin_client.post('/api/v1/slides/', {
+            'lesson': lesson_id, 'slide_type': 'missing_word', 'title': 'Fresh Missing Word', 'order': 4,
+            'config': {'paragraph': '', 'blanks': []},
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.content)
+        admin_client.delete(f"/api/v1/slides/{resp.data['id']}/")
+
+        # overlapping blanks are rejected
+        resp = admin_client.post('/api/v1/slides/', {
+            'lesson': lesson_id, 'slide_type': 'missing_word', 'title': 'Bad Missing Word Overlap', 'order': 4,
+            'config': {
+                'paragraph': 'Always wear a hard hat and safety boots on site.',
+                'blanks': [
+                    {'id': 'blank_1_a1', 'start': 14, 'end': 22, 'text': 'hard hat'},
+                    {'id': 'blank_2_b2', 'start': 19, 'end': 32, 'text': 'hat and safe'},
+                ],
+            },
+        }, format='json')
+        self.assertEqual(resp.status_code, 400, resp.content)
+
+        # out-of-range end offset is rejected
+        resp = admin_client.post('/api/v1/slides/', {
+            'lesson': lesson_id, 'slide_type': 'missing_word', 'title': 'Bad Missing Word Range', 'order': 4,
+            'config': {
+                'paragraph': 'Always wear a hard hat and safety boots on site.',
+                'blanks': [
+                    {'id': 'blank_1_a1', 'start': 14, 'end': 999, 'text': 'hard hat'},
+                ],
+            },
+        }, format='json')
+        self.assertEqual(resp.status_code, 400, resp.content)
+
+        resp = admin_client.post('/api/v1/slides/', {
+            'lesson': lesson_id, 'slide_type': 'missing_word', 'title': 'Good Missing Word', 'order': 4,
+            'config': {
+                'paragraph': 'Always wear a hard hat and safety boots on site.',
+                'blanks': [
+                    {'id': 'blank_1_a1', 'start': 14, 'end': 22, 'text': 'hard hat'},
+                    {'id': 'blank_2_b2', 'start': 27, 'end': 39, 'text': 'safety boots'},
+                ],
+            },
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.content)
+        missing_word_slide_id = resp.data['id']
+
         # --- asset upload (multipart) ---
         upload = SimpleUploadedFile('rung.jpg', b'fake-image-bytes', content_type='image/jpeg')
         resp = admin_client.post('/api/v1/course-assets/', {
@@ -200,14 +249,18 @@ class CourseBuilderFlowTests(APIAuthTestCase):
 
         resp = admin_client.get(f'/api/v1/slides/?lesson={cloned_lesson_id}')
         cloned_by_title = {s['title']: s for s in resp.data['results']}
-        self.assertEqual(len(cloned_by_title), 4)
+        self.assertEqual(len(cloned_by_title), 5)
         self.assertEqual(cloned_by_title['Good MC']['config']['options'][0]['is_correct'], True)
         self.assertEqual(
             cloned_by_title['Good Categorize']['config']['items'][0]['correct_bucket_id'], 'bucket_2'
         )
+        self.assertEqual(
+            cloned_by_title['Good Missing Word']['config']['blanks'][0]['text'], 'hard hat'
+        )
         # cloned slides are new rows, not the same ids as the published version's
         self.assertNotEqual(cloned_by_title['Good MC']['id'], mc_slide_id)
         self.assertNotEqual(cloned_by_title['Good Categorize']['id'], categorize_slide_id)
+        self.assertNotEqual(cloned_by_title['Good Missing Word']['id'], missing_word_slide_id)
 
         # --- publishing v2 archives v1 ---
         resp = admin_client.post(f'/api/v1/course-versions/{draft_v2_id}/publish/', format='json')
