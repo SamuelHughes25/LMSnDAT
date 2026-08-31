@@ -282,11 +282,14 @@ function RichTextBody({
         // old field's `empty:before:content-[attr(data-placeholder)])`
         // pattern doesn't apply here; this targets the node the extension
         // actually decorates instead.
+        //
+        // `className` deliberately does NOT go here — see the comment on
+        // <EditorContent> below for why a layout class like "flex-1" has to
+        // land on a different element entirely.
         class: cn(
           FIELD_CLASSES,
           BODY_TYPOGRAPHY,
           "[&_.is-empty]:before:pointer-events-none [&_.is-empty]:before:float-left [&_.is-empty]:before:h-0 [&_.is-empty]:before:text-muted-foreground/50 [&_.is-empty]:before:content-[attr(data-placeholder)]",
-          className,
         ),
       },
     },
@@ -329,7 +332,24 @@ function RichTextBody({
     },
   });
 
-  return <EditorContent editor={editor} />;
+  // `className` (the two-column layout's "flex-1", making each column claim
+  // an equal share of the row) goes on <EditorContent> itself, not inside
+  // editorProps.attributes.class above. EditorContent renders its own
+  // wrapper <div {...rest} /> and then appends the real ProseMirror element
+  // (editor.view.dom, the one editorProps.attributes.class decorates) as
+  // that wrapper's child — so the wrapper, not the ProseMirror div, is the
+  // actual flex item inside content-slide-face's `flex h-full gap-8` row.
+  // Putting "flex-1" on the ProseMirror div instead (the original bug here)
+  // styled an element with no bearing on the row's flex layout at all: the
+  // real flex item was left at the browser's unstyled default of
+  // `flex: 0 1 auto` with no explicit width, so it just shrink-wrapped to
+  // whatever had been typed so far — matching the reported symptom exactly
+  // (the column "locks" to a sliver as soon as the first space/word is
+  // typed, instead of holding half the row). Confirmed via a real browser:
+  // before this fix, the wrapper div's computed `flex` was `0 1 auto` and
+  // its width tracked the typed text pixel-for-pixel; after, it's `1 1 0%`
+  // and both columns split the row evenly regardless of content.
+  return <EditorContent editor={editor} className={className} />;
 }
 
 // Interactive (canvas) render path for the slide title — a single-line
