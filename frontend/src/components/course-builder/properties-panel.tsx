@@ -5,7 +5,7 @@ import { Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SLIDE_TYPE_LABELS } from "@/lib/course-types";
-import type { ContentSlideLayout, Lesson, Slide } from "@/lib/course-types";
+import type { ContentSlideLayout, Lesson, Slide, SlideConfig } from "@/lib/course-types";
 import { cn } from "@/lib/utils";
 import { LessonProperties } from "./lesson-properties";
 
@@ -20,7 +20,18 @@ export type PropertiesPanelProps =
   | {
       kind: "slide";
       slide: Slide;
-      onChange: (data: Partial<Slide>) => void;
+      // Deliberately a *partial config*, not `Partial<Slide>` merged here
+      // against `slide.config` — that used to be exactly this component's
+      // job (`{ config: { ...slide.config, layout } }`), and it was a real
+      // bug: `slide` is a prop snapshot from whenever this component last
+      // rendered, so spreading it right before a network PATCH raced with
+      // any other in-flight config change (e.g. body text still mid-
+      // debounce-commit) and silently discarded it. The merge now happens
+      // once, in course-builder.tsx's handleSlideConfigChange, inside a
+      // setLessons functional updater — the only place that's guaranteed
+      // to see the truly current config no matter how close together two
+      // changes happen.
+      onConfigChange: (config: Partial<SlideConfig>) => void;
       onDelete: () => void;
     };
 
@@ -45,16 +56,16 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
     );
   }
 
-  return <SlideProperties slide={props.slide} onChange={props.onChange} onDelete={props.onDelete} />;
+  return <SlideProperties slide={props.slide} onConfigChange={props.onConfigChange} onDelete={props.onDelete} />;
 }
 
 function SlideProperties({
   slide,
-  onChange,
+  onConfigChange,
   onDelete,
 }: {
   slide: Slide;
-  onChange: (data: Partial<Slide>) => void;
+  onConfigChange: (config: Partial<SlideConfig>) => void;
   onDelete: () => void;
 }) {
   return (
@@ -72,7 +83,7 @@ function SlideProperties({
       {slide.slide_type === "content" && (
         <ContentLayoutPicker
           layout={slide.config.layout ?? "title-body"}
-          onChange={(layout) => onChange({ config: { ...slide.config, layout } })}
+          onChange={(layout) => onConfigChange({ layout })}
         />
       )}
 
@@ -116,6 +127,7 @@ const LAYOUT_CATEGORIES: { label: string; options: { value: ContentSlideLayout; 
     options: [
       { value: "image-left", label: "Image left" },
       { value: "image-right", label: "Image right" },
+      { value: "image-background", label: "Background image" },
     ],
   },
 ];
@@ -227,6 +239,14 @@ function LayoutGlyph({ value }: { value: ContentSlideLayout }) {
             </>
           )}
         </div>
+      </div>
+    );
+  }
+
+  if (value === "image-background") {
+    return (
+      <div className="relative flex h-5 w-8 items-center justify-center overflow-hidden rounded-[2px] bg-current/30">
+        <div className="h-1 w-5 rounded-sm bg-white" />
       </div>
     );
   }
