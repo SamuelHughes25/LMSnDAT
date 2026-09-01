@@ -1,12 +1,16 @@
 "use client";
 
 import { useLayoutEffect, useRef, useState } from "react";
-import { Move } from "lucide-react";
 
 import type { BoxTransform } from "@/lib/course-types";
 import { cn } from "@/lib/utils";
+import { useActiveEditorContext } from "../active-editor-context";
 import { ResizeHandles, clampPositionPct, clampSizePct, imageBoxStyle } from "./image-shared";
 import type { SlideFaceProps } from "./index";
+
+// Width of the invisible "grab to move" band just inside the box's own
+// edges — see the perimeter strips below.
+const MOVE_BAND_PX = 10;
 
 // Makes a single text box (title/subtitle/body/body2) freely draggable and
 // resizable, independent of the background-image system in
@@ -21,16 +25,16 @@ import type { SlideFaceProps } from "./index";
 // normal flex child, sized by whichever layout is active, via
 // `flexClassName` (the same className that used to sit directly on the
 // wrapping <div> in each content-slide-face.tsx layout branch) — with a
-// move grip and resize handles overlaid on top of its current rendered
-// position (edit mode only). The FIRST drag or resize measures that
-// current position (via getBoundingClientRect, converted to a percentage
-// of the slide) and uses it as the starting point, then commits a real
-// transform on release — from then on the box renders absolutely
-// positioned at its saved (x, y, width, height) instead of participating
-// in flex layout at all. This is what "layout sets the starting position,
-// then drag it anywhere" means in code: the layout's flex math is the
-// *fallback* for an untouched box, not something this component
-// duplicates.
+// perimeter move band and (once selected) resize handles overlaid on top
+// of its current rendered position (edit mode only). The FIRST drag or
+// resize measures that current position (via getBoundingClientRect,
+// converted to a percentage of the slide) and uses it as the starting
+// point, then commits a real transform on release — from then on the box
+// renders absolutely positioned at its saved (x, y, width, height) instead
+// of participating in flex layout at all. This is what "layout sets the
+// starting position, then drag it anywhere" means in code: the layout's
+// flex math is the *fallback* for an untouched box, not something this
+// component duplicates.
 //
 // Percentages are relative to the slide's own top-level box in
 // content-slide-face.tsx (the outer `w-full h-full` div each layout
@@ -63,6 +67,16 @@ export function PositionableBox({
   // transform is resolved purely by CSS percentages, and an untransformed
   // box there is just plain flex-flow content, same as always.
   const [measuredBaseline, setMeasuredBaseline] = useState<BoxTransform | null>(null);
+  // Gates the resize handles: they only show once this box is "selected"
+  // (focus has entered its own text editor, or the perimeter move band has
+  // been grabbed at least once), not for every box on the slide all the
+  // time. Set on focus-within and on the first move-drag; cleared on
+  // blur-out, guarded against the formatting toolbar the same way
+  // RichTextBody's own onBlur is (see content-slide-face.tsx) — otherwise
+  // clicking a Bold/Italic button in the toolbar would look like focus
+  // left the box and hide its handles mid-format.
+  const [isSelected, setIsSelected] = useState(false);
+  const { toolbarRef, toolbarInteractingRef } = useActiveEditorContext();
 
   // Runs after the DOM commits, before paint — the one-time measurement
   // that lets an untouched box's grip/handles appear at its actual current
@@ -145,6 +159,7 @@ export function PositionableBox({
 
   function handleMovePointerDown(e: React.PointerEvent) {
     e.preventDefault();
+    setIsSelected(true);
     const slide = slideRef?.current;
     const startMaybe = transform ?? measuredBaseline;
     if (!slide || !startMaybe) return;
@@ -175,11 +190,28 @@ export function PositionableBox({
     document.addEventListener("pointerup", onUp);
   }
 
+  function handleFocus() {
+    setIsSelected(true);
+  }
+
+  function handleBlur(e: React.FocusEvent<HTMLDivElement>) {
+    const nextFocus = e.relatedTarget;
+    const toolbarEl = toolbarRef.current;
+    const focusMovedIntoToolbar = !!(toolbarEl && nextFocus instanceof Node && toolbarEl.contains(nextFocus));
+    const focusStayedInBox = !!(nextFocus && e.currentTarget.contains(nextFocus as Node));
+    if (focusMovedIntoToolbar || toolbarInteractingRef.current || focusStayedInBox) {
+      return;
+    }
+    setIsSelected(false);
+  }
+
   const effective = live ?? baseline;
 
   return (
     <div
       ref={wrapperRef}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
       // z-10 once transformed: a dragged box escapes flex flow and can end
       // up visually overlapping an untransformed sibling that's still in
       // its normal flex position (e.g. drag the title down into the space
@@ -198,32 +230,54 @@ export function PositionableBox({
 
       {baseline && slideRef && (
         <>
-          {/* Floats just above the box's own top edge, not centered inside
-              it — a center-positioned grip sat exactly where a click to
+          {/* Perimeter move band: four thin strips hugging the INSIDE of
+              the box's edges, each a plain "cursor: move" + drag-to-move
+              target — not a single center-positioned grip button (the
+              earlier design). A center grip sat exactly where a click to
               place the text cursor would land, and `opacity-0` (needed so
-              it's invisible until hover) does NOT remove an element from
-              hit-testing the way `pointer-events-none` or
-              `visibility:hidden` would, so it was silently swallowing
-              every click aimed at the middle of the box's own text.
-              Confirmed via a real browser: with the grip centered, clicking
-              into the title to position the cursor timed out because the
-              (invisible) grip intercepted the click every time. */}
-          <button
-            type="button"
+              an always-visible grip wasn't cluttering the slide) doesn't
+              remove an element from hit-testing, so it silently swallowed
+              every click aimed at the middle of the box's own text. These
+              strips stay out of the box's actual content area entirely —
+              hovering near an edge shows the move cursor, hovering
+              anywhere else behaves like plain text. Available regardless
+              of selection state (same as any editor's "hover the edge to
+              move" affordance); only the resize handles below are gated on
+              isSelected. */}
+          <div
             onPointerDown={handleMovePointerDown}
-            aria-label={`Move ${fieldKey}`}
-            title="Drag to move"
-            className="absolute top-0 left-1/2 z-20 flex h-6 w-6 -translate-x-1/2 -translate-y-[130%] cursor-move items-center justify-center rounded-full border-2 border-white bg-primary text-primary-foreground opacity-0 shadow-md transition-opacity hover:opacity-100 focus-visible:opacity-100"
-          >
-            <Move className="h-3 w-3" />
-          </button>
-          <ResizeHandles
-            containerRef={slideRef}
-            widthPct={baseline.widthPct}
-            heightPct={baseline.heightPct}
-            onLiveResize={(w, h) => setLive({ ...(transform ?? baseline), widthPct: clampSizePct(w), heightPct: clampSizePct(h) })}
-            onCommitResize={(w, h) => commit({ ...(transform ?? baseline), widthPct: clampSizePct(w), heightPct: clampSizePct(h) })}
+            title={`Drag to move ${fieldKey}`}
+            className="absolute inset-x-0 top-0 z-20 cursor-move"
+            style={{ height: MOVE_BAND_PX }}
           />
+          <div
+            onPointerDown={handleMovePointerDown}
+            title={`Drag to move ${fieldKey}`}
+            className="absolute inset-x-0 bottom-0 z-20 cursor-move"
+            style={{ height: MOVE_BAND_PX }}
+          />
+          <div
+            onPointerDown={handleMovePointerDown}
+            title={`Drag to move ${fieldKey}`}
+            className="absolute left-0 z-20 cursor-move"
+            style={{ top: MOVE_BAND_PX, bottom: MOVE_BAND_PX, width: MOVE_BAND_PX }}
+          />
+          <div
+            onPointerDown={handleMovePointerDown}
+            title={`Drag to move ${fieldKey}`}
+            className="absolute right-0 z-20 cursor-move"
+            style={{ top: MOVE_BAND_PX, bottom: MOVE_BAND_PX, width: MOVE_BAND_PX }}
+          />
+
+          {isSelected && (
+            <ResizeHandles
+              containerRef={slideRef}
+              widthPct={baseline.widthPct}
+              heightPct={baseline.heightPct}
+              onLiveResize={(w, h) => setLive({ ...(transform ?? baseline), widthPct: clampSizePct(w), heightPct: clampSizePct(h) })}
+              onCommitResize={(w, h) => commit({ ...(transform ?? baseline), widthPct: clampSizePct(w), heightPct: clampSizePct(h) })}
+            />
+          )}
         </>
       )}
     </div>

@@ -41,6 +41,29 @@ const FIELD_CLASSES =
 // real size.
 const FILL_BOX = "h-full w-full";
 
+// Title/subtitle are meant to stay genuinely one visual line — that's the
+// whole point of suppressing Enter in useSingleLineSlideEditor below — but
+// suppressing Enter only ever stopped a *hard* line break; nothing
+// previously stopped the browser's default *soft* wrap once the text was
+// wider than its box. That was invisible as long as these boxes only ever
+// auto-sized to their content, but once they became resizable
+// (positionable-box.tsx) a narrower box could wrap the text onto a second
+// line that the box's own (fixed, resize-driven) height was never sized
+// for, clipping it — the "text behaving weirdly" a resize could produce.
+// nowrap + ellipsis keeps a long title truthfully one line at any box
+// width: it never reflows, it just visibly truncates.
+//
+// The `!` (Tailwind v4's !important modifier) on white-space specifically
+// is required, not decorative — confirmed via a real browser that without
+// it, the computed white-space stayed "break-spaces" despite the plain
+// `whitespace-nowrap` utility being present in the class list. ProseMirror
+// ships its own base `.ProseMirror { white-space: ... }` rule, which has
+// the exact same selector specificity as a Tailwind utility class; with
+// specificity tied, whichever rule's stylesheet loads later in the
+// cascade wins, and ProseMirror's happens to. !important sidesteps that
+// race instead of depending on stylesheet load order.
+const SINGLE_LINE_TYPOGRAPHY = "overflow-hidden text-ellipsis !whitespace-nowrap";
+
 // Stable no-op subscribe for the `useIsClient` external store below — there
 // is nothing to subscribe to (the client/server distinction never changes
 // after mount), it only needs to exist so useSyncExternalStore has a
@@ -397,7 +420,13 @@ function EditableTitle({
   if (mode === "edit") {
     return <RichTextTitle value={value} onCommit={onCommit} className={FILL_BOX} />;
   }
-  return <StaticField value={value} placeholder="Click to add title" className={cn(FILL_BOX, "text-4xl font-bold")} />;
+  return (
+    <StaticField
+      value={value}
+      placeholder="Click to add title"
+      className={cn(FILL_BOX, SINGLE_LINE_TYPOGRAPHY, "text-4xl font-bold")}
+    />
+  );
 }
 
 // Same dispatch shape again, for the "title-subtitle" layout's subtitle
@@ -418,7 +447,7 @@ function EditableSubtitle({
     <StaticField
       value={value}
       placeholder="Click to add subtitle"
-      className={cn(FILL_BOX, "text-xl text-muted-foreground")}
+      className={cn(FILL_BOX, SINGLE_LINE_TYPOGRAPHY, "text-xl text-muted-foreground")}
     />
   );
 }
@@ -730,7 +759,7 @@ function RichTextTitle({
   const editor = useSingleLineSlideEditor({
     value,
     onCommit,
-    typographyClass: "text-4xl font-bold",
+    typographyClass: cn(SINGLE_LINE_TYPOGRAPHY, "text-4xl font-bold"),
     placeholder: "Click to add title",
   });
 
@@ -753,7 +782,7 @@ function RichTextSubtitle({
   const editor = useSingleLineSlideEditor({
     value: value ?? "",
     onCommit,
-    typographyClass: "text-xl text-muted-foreground",
+    typographyClass: cn(SINGLE_LINE_TYPOGRAPHY, "text-xl text-muted-foreground"),
     placeholder: "Click to add subtitle",
   });
 
