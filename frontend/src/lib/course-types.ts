@@ -133,6 +133,16 @@ export type SlideConfig = {
   // never needs to look up anything else about the asset.
   image_url?: string | null;
   image_position?: "top" | "bottom" | "left" | "right";
+  // Set only once the author drags a resize handle in image-field.tsx —
+  // undefined means "never resized," treated as 100 (fills its container,
+  // today's default look) by EditableImage. Percentages of the image's
+  // container on each axis independently (not a single uniform "scale" —
+  // the resize handles allow stretching that distorts the image's aspect
+  // ratio, which is the point). The image box is always CSS-centered in
+  // its container, so changing these can never move its middle — see the
+  // comment on imageBoxStyle in image-field.tsx for how that's enforced.
+  image_width_pct?: number;
+  image_height_pct?: number;
   // Used only when layout is "title-table".
   table?: TableConfig;
   // multiple_choice

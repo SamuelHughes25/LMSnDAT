@@ -147,7 +147,12 @@ export function ContentSlideFace({
         value={slide.config.image_url}
         mode={mode}
         courseVersionId={courseVersionId}
+        widthPct={slide.config.image_width_pct}
+        heightPct={slide.config.image_height_pct}
         onCommit={(image_url) => onConfigChange?.({ image_url })}
+        onResize={(image_width_pct, image_height_pct) =>
+          onConfigChange?.({ image_width_pct, image_height_pct })
+        }
         className="flex-1"
       />
     );
