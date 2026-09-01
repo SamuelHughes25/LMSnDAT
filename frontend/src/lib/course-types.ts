@@ -105,6 +105,20 @@ export type TableConfig = {
   rows: string[][];
 };
 
+// A saved free-position/size override for one box on a slide (a text box
+// via config.box_transforms below, or the background image via its own
+// flat background_image_*_pct fields — this shared shape is just the
+// natural one for "percentage of container, centered on (x, y)" math, not
+// a sign the two features share any runtime state). See
+// slide-faces/positionable-box.tsx and slide-faces/image-shared.tsx's
+// imageBoxStyle for how this gets turned into CSS.
+export type BoxTransform = {
+  xPct: number;
+  yPct: number;
+  widthPct: number;
+  heightPct: number;
+};
+
 // Type-specific slide content. The "content" and "multiple_choice"
 // slide_types' shapes are modeled concretely so far; the index signature
 // keeps this open for the other slide_types' config shapes (blanks, pairs,
@@ -173,6 +187,21 @@ export type SlideConfig = {
   background_image_y_pct?: number;
   background_image_width_pct?: number;
   background_image_height_pct?: number;
+  // Per-field free-position override for this slide's own text boxes
+  // (title/subtitle/body/body2) — see slide-faces/positionable-box.tsx.
+  // Deliberately independent of background_image_*: a text box being
+  // dragged/resized never reads or writes anything about the background
+  // image, and vice versa, matching the "separate, not interacting"
+  // requirement they were built to. A field with no entry here renders at
+  // its layout's normal flex position; once dragged/resized it gets an
+  // entry and switches to being drawn at that absolute (x, y, width,
+  // height) instead — see PositionableBox for exactly how that switch
+  // happens. Cleared (the whole map, not per-field) by the layout picker
+  // whenever `layout` changes (properties-panel.tsx's ContentLayoutPicker)
+  // — a different layout means different boxes exist/mean different
+  // things, so stale coordinates from the old arrangement aren't carried
+  // over into the new one.
+  box_transforms?: Partial<Record<"title" | "subtitle" | "body" | "body2", BoxTransform>>;
   // multiple_choice
   question?: string;
   options?: MultipleChoiceOption[];

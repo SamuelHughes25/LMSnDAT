@@ -179,12 +179,20 @@ function BackgroundImageEditLayer({
         className="pointer-events-none absolute z-20 rounded-md border-2 border-dashed border-primary/70"
         style={imageBoxStyle(effective.x, effective.y, effective.w, effective.h)}
       >
+        {/* Floats just above the box's own top edge, not centered inside
+            it — see the identical fix (and the real bug it fixed) on
+            positionable-box.tsx's move grip. This one is always visible
+            (not opacity-0/hover-revealed like that one), so the failure
+            mode here is milder — a visible handle blocking a click is
+            discoverable, an invisible one isn't — but it's the same
+            underlying issue (a background image's center can still land
+            under a title/body box), so it gets the same fix. */}
         <button
           type="button"
           onPointerDown={handleMovePointerDown}
           aria-label="Move background image"
           title="Drag to move"
-          className="pointer-events-auto absolute top-1/2 left-1/2 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 cursor-move items-center justify-center rounded-full border-2 border-white bg-primary text-primary-foreground shadow-md"
+          className="pointer-events-auto absolute top-0 left-1/2 flex h-8 w-8 -translate-x-1/2 -translate-y-[130%] cursor-move items-center justify-center rounded-full border-2 border-white bg-primary text-primary-foreground shadow-md"
         >
           <Move className="h-4 w-4" />
         </button>

@@ -98,7 +98,14 @@ function SlideProperties({
       {slide.slide_type === "content" && (
         <ContentLayoutPicker
           layout={slide.config.layout ?? "title-body"}
-          onChange={(layout) => onConfigChange({ layout })}
+          // Clears box_transforms on every layout switch — a different
+          // layout means different boxes exist or mean different things
+          // (e.g. "body" moves from sharing a row with an image to filling
+          // the whole slide), so a stale drag/resize from the old
+          // arrangement carrying over would land somewhere that never made
+          // sense for the new one. See BoxTransform's comment in
+          // course-types.ts.
+          onChange={(layout) => onConfigChange({ layout, box_transforms: undefined })}
         />
       )}
 
