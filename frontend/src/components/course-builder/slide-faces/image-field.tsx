@@ -223,15 +223,37 @@ function ImageUploadField({
           />
         </div>
       ) : (
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          disabled={uploading || !courseVersionId}
-          className="flex h-full w-full flex-col items-center justify-center gap-2 text-muted-foreground/60 transition-colors hover:text-muted-foreground disabled:cursor-not-allowed"
-        >
+        // Deliberately NOT one big button anymore — that made the box
+        // unpasteable: clicking anywhere to focus it (so Ctrl+V would have
+        // something to paste into) also fired the file picker, which steals
+        // OS-level focus the instant it opens, so the keyboard shortcut
+        // never had anywhere to land. Now only the small "browse files"
+        // link opens the picker; clicking anywhere else in the box just
+        // focuses the wrapper div above (native behavior for any
+        // tabIndex'd element), leaving Ctrl+V free to work immediately.
+        <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-muted-foreground/60">
           {uploading ? <Loader2 className="h-6 w-6 animate-spin" /> : <ImagePlus className="h-6 w-6" />}
-          <span className="text-sm">{uploading ? "Uploading…" : "Click, or paste (Ctrl+V), to add an image"}</span>
-        </button>
+          <div className="text-center text-sm">
+            {uploading ? (
+              "Uploading…"
+            ) : (
+              <>
+                Paste an image (Ctrl+V), or{" "}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    inputRef.current?.click();
+                  }}
+                  disabled={!courseVersionId}
+                  className="underline underline-offset-2 hover:text-foreground disabled:cursor-not-allowed"
+                >
+                  browse files
+                </button>
+              </>
+            )}
+          </div>
+        </div>
       )}
 
       {error && (
