@@ -28,15 +28,19 @@ export type AssetKind = "image" | "video" | "other";
 //    rich-text body boxes.
 //  - Table pages ("title-table") — a title plus a structured table
 //    (config.table), not free-form rich text.
-//  - Image pages ("image-left", "image-right", "image-background") —
-//    "image-left"/"image-right" put an uploaded image (config.image_url)
-//    alongside a rich-text body box, mirroring two-column's split but with
-//    a picture on one side. "image-background" is different in kind, not
-//    just arrangement: the image floats freely (drag to reposition,
-//    resize handles to resize) and always renders behind the title/body
-//    text rather than sharing a column with it — a backdrop, not a
-//    side-by-side element. See background-image-field.tsx for why that
-//    needs its own component rather than a variant of image-field.tsx's.
+//  - Image pages ("image-left", "image-right") — an uploaded image
+//    (config.image_url) alongside a rich-text body box, mirroring
+//    two-column's split but with a picture on one side.
+//
+// A free-floating *background* image (drag to reposition, resize to
+// resize, always rendered behind whatever the slide shows) is deliberately
+// NOT a layout value here — unlike image-left/image-right, it isn't
+// specific to the "content" slide type or any particular arrangement of
+// text. It's a cross-cutting per-slide setting (config.background_image_*
+// below) that applies underneath any slide_type/layout, edited from the
+// properties panel's "Edit" section (slide-background-panel.tsx) rather
+// than picked from this layout list — the same place future non-content
+// slide styling (e.g. a background color) will live.
 //
 // See slide-faces/content-slide-face.tsx for the arrangement each value
 // renders.
@@ -49,8 +53,7 @@ export type ContentSlideLayout =
   | "title-bottom"
   | "title-table"
   | "image-left"
-  | "image-right"
-  | "image-background";
+  | "image-right";
 
 // A single multiple_choice answer option. Single-answer (radio) semantics:
 // at most one option in a given `options` array should ever have
@@ -131,37 +134,45 @@ export type SlideConfig = {
   // main title, rather than a full multi-paragraph body. Same sanitized-
   // HTML-string shape and rules as `title`/`body` above.
   subtitle?: string;
-  // Used when layout is "image-left"/"image-right"/"image-background" —
-  // the uploaded CourseAsset's `file` URL (see uploadCourseAsset in
-  // app/actions/courses.ts and slide-faces/image-field.tsx /
-  // background-image-field.tsx), or null once removed. Deliberately just a
-  // URL string, not an asset id: Slide.config already stores every other
-  // type-specific value as a literal rather than a cross-reference (same
-  // reasoning noted on the CourseAsset model itself), and a slide never
-  // needs to look up anything else about the asset.
+  // Used when layout is "image-left"/"image-right" — the uploaded
+  // CourseAsset's `file` URL (see uploadCourseAsset in
+  // app/actions/courses.ts and slide-faces/image-field.tsx), or null once
+  // removed. Deliberately just a URL string, not an asset id: Slide.config
+  // already stores every other type-specific value as a literal rather
+  // than a cross-reference (same reasoning noted on the CourseAsset model
+  // itself), and a slide never needs to look up anything else about the
+  // asset.
   image_url?: string | null;
   image_position?: "top" | "bottom" | "left" | "right";
   // Set only once the author drags a resize handle — undefined means
-  // "never resized," treated as 100 (fills its container) by both
-  // image-field.tsx and background-image-field.tsx. Percentages of the
-  // image's container on each axis independently (not a single uniform
-  // "scale" — the resize handles allow stretching that distorts the
-  // image's aspect ratio, which is the point). The image box is always
-  // CSS-centered on its (x, y) center point, so changing these can never
-  // move that center — see the comment on imageBoxStyle in
-  // image-shared.tsx for how that's enforced.
+  // "never resized," treated as 100 (fills its container) by
+  // image-field.tsx. Percentages of the image's container on each axis
+  // independently (not a single uniform "scale" — the resize handles
+  // allow stretching that distorts the image's aspect ratio, which is the
+  // point). The image box is always CSS-centered on its (x, y) center
+  // point, so changing these can never move that center — see the comment
+  // on imageBoxStyle in image-shared.tsx for how that's enforced.
   image_width_pct?: number;
   image_height_pct?: number;
-  // Used only when layout is "image-background" — the image's center
-  // point, as a percentage of the slide's width/height. Undefined means
-  // "never moved," treated as 50/50 (centered) by background-image-field.tsx.
-  // image-left/image-right don't use these: their center is always a fixed
-  // 50/50 within their own half of the row (not draggable), so there's
-  // nothing for these fields to record there.
-  image_x_pct?: number;
-  image_y_pct?: number;
   // Used only when layout is "title-table".
   table?: TableConfig;
+  // A free-floating background image, independent of slide_type and
+  // layout — see the note on ContentSlideLayout above for why this isn't
+  // itself a layout value. Edited from the properties panel's "Edit"
+  // section (slide-background-panel.tsx: upload/paste, replace, remove);
+  // repositioned/resized via on-canvas drag controls
+  // (background-image-field.tsx) once set. `background_image_url` is null
+  // once removed, undefined if never set. The *_x_pct/_y_pct/_width_pct/
+  // _height_pct fields follow the exact same "percentage of container,
+  // CSS-centered on (x, y) so resizing can never move the center" shape
+  // as image_width_pct/image_height_pct above, just with a draggable
+  // center instead of a fixed 50/50 one, and "container" meaning the
+  // whole slide rather than a column.
+  background_image_url?: string | null;
+  background_image_x_pct?: number;
+  background_image_y_pct?: number;
+  background_image_width_pct?: number;
+  background_image_height_pct?: number;
   // multiple_choice
   question?: string;
   options?: MultipleChoiceOption[];

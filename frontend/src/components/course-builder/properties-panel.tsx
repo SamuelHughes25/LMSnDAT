@@ -8,6 +8,7 @@ import { SLIDE_TYPE_LABELS } from "@/lib/course-types";
 import type { ContentSlideLayout, Lesson, Slide, SlideConfig } from "@/lib/course-types";
 import { cn } from "@/lib/utils";
 import { LessonProperties } from "./lesson-properties";
+import { SlideBackgroundPanel } from "./slide-background-panel";
 
 export type PropertiesPanelProps =
   | { kind: "empty" }
@@ -20,6 +21,11 @@ export type PropertiesPanelProps =
   | {
       kind: "slide";
       slide: Slide;
+      // Needed only for the "Edit" section's background-image upload
+      // (SlideBackgroundPanel) — see courseVersionId's own comment on
+      // SlideFaceProps in slide-faces/index.ts for why an upload needs to
+      // know which draft's asset library to attach to.
+      courseVersionId: string;
       // Deliberately a *partial config*, not `Partial<Slide>` merged here
       // against `slide.config` — that used to be exactly this component's
       // job (`{ config: { ...slide.config, layout } }`), and it was a real
@@ -56,15 +62,24 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
     );
   }
 
-  return <SlideProperties slide={props.slide} onConfigChange={props.onConfigChange} onDelete={props.onDelete} />;
+  return (
+    <SlideProperties
+      slide={props.slide}
+      courseVersionId={props.courseVersionId}
+      onConfigChange={props.onConfigChange}
+      onDelete={props.onDelete}
+    />
+  );
 }
 
 function SlideProperties({
   slide,
+  courseVersionId,
   onConfigChange,
   onDelete,
 }: {
   slide: Slide;
+  courseVersionId: string;
   onConfigChange: (config: Partial<SlideConfig>) => void;
   onDelete: () => void;
 }) {
@@ -86,6 +101,18 @@ function SlideProperties({
           onChange={(layout) => onConfigChange({ layout })}
         />
       )}
+
+      {/* Unlike the layout picker above, this section applies to every
+          slide_type — a background image (and, planned next, a background
+          color) is cross-cutting styling, not something specific to
+          "content" slides. See course-types.ts's note on
+          ContentSlideLayout for why this lives here instead of being a
+          layout option. */}
+      <SlideBackgroundPanel
+        imageUrl={slide.config.background_image_url}
+        courseVersionId={courseVersionId}
+        onConfigChange={onConfigChange}
+      />
 
       <Button variant="outline" className="w-full text-destructive hover:text-destructive" onClick={onDelete}>
         <Trash2 className="mr-1.5 h-4 w-4" />
@@ -127,7 +154,6 @@ const LAYOUT_CATEGORIES: { label: string; options: { value: ContentSlideLayout; 
     options: [
       { value: "image-left", label: "Image left" },
       { value: "image-right", label: "Image right" },
-      { value: "image-background", label: "Background image" },
     ],
   },
 ];
@@ -239,14 +265,6 @@ function LayoutGlyph({ value }: { value: ContentSlideLayout }) {
             </>
           )}
         </div>
-      </div>
-    );
-  }
-
-  if (value === "image-background") {
-    return (
-      <div className="relative flex h-5 w-8 items-center justify-center overflow-hidden rounded-[2px] bg-current/30">
-        <div className="h-1 w-5 rounded-sm bg-white" />
       </div>
     );
   }

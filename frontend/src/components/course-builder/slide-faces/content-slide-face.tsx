@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { TextStyle } from "@tiptap/extension-text-style";
@@ -12,7 +12,6 @@ import { FontSize } from "@/lib/tiptap-font-size";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { cn, stripHtml } from "@/lib/utils";
 import { useActiveEditorContext } from "../active-editor-context";
-import { BackgroundImageLayer } from "./background-image-field";
 import { EditableImage } from "./image-field";
 import type { SlideFaceProps } from "./index";
 import { EditableTable } from "./table-field";
@@ -62,11 +61,6 @@ export function ContentSlideFace({
   onConfigChange,
 }: SlideFaceProps) {
   const layout: ContentSlideLayout = slide.config.layout ?? "title-body";
-  // Only used by "image-background" below — a ref to that layout's slide
-  // root, so BackgroundImageLayer's drag/resize math has a stable element
-  // to measure against. Declared unconditionally (Rules of Hooks), costs
-  // nothing for every other layout that never attaches it to anything.
-  const backgroundLayoutRef = useRef<HTMLDivElement>(null);
 
   const titleNode = (
     <EditableTitle
@@ -84,7 +78,7 @@ export function ContentSlideFace({
   // end up harder to read than just writing out each one.
   if (layout === "title-only") {
     return (
-      <div className="flex h-full w-full flex-col items-center justify-center bg-white px-16 py-12 text-center text-foreground">
+      <div className="flex h-full w-full flex-col items-center justify-center px-16 py-12 text-center text-foreground">
         {titleNode}
       </div>
     );
@@ -92,7 +86,7 @@ export function ContentSlideFace({
 
   if (layout === "title-subtitle") {
     return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-white px-16 py-12 text-center text-foreground">
+      <div className="flex h-full w-full flex-col items-center justify-center gap-4 px-16 py-12 text-center text-foreground">
         {titleNode}
         <EditableSubtitle
           value={slide.config.subtitle}
@@ -105,7 +99,7 @@ export function ContentSlideFace({
 
   if (layout === "title-top") {
     return (
-      <div className="flex h-full w-full flex-col justify-start bg-white px-16 py-12 text-foreground">
+      <div className="flex h-full w-full flex-col justify-start px-16 py-12 text-foreground">
         {titleNode}
       </div>
     );
@@ -113,7 +107,7 @@ export function ContentSlideFace({
 
   if (layout === "title-bottom") {
     return (
-      <div className="flex h-full w-full flex-col justify-end bg-white px-16 py-12 text-foreground">
+      <div className="flex h-full w-full flex-col justify-end px-16 py-12 text-foreground">
         {titleNode}
       </div>
     );
@@ -127,7 +121,7 @@ export function ContentSlideFace({
   // onCommit.
   if (layout === "title-table") {
     return (
-      <div className="flex h-full w-full flex-col bg-white px-16 py-12 text-foreground">
+      <div className="flex h-full w-full flex-col px-16 py-12 text-foreground">
         {titleNode}
         <div className="mt-8 min-h-0 flex-1">
           <EditableTable
@@ -171,7 +165,7 @@ export function ContentSlideFace({
       />
     );
     return (
-      <div className="flex h-full w-full flex-col bg-white px-16 py-12 text-foreground">
+      <div className="flex h-full w-full flex-col px-16 py-12 text-foreground">
         {titleNode}
         <div className="mt-8 flex min-h-0 flex-1 gap-8">
           {layout === "image-left" ? (
@@ -185,56 +179,6 @@ export function ContentSlideFace({
               {imageNode}
             </>
           )}
-        </div>
-      </div>
-    );
-  }
-
-  // "image-background": the image floats freely behind the title/body text
-  // rather than sharing a column with it — see background-image-field.tsx
-  // for the layering approach (a flat z-index stack of siblings: pixels at
-  // z-0, this text layer at z-10, and — edit mode only — drag/resize
-  // controls at z-20) that lets the author always reach the image's
-  // controls without the image ever displacing or fighting the text.
-  //
-  // The text layer's own background is `pointer-events-none` so a click on
-  // any part of the slide NOT actually covered by the title/body boxes
-  // passes straight through to the image layer beneath (needed for the
-  // empty "add an image" chip, and for repositioning in any genuinely
-  // empty space); `pointer-events-auto` is restored on the title/body
-  // wrappers themselves so clicking the actual text still edits it
-  // normally.
-  if (layout === "image-background") {
-    return (
-      <div ref={backgroundLayoutRef} className="relative flex h-full w-full flex-col bg-white text-foreground">
-        <BackgroundImageLayer
-          value={slide.config.image_url}
-          mode={mode}
-          courseVersionId={courseVersionId}
-          xPct={slide.config.image_x_pct}
-          yPct={slide.config.image_y_pct}
-          widthPct={slide.config.image_width_pct}
-          heightPct={slide.config.image_height_pct}
-          onCommit={(image_url) => onConfigChange?.({ image_url })}
-          onTransform={({ xPct, yPct, widthPct, heightPct }) =>
-            onConfigChange?.({
-              image_x_pct: xPct,
-              image_y_pct: yPct,
-              image_width_pct: widthPct,
-              image_height_pct: heightPct,
-            })
-          }
-          containerRef={backgroundLayoutRef}
-        />
-        <div className="relative z-10 flex h-full w-full flex-col px-16 py-12 pointer-events-none">
-          <div className="pointer-events-auto">{titleNode}</div>
-          <div className="pointer-events-auto mt-8 min-h-0 flex-1">
-            <EditableBody
-              value={slide.config.body}
-              mode={mode}
-              onCommit={(body) => onConfigChange?.({ body })}
-            />
-          </div>
         </div>
       </div>
     );
@@ -270,7 +214,7 @@ export function ContentSlideFace({
     );
 
   return (
-    <div className="flex h-full w-full flex-col bg-white px-16 py-12 text-foreground">
+    <div className="flex h-full w-full flex-col px-16 py-12 text-foreground">
       {titleNode}
       <div className="mt-8 min-h-0 flex-1">{bodyNodes}</div>
     </div>

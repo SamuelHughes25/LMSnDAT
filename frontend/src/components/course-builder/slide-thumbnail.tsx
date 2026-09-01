@@ -8,6 +8,7 @@ import type { Slide } from "@/lib/course-types";
 import { cn } from "@/lib/utils";
 import { CANVAS_H, CANVAS_W } from "./slide-canvas";
 import { SLIDE_TYPE_FACES } from "./slide-faces";
+import { SlideBackgroundLayer } from "./slide-faces/background-image-field";
 
 // Fixed pixel size, exactly 16:9 (matches CANVAS_W/CANVAS_H's ratio).
 const THUMB_W = 160;
@@ -69,9 +70,24 @@ export function SlideThumbnail({
               transform: `scale(${SCALE})`,
               transformOrigin: "top left",
               pointerEvents: "none",
+              position: "relative",
             }}
           >
-            <Face slide={slide} mode="static" />
+            {/* Rendered at the same full canvas pixel size as the Face
+                below, inside the same scaled wrapper, so the "true
+                miniature" property holds for the background image too —
+                it scales down along with everything else, not separately. */}
+            <SlideBackgroundLayer
+              value={slide.config.background_image_url}
+              mode="static"
+              xPct={slide.config.background_image_x_pct}
+              yPct={slide.config.background_image_y_pct}
+              widthPct={slide.config.background_image_width_pct}
+              heightPct={slide.config.background_image_height_pct}
+            />
+            <div className="relative z-10 h-full w-full">
+              <Face slide={slide} mode="static" />
+            </div>
           </div>
 
           {/* Transparent overlay handles the click — the scaled content above

@@ -166,7 +166,7 @@ function MissingWordEditor({
   }
 
   return (
-    <div className="flex h-full w-full flex-col gap-4 bg-white px-16 py-12 text-foreground">
+    <div className="flex h-full w-full flex-col gap-4 px-16 py-12 text-foreground">
       <textarea
         ref={textareaRef}
         value={localParagraph}
@@ -304,7 +304,7 @@ function MissingWordPresent({
 
   if (blanks.length === 0) {
     return (
-      <div className="flex h-full w-full flex-col gap-6 bg-white px-16 py-12 text-foreground">
+      <div className="flex h-full w-full flex-col gap-6 px-16 py-12 text-foreground">
         <div className="text-xl leading-loose">{paragraph}</div>
       </div>
     );
@@ -313,7 +313,7 @@ function MissingWordPresent({
   const correctCount = blanks.filter((b) => placement[b.id] === b.id).length;
 
   return (
-    <div className="flex h-full w-full flex-col gap-6 bg-white px-16 py-12 text-foreground">
+    <div className="flex h-full w-full flex-col gap-6 px-16 py-12 text-foreground">
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <div className="text-xl leading-loose">
           {segments.map((seg, i) =>
@@ -444,7 +444,7 @@ function MissingWordStatic({ paragraph, blanks }: { paragraph: string; blanks: M
   const segments = buildSegments(paragraph, blanks);
 
   return (
-    <div className="flex h-full w-full flex-col gap-4 bg-white px-16 py-12 text-foreground">
+    <div className="flex h-full w-full flex-col gap-4 px-16 py-12 text-foreground">
       <div className="text-xl leading-loose">
         {paragraph ? (
           segments.map((seg, i) =>

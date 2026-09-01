@@ -120,7 +120,7 @@ function MatchPairsEditor({
   }
 
   return (
-    <div className="flex h-full w-full flex-col gap-6 bg-white px-16 py-12 text-foreground">
+    <div className="flex h-full w-full flex-col gap-6 px-16 py-12 text-foreground">
       <input
         value={localInstructions}
         onChange={(e) => handleInstructionsChange(e.target.value)}
@@ -255,14 +255,14 @@ function MatchPairsPresent({
 
   if (pairs.length === 0) {
     return (
-      <div className="flex h-full w-full flex-col gap-6 bg-white px-16 py-12 text-foreground">
+      <div className="flex h-full w-full flex-col gap-6 px-16 py-12 text-foreground">
         {instructions && <div className="text-xl font-semibold">{instructions}</div>}
       </div>
     );
   }
 
   return (
-    <div className="flex h-full w-full flex-col gap-6 bg-white px-16 py-12 text-foreground">
+    <div className="flex h-full w-full flex-col gap-6 px-16 py-12 text-foreground">
       {instructions && <div className="text-xl font-semibold">{instructions}</div>}
 
       <div className="grid flex-1 grid-cols-2 gap-8">
@@ -338,7 +338,7 @@ function MatchTile({
 // philosophy already established for content/multiple_choice/missing_word.
 function MatchPairsStatic({ instructions, pairs }: { instructions: string; pairs: MatchPair[] }) {
   return (
-    <div className="flex h-full w-full flex-col gap-4 bg-white px-16 py-12 text-foreground">
+    <div className="flex h-full w-full flex-col gap-4 px-16 py-12 text-foreground">
       <div className="text-xl font-semibold">
         {instructions || <span className="text-muted-foreground/50">Click to add instructions</span>}
       </div>

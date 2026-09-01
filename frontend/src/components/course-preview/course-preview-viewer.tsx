@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { CANVAS_H, CANVAS_W } from "@/components/course-builder/slide-canvas";
 import { SLIDE_TYPE_FACES } from "@/components/course-builder/slide-faces";
+import { SlideBackgroundLayer } from "@/components/course-builder/slide-faces/background-image-field";
 import { Button } from "@/components/ui/button";
 import type { Slide } from "@/lib/course-types";
 import type { SlideInteractionResult } from "@/lib/slide-interaction";
@@ -72,10 +73,20 @@ export function CoursePreviewViewer({ slides }: { slides: PreviewSlide[] }) {
 
       <div className="flex items-center justify-center overflow-auto rounded-lg bg-muted p-8">
         <div
-          className="shrink-0 overflow-hidden rounded-sm bg-white shadow-lg"
+          className="relative shrink-0 overflow-hidden rounded-sm bg-white shadow-lg"
           style={{ width: CANVAS_W, height: CANVAS_H }}
         >
-          <Face key={current.slide.id} slide={current.slide} mode="present" onInteraction={handleInteraction} />
+          <SlideBackgroundLayer
+            value={current.slide.config.background_image_url}
+            mode="present"
+            xPct={current.slide.config.background_image_x_pct}
+            yPct={current.slide.config.background_image_y_pct}
+            widthPct={current.slide.config.background_image_width_pct}
+            heightPct={current.slide.config.background_image_height_pct}
+          />
+          <div className="relative z-10 h-full w-full">
+            <Face key={current.slide.id} slide={current.slide} mode="present" onInteraction={handleInteraction} />
+          </div>
         </div>
       </div>
 
