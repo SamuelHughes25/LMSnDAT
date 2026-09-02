@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Move } from "lucide-react";
 
+import { useSlideSelection } from "../slide-selection-context";
 import {
   DEFAULT_POSITION_PCT,
   DEFAULT_SIZE_PCT,
@@ -11,6 +12,12 @@ import {
   clampPositionPct,
   imageBoxStyle,
 } from "./image-shared";
+
+// This slide's own background image never shares its selection id with any
+// text box (those are namespaced `${slideId}:title` etc. — see
+// positionable-box.tsx) — a plain fixed suffix is enough since there's only
+// ever one background image per slide.
+const BACKGROUND_IMAGE_SELECTION_SUFFIX = "background-image";
 
 // Width of the invisible "click/drag to select and move" band hugging the
 // inside of the image's own edges — same idea, and same width, as
@@ -42,6 +49,7 @@ const MOVE_BAND_PX = 10;
 export function SlideBackgroundLayer({
   value,
   mode,
+  slideId,
   xPct,
   yPct,
   widthPct,
@@ -52,6 +60,13 @@ export function SlideBackgroundLayer({
 }: {
   value: string | null | undefined;
   mode: "edit" | "static" | "present";
+  // Only needed alongside onTransform/containerRef/overlayRef below — see
+  // their own comment for why static/present callers are spared this too.
+  // Namespaces this image's shared-selection id (see
+  // BACKGROUND_IMAGE_SELECTION_SUFFIX) so a stale selection from a
+  // previously-viewed slide can never make a different slide's background
+  // image render itself pre-selected.
+  slideId?: string;
   xPct: number | undefined;
   yPct: number | undefined;
   widthPct: number | undefined;
@@ -74,12 +89,13 @@ export function SlideBackgroundLayer({
   const w = widthPct ?? DEFAULT_SIZE_PCT;
   const h = heightPct ?? DEFAULT_SIZE_PCT;
 
-  if (mode !== "edit" || !onTransform || !containerRef || !overlayRef) {
+  if (mode !== "edit" || !onTransform || !containerRef || !overlayRef || !slideId) {
     return <BackgroundImagePixels value={value} xPct={x} yPct={y} widthPct={w} heightPct={h} />;
   }
   return (
     <BackgroundImageEditLayer
       value={value}
+      slideId={slideId}
       xPct={x}
       yPct={y}
       widthPct={w}
@@ -116,6 +132,7 @@ function BackgroundImagePixels({
 
 function BackgroundImageEditLayer({
   value,
+  slideId,
   xPct,
   yPct,
   widthPct,
@@ -125,6 +142,7 @@ function BackgroundImageEditLayer({
   overlayRef,
 }: {
   value: string;
+  slideId: string;
   xPct: number;
   yPct: number;
   widthPct: number;
@@ -171,16 +189,21 @@ function BackgroundImageEditLayer({
   const [live, setLive] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const effective = live ?? { x: xPct, y: yPct, w: widthPct, h: heightPct };
 
-  // Gates the move grip, resize handles, and dashed outline — an image
-  // with no text/table/etc. to focus has no native "selected" concept the
-  // way a text box does (focus-within), so this component tracks its own,
-  // toggled by the perimeter band below. frameRef wraps everything that
-  // counts as "part of the image's controls" (the frame div itself, plus
-  // the band strips, grip, and handles it contains); a pointerdown anywhere
-  // outside that subtree — another box's text, an empty part of the slide,
-  // the properties panel, anywhere — deselects, mirroring "click off the
-  // image" from the request this was built for.
-  const [isSelected, setIsSelected] = useState(false);
+  // Gates the move grip, resize handles, and dashed outline — an image with
+  // no text/table/etc. to focus has no native "selected" concept the way a
+  // text box does (focus-within), so this component's own selection is
+  // toggled by the perimeter band below, but the actual "am I selected"
+  // state now lives in the SHARED slide-selection-context rather than
+  // local state — see positionable-box.tsx's comment on selectionId for
+  // why: a move/resize drag has to preventDefault() on pointerdown, which
+  // as a side effect suppresses the native blur of whatever text box was
+  // previously focused, so that box never finds out it should deselect on
+  // its own. Sharing one slot means selecting the image here automatically
+  // clears any other box's own isSelected, and vice versa, without either
+  // side needing to know the other exists.
+  const selectionId = `${slideId}:${BACKGROUND_IMAGE_SELECTION_SUFFIX}`;
+  const { selectedId, select, deselect } = useSlideSelection();
+  const isSelected = selectedId === selectionId;
   const frameRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -188,7 +211,7 @@ function BackgroundImageEditLayer({
     function handlePointerDownOutside(e: PointerEvent) {
       const frame = frameRef.current;
       if (frame && e.target instanceof Node && !frame.contains(e.target)) {
-        setIsSelected(false);
+        deselect(selectionId);
       }
     }
     // Capture phase: a click that lands on, say, a title box still needs to
@@ -197,7 +220,7 @@ function BackgroundImageEditLayer({
     // would reach a bubble-phase document listener.
     document.addEventListener("pointerdown", handlePointerDownOutside, true);
     return () => document.removeEventListener("pointerdown", handlePointerDownOutside, true);
-  }, [isSelected]);
+  }, [isSelected, deselect, selectionId]);
 
   function commitTransform(next: { x: number; y: number; w: number; h: number }) {
     setLive(null);
@@ -210,7 +233,7 @@ function BackgroundImageEditLayer({
   // imageBoxStyle's own frame of reference.
   function handleMovePointerDown(e: React.PointerEvent) {
     e.preventDefault();
-    setIsSelected(true);
+    select(selectionId);
     const container = containerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();

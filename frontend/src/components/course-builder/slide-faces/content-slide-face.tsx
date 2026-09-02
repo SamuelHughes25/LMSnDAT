@@ -167,6 +167,7 @@ export function ContentSlideFace({
       <PositionableBox
         key={`${field}-${layout}`}
         fieldKey={field}
+        slideId={slide.id}
         transform={slide.config.box_transforms?.[field]}
         onTransform={(t) => handleBoxTransform(field, t)}
         mode={mode}

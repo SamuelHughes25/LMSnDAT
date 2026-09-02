@@ -64,6 +64,7 @@ export function SlideCanvas({
             <SlideBackgroundLayer
               value={slide.config.background_image_url}
               mode="edit"
+              slideId={slide.id}
               xPct={slide.config.background_image_x_pct}
               yPct={slide.config.background_image_y_pct}
               widthPct={slide.config.background_image_width_pct}

@@ -5,6 +5,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import type { BoxTransform } from "@/lib/course-types";
 import { cn } from "@/lib/utils";
 import { useActiveEditorContext } from "../active-editor-context";
+import { useSlideSelection } from "../slide-selection-context";
 import { HANDLES, type HandleDir, clampPositionPct, clampSizePct } from "./image-shared";
 import type { SlideFaceProps } from "./index";
 
@@ -67,6 +68,7 @@ function topLeftBoxStyle(xPct: number, yPct: number, widthPct: number, heightPct
 // anything about how its parent mounts it.
 export function PositionableBox({
   fieldKey,
+  slideId,
   transform,
   onTransform,
   mode,
@@ -75,6 +77,12 @@ export function PositionableBox({
   children,
 }: {
   fieldKey: string;
+  // Which slide this box belongs to — combined with fieldKey below into a
+  // globally-unique selection id, since "title"/"body"/etc. alone repeat on
+  // every slide. See slide-selection-context.tsx's comment on why
+  // namespacing this way (rather than resetting the shared context on slide
+  // change) is what's actually needed here.
+  slideId: string;
   transform: BoxTransform | undefined;
   onTransform: (t: BoxTransform) => void;
   mode: SlideFaceProps["mode"];
@@ -97,7 +105,20 @@ export function PositionableBox({
   // RichTextBody's own onBlur is (see content-slide-face.tsx) — otherwise
   // clicking a Bold/Italic button in the toolbar would look like focus
   // left the box and hide its handles mid-format.
-  const [isSelected, setIsSelected] = useState(false);
+  //
+  // Derived from the SHARED slide-selection-context, not local state: a
+  // move/resize drag has to preventDefault() on pointerdown (to suppress
+  // native click/text-selection behavior while dragging), which as a side
+  // effect also suppresses the native blur that would otherwise fire on
+  // whichever OTHER box was previously focused — so that other box never
+  // finds out it should deselect. Routing "am I selected" through one
+  // shared slot instead of independent local state means selecting this
+  // box automatically overwrites the slot and every other box's own
+  // isSelected goes false on the very next render, regardless of whether
+  // its native focus/blur ever fired. See slide-selection-context.tsx.
+  const selectionId = `${slideId}:${fieldKey}`;
+  const { selectedId, select, deselect } = useSlideSelection();
+  const isSelected = selectedId === selectionId;
   const { toolbarRef, toolbarInteractingRef } = useActiveEditorContext();
 
   // Runs after the DOM commits, before paint — the one-time measurement
@@ -182,7 +203,7 @@ export function PositionableBox({
 
   function handleMovePointerDown(e: React.PointerEvent) {
     e.preventDefault();
-    setIsSelected(true);
+    select(selectionId);
     const slide = slideRef?.current;
     const startMaybe = transform ?? measuredBaseline;
     if (!slide || !startMaybe) return;
@@ -230,7 +251,7 @@ export function PositionableBox({
   function handleResizePointerDown(dir: HandleDir, e: React.PointerEvent) {
     e.preventDefault();
     e.stopPropagation();
-    setIsSelected(true);
+    select(selectionId);
     const slide = slideRef?.current;
     const startMaybe = transform ?? measuredBaseline;
     if (!slide || !startMaybe) return;
@@ -275,7 +296,7 @@ export function PositionableBox({
   }
 
   function handleFocus() {
-    setIsSelected(true);
+    select(selectionId);
   }
 
   function handleBlur(e: React.FocusEvent<HTMLDivElement>) {
@@ -286,7 +307,7 @@ export function PositionableBox({
     if (focusMovedIntoToolbar || toolbarInteractingRef.current || focusStayedInBox) {
       return;
     }
-    setIsSelected(false);
+    deselect(selectionId);
   }
 
   const effective = live ?? baseline;
