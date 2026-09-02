@@ -5,21 +5,43 @@ import { useLayoutEffect, useRef, useState } from "react";
 import type { BoxTransform } from "@/lib/course-types";
 import { cn } from "@/lib/utils";
 import { useActiveEditorContext } from "../active-editor-context";
-import { ResizeHandles, clampPositionPct, clampSizePct, imageBoxStyle } from "./image-shared";
+import { HANDLES, type HandleDir, clampPositionPct, clampSizePct } from "./image-shared";
 import type { SlideFaceProps } from "./index";
 
 // Width of the invisible "grab to move" band just inside the box's own
 // edges — see the perimeter strips below.
 const MOVE_BAND_PX = 10;
 
+// (xPct, yPct) here is the box's TOP-LEFT corner, not its center —
+// deliberately different from image-shared.tsx's imageBoxStyle (which
+// centers the box on (xPct, yPct) and keeps that center fixed while
+// resizing). That center-anchored model is correct for the free-floating
+// background image (confirmed explicitly for it) but was the wrong model
+// for text boxes: resizing a text box from a corner/edge handle is
+// conventionally expected to keep the OPPOSITE corner/edge fixed (drag the
+// bottom-right handle, the top-left stays put — the standard behavior in
+// every familiar text/shape editor), not keep the center fixed and move
+// both corners at once. No translate needed here since there's no
+// centering to do — top/left/width/height are the box's real edges
+// directly.
+function topLeftBoxStyle(xPct: number, yPct: number, widthPct: number, heightPct: number): React.CSSProperties {
+  return {
+    position: "absolute",
+    top: `${yPct}%`,
+    left: `${xPct}%`,
+    width: `${widthPct}%`,
+    height: `${heightPct}%`,
+  };
+}
+
 // Makes a single text box (title/subtitle/body/body2) freely draggable and
 // resizable, independent of the background-image system in
 // background-image-field.tsx — separate config (config.box_transforms, not
-// anything image-related), separate refs, separate drag state. The two
-// only share the low-level positioning primitives in image-shared.tsx
-// (percent-based centered-box math, clamp helpers, the resize-handle
-// component), which hold no state of their own, so there's no runtime
-// coupling between the two features to get wrong.
+// anything image-related), separate refs, separate drag state, and (see
+// topLeftBoxStyle above) a deliberately different resize anchor model. The
+// two only share the low-level positioning primitives in image-shared.tsx
+// that are genuinely identical either way (size clamping, the resize
+// handles' visual layout), not any runtime state or drag math.
 //
 // A box with no saved transform yet renders exactly as it always has — a
 // normal flex child, sized by whichever layout is active, via
@@ -113,9 +135,10 @@ export function PositionableBox({
       }
       const wrapperRect = wrapper.getBoundingClientRect();
       const slideRect = slide.getBoundingClientRect();
+      // Top-left corner, not center — see topLeftBoxStyle's comment.
       setMeasuredBaseline({
-        xPct: ((wrapperRect.x + wrapperRect.width / 2 - slideRect.x) / slideRect.width) * 100,
-        yPct: ((wrapperRect.y + wrapperRect.height / 2 - slideRect.y) / slideRect.height) * 100,
+        xPct: ((wrapperRect.x - slideRect.x) / slideRect.width) * 100,
+        yPct: ((wrapperRect.y - slideRect.y) / slideRect.height) * 100,
         widthPct: (wrapperRect.width / slideRect.width) * 100,
         heightPct: (wrapperRect.height / slideRect.height) * 100,
       });
@@ -140,12 +163,12 @@ export function PositionableBox({
     // transformed box can visually overlap an untransformed sibling still
     // in normal flex flow, and without an explicit stacking order they'd
     // fall back to DOM order, which isn't necessarily what was intended.
+    // overflow-hidden lives on the INNER wrapper (around just the
+    // content), not this outer positioned box — see the identical note on
+    // the edit-mode return below for why that split matters.
     return (
-      <div
-        className="absolute z-10 overflow-hidden"
-        style={imageBoxStyle(transform.xPct, transform.yPct, transform.widthPct, transform.heightPct)}
-      >
-        {children}
+      <div className="absolute z-10" style={topLeftBoxStyle(transform.xPct, transform.yPct, transform.widthPct, transform.heightPct)}>
+        <div className="h-full w-full overflow-hidden">{children}</div>
       </div>
     );
   }
@@ -190,6 +213,67 @@ export function PositionableBox({
     document.addEventListener("pointerup", onUp);
   }
 
+  // Opposite-edge-anchored resize: dragging the "e" (east) handle only
+  // ever grows/shrinks width, from the box's existing left edge — that
+  // edge (x) never moves. Dragging "w" moves the left edge itself, so the
+  // RIGHT edge (start.xPct + start.widthPct) is computed once as the fixed
+  // anchor, and x is *derived* from it every frame (`anchor - width`) —
+  // deriving it this way, rather than tracking x and width as two
+  // independent deltas, is what guarantees the anchor edge is still
+  // exactly fixed even once width hits the MIN/MAX clamp, not just
+  // "usually" fixed. "n"/"s" do the same on the vertical axis. This
+  // replaces an earlier version of this component that reused the
+  // free-floating image's center-anchored math (imageBoxStyle) for text
+  // boxes too — confirmed in a real browser to be the wrong model here:
+  // dragging any handle visibly moved the box's top-left corner, since
+  // center-anchoring moves both corners at once by design.
+  function handleResizePointerDown(dir: HandleDir, e: React.PointerEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsSelected(true);
+    const slide = slideRef?.current;
+    const startMaybe = transform ?? measuredBaseline;
+    if (!slide || !startMaybe) return;
+    const start: BoxTransform = startMaybe;
+    const rect = slide.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const rightAnchor = start.xPct + start.widthPct;
+    const bottomAnchor = start.yPct + start.heightPct;
+    let current = start;
+
+    function onMove(moveEvent: PointerEvent) {
+      const dxPct = ((moveEvent.clientX - startX) / rect.width) * 100;
+      const dyPct = ((moveEvent.clientY - startY) / rect.height) * 100;
+      let { xPct, yPct, widthPct, heightPct } = start;
+
+      if (dir.includes("e")) {
+        widthPct = clampSizePct(start.widthPct + dxPct);
+      }
+      if (dir.includes("w")) {
+        widthPct = clampSizePct(start.widthPct - dxPct);
+        xPct = rightAnchor - widthPct;
+      }
+      if (dir.includes("s")) {
+        heightPct = clampSizePct(start.heightPct + dyPct);
+      }
+      if (dir.includes("n")) {
+        heightPct = clampSizePct(start.heightPct - dyPct);
+        yPct = bottomAnchor - heightPct;
+      }
+
+      current = { xPct, yPct, widthPct, heightPct };
+      setLive(current);
+    }
+    function onUp() {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      commit(current);
+    }
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  }
+
   function handleFocus() {
     setIsSelected(true);
   }
@@ -218,21 +302,33 @@ export function PositionableBox({
       // body normally occupies). Neither had an explicit z-index before
       // this, so they stacked by DOM order — title renders before body in
       // the JSX, so body (painted later) silently covered the just-moved
-      // title, making it unclickable. Confirmed via a real browser: after
-      // this fix, dragging a box always brings it above any untouched
-      // sibling, matching the general expectation that the thing you just
-      // moved should be reachable, not buried by something you didn't
-      // touch.
-      className={cn("relative", !transform && flexClassName, transform && "absolute z-10 overflow-hidden")}
-      style={transform && effective ? imageBoxStyle(effective.xPct, effective.yPct, effective.widthPct, effective.heightPct) : undefined}
+      // title, making it unclickable. Fixed by giving a transformed box
+      // z-10 so it's always on top of anything untouched.
+      className={cn("relative", !transform && flexClassName, transform && "absolute z-10")}
+      style={transform && effective ? topLeftBoxStyle(effective.xPct, effective.yPct, effective.widthPct, effective.heightPct) : undefined}
     >
-      <div className="h-full w-full">{children}</div>
+      {/* overflow-hidden lives HERE, on the inner content wrapper, not on
+          the outer positioned box above — it used to sit on the outer box,
+          which also hosts the resize handles below. Those handles are
+          deliberately positioned just OUTSIDE the box's own edges (e.g.
+          top: -5px) so they're easy to grab; putting overflow-hidden on
+          their own container clipped most of them the instant a box
+          became transformed (mode="edit", `transform` truthy) — exactly
+          the "most of the dots go missing after resizing" bug. Confirmed
+          via a real browser: before this fix, 6-7 of the 8 handles
+          (everything but whichever sat flush with a non-clipped edge)
+          disappeared right after the first resize commit; after, all 8
+          stay visible regardless of how many times the box has been
+          resized. Text still gets clipped to the box's own bounds exactly
+          as before — clipping just moved to the element that's supposed
+          to own it. */}
+      <div className="h-full w-full overflow-hidden">{children}</div>
 
       {baseline && slideRef && (
         <>
           {/* Perimeter move band: four thin strips hugging the INSIDE of
               the box's edges, each a plain "cursor: move" + drag-to-move
-              target — not a single center-positioned grip button (the
+              target — not a single center-positioned grip button (an
               earlier design). A center grip sat exactly where a click to
               place the text cursor would land, and `opacity-0` (needed so
               an always-visible grip wasn't cluttering the slide) doesn't
@@ -269,15 +365,15 @@ export function PositionableBox({
             style={{ top: MOVE_BAND_PX, bottom: MOVE_BAND_PX, width: MOVE_BAND_PX }}
           />
 
-          {isSelected && (
-            <ResizeHandles
-              containerRef={slideRef}
-              widthPct={baseline.widthPct}
-              heightPct={baseline.heightPct}
-              onLiveResize={(w, h) => setLive({ ...(transform ?? baseline), widthPct: clampSizePct(w), heightPct: clampSizePct(h) })}
-              onCommitResize={(w, h) => commit({ ...(transform ?? baseline), widthPct: clampSizePct(w), heightPct: clampSizePct(h) })}
-            />
-          )}
+          {isSelected &&
+            HANDLES.map(({ dir, style, cursor }) => (
+              <div
+                key={dir}
+                onPointerDown={(e) => handleResizePointerDown(dir, e)}
+                className="absolute z-20 h-2.5 w-2.5 rounded-sm border border-white bg-primary shadow-sm"
+                style={{ ...style, cursor }}
+              />
+            ))}
         </>
       )}
     </div>

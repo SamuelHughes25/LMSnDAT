@@ -113,12 +113,23 @@ export function useImageUpload(courseVersionId: string | undefined, onCommit: (v
   return { uploading, error, inputRef, handleFileChange, handlePaste };
 }
 
-type HandleDir = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+export type HandleDir = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
 // Position each handle relative to the image box's own edges/corners — the
 // box itself is already centered via imageBoxStyle, so these never need to
 // know anything about the container's size or position, only the box's.
-const HANDLES: { dir: HandleDir; style: React.CSSProperties; cursor: string }[] = [
+// Exported so positionable-box.tsx can reuse this same visual layout for
+// text boxes' resize handles — the eight dots sit in the same places
+// either way, only the *math* a drag does with them differs (this file's
+// ResizeHandles keeps the box's center fixed, matching the free-floating
+// image's earlier confirmed behavior; positionable-box.tsx keeps the
+// corner/edge *opposite* whichever handle is being dragged fixed instead,
+// per the correction that center-anchoring was the wrong model for text
+// boxes). Reusing the pure position/cursor data — not the drag math —
+// avoids two independently-drifting copies of "where do the eight dots
+// go" while keeping the two behaviors that actually needed to differ
+// cleanly separate.
+export const HANDLES: { dir: HandleDir; style: React.CSSProperties; cursor: string }[] = [
   { dir: "nw", style: { top: -5, left: -5 }, cursor: "nwse-resize" },
   { dir: "n", style: { top: -5, left: "50%", transform: "translateX(-50%)" }, cursor: "ns-resize" },
   { dir: "ne", style: { top: -5, right: -5 }, cursor: "nesw-resize" },
