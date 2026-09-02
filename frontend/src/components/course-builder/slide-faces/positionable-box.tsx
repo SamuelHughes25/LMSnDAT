@@ -13,6 +13,25 @@ import type { SlideFaceProps } from "./index";
 // edges — see the perimeter strips below.
 const MOVE_BAND_PX = 10;
 
+// Minimum pointer travel (px) before a move/resize gesture counts as an
+// actual drag rather than a plain click. Without this, a PLAIN CLICK on
+// the move band or a resize handle — pointerdown immediately followed by
+// pointerup with zero movement, which is exactly what happens when a user
+// clicks a box just to SELECT it — still ran the full onUp -> commit ->
+// onTransform path with a same-as-start value, silently converting an
+// untouched, flex-rendered box into an absolutely-positioned one at its
+// current spot. That matters because position:absolute takes an element
+// OUT of the flex column entirely: confirmed via a real browser that
+// clicking title's move band (selecting it, no drag intended) shrank the
+// flex column by title's own ~40px height, so body — still flex-rendered,
+// stacked below title — visibly jumped up to fill the space title used to
+// reserve, reported as "the text box position jumps up to the bottom of
+// the title box" the moment the title (not even the text box itself) was
+// merely clicked. A few pixels of slop is standard for distinguishing a
+// click from a drag in any pointer-driven editor; small enough that no
+// deliberate drag is ever mistaken for a click.
+const DRAG_THRESHOLD_PX = 3;
+
 // Text boxes' OWN size clamp — deliberately NOT image-shared.tsx's
 // clampSizePct (whose 20% floor is tuned for images, which default to
 // 100% size). A title's natural single-line height is only ~7% of the
@@ -284,8 +303,16 @@ export function PositionableBox({
     const startX = e.clientX;
     const startY = e.clientY;
     let current = start;
+    // See DRAG_THRESHOLD_PX's comment: a plain click (no real movement)
+    // must select without also committing `start` right back as a "new"
+    // transform, which would silently pull the box out of flex flow.
+    let moved = false;
 
     function onMove(moveEvent: PointerEvent) {
+      if (!moved && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < DRAG_THRESHOLD_PX) {
+        return;
+      }
+      moved = true;
       current = {
         ...start,
         xPct: clampPositionPct(start.xPct + ((moveEvent.clientX - startX) / rect.width) * 100),
@@ -296,7 +323,7 @@ export function PositionableBox({
     function onUp() {
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
-      commit(current);
+      if (moved) commit(current);
     }
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);
@@ -330,8 +357,16 @@ export function PositionableBox({
     const rightAnchor = start.xPct + start.widthPct;
     const bottomAnchor = start.yPct + start.heightPct;
     let current = start;
+    // See DRAG_THRESHOLD_PX's comment on handleMovePointerDown — the same
+    // "plain click shouldn't commit a same-as-start transform" reasoning
+    // applies here too.
+    let moved = false;
 
     function onMove(moveEvent: PointerEvent) {
+      if (!moved && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < DRAG_THRESHOLD_PX) {
+        return;
+      }
+      moved = true;
       const dxPct = ((moveEvent.clientX - startX) / rect.width) * 100;
       const dyPct = ((moveEvent.clientY - startY) / rect.height) * 100;
       let { xPct, yPct, widthPct, heightPct } = start;
@@ -357,7 +392,7 @@ export function PositionableBox({
     function onUp() {
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
-      commit(current);
+      if (moved) commit(current);
     }
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);
