@@ -204,6 +204,48 @@ export function PositionableBox({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, transform]);
 
+  // The box's position/size to actually START a drag from — measured FRESH
+  // right now, not read from `measuredBaseline` state. `measuredBaseline`
+  // is captured once, on mount, and then frozen (see the layout effect
+  // above); that's fine for the ONE thing it's still used for below
+  // (placing the always-visible perimeter band before the box has ever
+  // been touched), but it's the wrong source of truth for what a drag
+  // should actually COMMIT, because that one-shot mount measurement can
+  // itself be stale. Confirmed via a real browser + instrumented logging:
+  // TipTap's editor content doesn't necessarily exist in the DOM on the
+  // very first layout-effect pass (immediatelyRender: false delays it),
+  // so a box whose true content hasn't painted yet can measure as
+  // collapsed/near-zero — and for `body`, whose flex position depends on
+  // `title`'s settled height (both are stacked in the same flex column),
+  // that meant body's frozen baseline reflected "right below a
+  // still-collapsed title" rather than body's real, later position once
+  // title's actual height applied — a permanent ~40px error, reproduced
+  // exactly matching the report of a first drag jumping "up to the bottom
+  // of the title box." React's dev-only StrictMode double-invoking this
+  // effect happened to self-correct it in earlier manual testing (a
+  // second, later measurement overwriting the bad first one) — but that's
+  // a dev-mode accident to fix, not something to depend on: production
+  // builds never double-invoke, so the same race could freeze in the BAD
+  // measurement there with no second pass to correct it. Re-measuring at
+  // the moment a drag actually begins sidesteps the whole timing question
+  // instead of chasing exactly when content has "settled": by definition,
+  // if the user can see and click the box, its current DOM position is
+  // already correct, so asking for it right then is always safe.
+  function measureFreshBaseline(): BoxTransform | null {
+    if (transform) return transform;
+    const wrapper = wrapperRef.current;
+    const slide = slideRef?.current;
+    if (!wrapper || !slide) return measuredBaseline;
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const slideRect = slide.getBoundingClientRect();
+    return {
+      xPct: ((wrapperRect.x - slideRect.x) / slideRect.width) * 100,
+      yPct: ((wrapperRect.y - slideRect.y) / slideRect.height) * 100,
+      widthPct: (wrapperRect.width / slideRect.width) * 100,
+      heightPct: (wrapperRect.height / slideRect.height) * 100,
+    };
+  }
+
   if (mode !== "edit") {
     if (!transform) return <>{children}</>;
     // z-10 for the same reason as the edit-mode return below: a
@@ -231,7 +273,7 @@ export function PositionableBox({
     e.preventDefault();
     select(selectionId);
     const slide = slideRef?.current;
-    const startMaybe = transform ?? measuredBaseline;
+    const startMaybe = measureFreshBaseline();
     if (!slide || !startMaybe) return;
     // Captured into its own definitely-non-null const: TypeScript's
     // narrowing from the guard above doesn't carry into the nested
@@ -279,7 +321,7 @@ export function PositionableBox({
     e.stopPropagation();
     select(selectionId);
     const slide = slideRef?.current;
-    const startMaybe = transform ?? measuredBaseline;
+    const startMaybe = measureFreshBaseline();
     if (!slide || !startMaybe) return;
     const start: BoxTransform = startMaybe;
     const rect = slide.getBoundingClientRect();
