@@ -1,12 +1,21 @@
 "use client";
 
+import { useState } from "react";
 import { Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { SLIDE_TYPE_LABELS } from "@/lib/course-types";
 import type { ContentSlideLayout, Lesson, Slide, SlideConfig } from "@/lib/course-types";
-import { cn } from "@/lib/utils";
+import { cn, stripHtml } from "@/lib/utils";
 import { LessonProperties } from "./lesson-properties";
 import { SlideBackgroundPanel } from "./slide-background-panel";
 
@@ -38,6 +47,11 @@ export type PropertiesPanelProps =
       // to see the truly current config no matter how close together two
       // changes happen.
       onConfigChange: (config: Partial<SlideConfig>) => void;
+      // Only needed for the layout picker's "switching templates wipes the
+      // slide" confirmation below — a full wipe has to clear the title too,
+      // and title lives on the Slide itself, not in config (see
+      // course-builder.tsx's handleSlideChange vs. handleSlideConfigChange).
+      onTitleChange: (title: string) => void;
       onDelete: () => void;
     };
 
@@ -67,22 +81,93 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
       slide={props.slide}
       courseVersionId={props.courseVersionId}
       onConfigChange={props.onConfigChange}
+      onTitleChange={props.onTitleChange}
       onDelete={props.onDelete}
     />
   );
+}
+
+// True once anything has actually been typed/uploaded onto this slide — the
+// gate for the layout picker's "switching will delete your content" warning
+// below. Checked against the fields a content slide's layouts actually use
+// (title, subtitle, body/body2, the image-left/right picture, the
+// title-table table); deliberately NOT background_image_url — that's a
+// cross-cutting per-slide setting independent of layout (see its own
+// comment in course-types.ts and in SlideBackgroundPanel below), not part
+// of "this template's content," and switching templates doesn't touch it
+// either (see applyLayoutChange), so it shouldn't be what triggers a warning
+// about doing so.
+//
+// stripHtml (a real DOM-based tag strip, not a regex) is what StaticField
+// already uses to tell "genuinely empty" apart from TipTap's `<p></p>`
+// round-trip of a field that was typed into and then fully cleared — same
+// reasoning applies here: a config.body of `"<p></p>"` is not content.
+function hasSlideContent(slide: Slide): boolean {
+  const hasText = (v: string | undefined) => !!v && stripHtml(v).trim().length > 0;
+  if (hasText(slide.title)) return true;
+  if (hasText(slide.config.subtitle)) return true;
+  if (hasText(slide.config.body)) return true;
+  if (hasText(slide.config.body2)) return true;
+  if (slide.config.image_url) return true;
+  const table = slide.config.table;
+  if (table) {
+    if (table.headers.some((h) => h.trim().length > 0)) return true;
+    if (table.rows.some((row) => row.some((cell) => cell.trim().length > 0))) return true;
+  }
+  return false;
 }
 
 function SlideProperties({
   slide,
   courseVersionId,
   onConfigChange,
+  onTitleChange,
   onDelete,
 }: {
   slide: Slide;
   courseVersionId: string;
   onConfigChange: (config: Partial<SlideConfig>) => void;
+  onTitleChange: (title: string) => void;
   onDelete: () => void;
 }) {
+  // The layout the confirmation dialog is asking about switching TO — null
+  // means the dialog is closed. Only ever set when hasSlideContent(slide)
+  // is true at click time; see handleLayoutChangeRequest.
+  const [pendingLayout, setPendingLayout] = useState<ContentSlideLayout | null>(null);
+
+  // The actual switch: resets every layout-scoped field to its blank state
+  // (not just box_transforms, which the picker always cleared even before
+  // this confirmation existed) and applies the new layout, so the slide
+  // ends up looking exactly like a freshly-added slide in that layout — "an
+  // empty template," per the request. image_url is set to `null` (removed)
+  // rather than left `undefined`, matching how EditableImage's own Remove
+  // button clears it — image_width_pct/height_pct are left as `undefined`
+  // rather than a literal removed marker, same as an image that was simply
+  // never resized.
+  function applyLayoutChange(layout: ContentSlideLayout) {
+    onTitleChange("");
+    onConfigChange({
+      layout,
+      box_transforms: undefined,
+      subtitle: undefined,
+      body: undefined,
+      body2: undefined,
+      image_url: null,
+      image_width_pct: undefined,
+      image_height_pct: undefined,
+      table: undefined,
+    });
+  }
+
+  function handleLayoutChangeRequest(layout: ContentSlideLayout) {
+    if (layout === (slide.config.layout ?? "title-body")) return;
+    if (!hasSlideContent(slide)) {
+      applyLayoutChange(layout);
+      return;
+    }
+    setPendingLayout(layout);
+  }
+
   return (
     <div className="space-y-4 p-4">
       <div>
@@ -96,18 +181,40 @@ function SlideProperties({
           this stage. A later stage can grow this into a per-type lookup
           without disturbing this component's shape. */}
       {slide.slide_type === "content" && (
-        <ContentLayoutPicker
-          layout={slide.config.layout ?? "title-body"}
-          // Clears box_transforms on every layout switch — a different
-          // layout means different boxes exist or mean different things
-          // (e.g. "body" moves from sharing a row with an image to filling
-          // the whole slide), so a stale drag/resize from the old
-          // arrangement carrying over would land somewhere that never made
-          // sense for the new one. See BoxTransform's comment in
-          // course-types.ts.
-          onChange={(layout) => onConfigChange({ layout, box_transforms: undefined })}
-        />
+        <ContentLayoutPicker layout={slide.config.layout ?? "title-body"} onChange={handleLayoutChangeRequest} />
       )}
+
+      {/* Only ever open when a layout switch was requested on a slide that
+          already had content — see handleLayoutChangeRequest. Cancelling
+          (Escape, backdrop click, or the Cancel button — all funnel through
+          onOpenChange) leaves the slide exactly as it was; only the
+          "Switch and delete content" button actually calls
+          applyLayoutChange. */}
+      <Dialog open={pendingLayout !== null} onOpenChange={(open) => !open && setPendingLayout(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Switch template?</DialogTitle>
+            <DialogDescription>
+              This slide already has content. Switching templates will delete its title, text, image, and table,
+              and replace it with an empty version of the new template. This can&apos;t be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingLayout(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (pendingLayout) applyLayoutChange(pendingLayout);
+                setPendingLayout(null);
+              }}
+            >
+              Switch and delete content
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Unlike the layout picker above, this section applies to every
           slide_type — a background image (and, planned next, a background

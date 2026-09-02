@@ -237,6 +237,7 @@ export function CourseBuilder({
           slide: selectedSlide,
           courseVersionId: initialVersion.id,
           onConfigChange: (config) => handleSlideConfigChange(selectedLesson.id, selectedSlide.id, config),
+          onTitleChange: (title) => handleSlideChange(selectedLesson.id, selectedSlide.id, { title }),
           onDelete: () => handleDeleteSlide(selectedLesson.id, selectedSlide.id),
         }
       : selectedLesson

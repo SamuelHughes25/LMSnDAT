@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Move } from "lucide-react";
 
 import {
@@ -10,6 +10,14 @@ import {
   clampPositionPct,
   imageBoxStyle,
 } from "./image-shared";
+
+// Width of the invisible "click/drag to select and move" band hugging the
+// inside of the image's own edges — same idea, and same width, as
+// positionable-box.tsx's MOVE_BAND_PX for text boxes. Kept as its own local
+// constant rather than importing that one: the two are separate features
+// that just happen to agree on a pixel value, not something that needs to
+// stay in lock-step.
+const MOVE_BAND_PX = 10;
 
 // The on-canvas half of the universal per-slide background image — the
 // other half (upload/paste, replace, remove) lives in the properties
@@ -125,17 +133,46 @@ function BackgroundImageEditLayer({
   const [live, setLive] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const effective = live ?? { x: xPct, y: yPct, w: widthPct, h: heightPct };
 
+  // Gates the move grip, resize handles, and dashed outline — an image
+  // with no text/table/etc. to focus has no native "selected" concept the
+  // way a text box does (focus-within), so this component tracks its own,
+  // toggled by the perimeter band below. frameRef wraps everything that
+  // counts as "part of the image's controls" (the frame div itself, plus
+  // the band strips, grip, and handles it contains); a pointerdown anywhere
+  // outside that subtree — another box's text, an empty part of the slide,
+  // the properties panel, anywhere — deselects, mirroring "click off the
+  // image" from the request this was built for.
+  const [isSelected, setIsSelected] = useState(false);
+  const frameRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isSelected) return;
+    function handlePointerDownOutside(e: PointerEvent) {
+      const frame = frameRef.current;
+      if (frame && e.target instanceof Node && !frame.contains(e.target)) {
+        setIsSelected(false);
+      }
+    }
+    // Capture phase: a click that lands on, say, a title box still needs to
+    // be seen here even though that title box's own onFocus/onPointerDown
+    // handlers might otherwise stop the event from bubbling by the time it
+    // would reach a bubble-phase document listener.
+    document.addEventListener("pointerdown", handlePointerDownOutside, true);
+    return () => document.removeEventListener("pointerdown", handlePointerDownOutside, true);
+  }, [isSelected]);
+
   function commitTransform(next: { x: number; y: number; w: number; h: number }) {
     setLive(null);
     onTransform({ xPct: next.x, yPct: next.y, widthPct: next.w, heightPct: next.h });
   }
 
-  // Dragging the move grip repositions the image's center. Measured
-  // against `containerRef` — the full slide root, passed down from
-  // slide-canvas.tsx — so percentages stay consistent with imageBoxStyle's
-  // own frame of reference.
+  // Dragging the move grip, or the perimeter band, repositions the image's
+  // center. Measured against `containerRef` — the full slide root, passed
+  // down from slide-canvas.tsx — so percentages stay consistent with
+  // imageBoxStyle's own frame of reference.
   function handleMovePointerDown(e: React.PointerEvent) {
     e.preventDefault();
+    setIsSelected(true);
     const container = containerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
@@ -168,42 +205,89 @@ function BackgroundImageEditLayer({
       <BackgroundImagePixels value={value} xPct={effective.x} yPct={effective.y} widthPct={effective.w} heightPct={effective.h} />
 
       {/* Control frame: same bounds as the pixels above, but z-20 — above
-          the content layer's z-10, so it's always grabbable regardless of
-          what's rendered on top of it. Pointer-events-none on the frame
-          itself (a full-slide image's frame would otherwise cover the
-          entire slide and block every click meant for the content
-          underneath); only the move grip and the resize handles (via
-          their own pointer-events-auto — see image-shared.tsx) opt back
-          in. */}
+          the content layer's z-10, so its perimeter band is always
+          grabbable regardless of what's rendered on top of it (that layer
+          being the ONLY thing that ever gets clicks, is exactly why the
+          band exists here at all — the image's own pixels, underneath the
+          content layer, are never directly clickable; see the note above
+          MOVE_BAND_PX). Pointer-events-none on the frame div itself (a
+          full-slide image's frame would otherwise cover the entire slide
+          and block every click meant for the content underneath); only
+          the band, grip, and resize handles (each via their own
+          pointer-events-auto) opt back in. */}
       <div
-        className="pointer-events-none absolute z-20 rounded-md border-2 border-dashed border-primary/70"
+        ref={frameRef}
+        className="pointer-events-none absolute z-20 rounded-md"
         style={imageBoxStyle(effective.x, effective.y, effective.w, effective.h)}
       >
-        {/* Floats just above the box's own top edge, not centered inside
-            it — see the identical fix (and the real bug it fixed) on
-            positionable-box.tsx's move grip. This one is always visible
-            (not opacity-0/hover-revealed like that one), so the failure
-            mode here is milder — a visible handle blocking a click is
-            discoverable, an invisible one isn't — but it's the same
-            underlying issue (a background image's center can still land
-            under a title/body box), so it gets the same fix. */}
-        <button
-          type="button"
+        {/* Perimeter band: four thin strips hugging the inside of the
+            image's own edges, always present (not gated on isSelected —
+            this is what LETS the image become selected in the first
+            place). A plain click (no drag distance) selects; dragging
+            selects and moves in the same gesture, exactly like
+            positionable-box.tsx's identical band for text boxes.
+            Deliberately a thin band rather than the whole frame interior:
+            a background image commonly extends behind title/body text, and
+            those boxes need every click inside their own bounds to keep
+            reaching them uninterrupted — only the outer edge, where a
+            background image is least likely to have text directly over
+            it, opts back into hit-testing. */}
+        <div
           onPointerDown={handleMovePointerDown}
-          aria-label="Move background image"
-          title="Drag to move"
-          className="pointer-events-auto absolute top-0 left-1/2 flex h-8 w-8 -translate-x-1/2 -translate-y-[130%] cursor-move items-center justify-center rounded-full border-2 border-white bg-primary text-primary-foreground shadow-md"
-        >
-          <Move className="h-4 w-4" />
-        </button>
-
-        <ResizeHandles
-          containerRef={containerRef}
-          widthPct={widthPct}
-          heightPct={heightPct}
-          onLiveResize={(w, h) => setLive({ x: effective.x, y: effective.y, w, h })}
-          onCommitResize={(w, h) => commitTransform({ x: effective.x, y: effective.y, w, h })}
+          title="Click to select, drag to move"
+          className="pointer-events-auto absolute inset-x-0 top-0 cursor-move"
+          style={{ height: MOVE_BAND_PX }}
         />
+        <div
+          onPointerDown={handleMovePointerDown}
+          title="Click to select, drag to move"
+          className="pointer-events-auto absolute inset-x-0 bottom-0 cursor-move"
+          style={{ height: MOVE_BAND_PX }}
+        />
+        <div
+          onPointerDown={handleMovePointerDown}
+          title="Click to select, drag to move"
+          className="pointer-events-auto absolute left-0 cursor-move"
+          style={{ top: MOVE_BAND_PX, bottom: MOVE_BAND_PX, width: MOVE_BAND_PX }}
+        />
+        <div
+          onPointerDown={handleMovePointerDown}
+          title="Click to select, drag to move"
+          className="pointer-events-auto absolute right-0 cursor-move"
+          style={{ top: MOVE_BAND_PX, bottom: MOVE_BAND_PX, width: MOVE_BAND_PX }}
+        />
+
+        {isSelected && (
+          <>
+            {/* The dashed outline, move grip, and resize handles now only
+                render once selected — before that, the image looks exactly
+                like it will to a learner (just the picture, no controls),
+                matching "click off deselects, select to see the controls
+                again." */}
+            <div className="pointer-events-none absolute inset-0 rounded-md border-2 border-dashed border-primary/70" />
+
+            {/* Floats just above the box's own top edge, not centered inside
+                it — see the identical fix (and the real bug it fixed) on
+                positionable-box.tsx's move grip. */}
+            <button
+              type="button"
+              onPointerDown={handleMovePointerDown}
+              aria-label="Move background image"
+              title="Drag to move"
+              className="pointer-events-auto absolute top-0 left-1/2 flex h-8 w-8 -translate-x-1/2 -translate-y-[130%] cursor-move items-center justify-center rounded-full border-2 border-white bg-primary text-primary-foreground shadow-md"
+            >
+              <Move className="h-4 w-4" />
+            </button>
+
+            <ResizeHandles
+              containerRef={containerRef}
+              widthPct={widthPct}
+              heightPct={heightPct}
+              onLiveResize={(w, h) => setLive({ x: effective.x, y: effective.y, w, h })}
+              onCommitResize={(w, h) => commitTransform({ x: effective.x, y: effective.y, w, h })}
+            />
+          </>
+        )}
       </div>
     </>
   );
