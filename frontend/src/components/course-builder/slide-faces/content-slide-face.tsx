@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { TextStyle } from "@tiptap/extension-text-style";
@@ -10,6 +10,7 @@ import DOMPurify from "dompurify";
 import type { BoxTransform, ContentSlideLayout } from "@/lib/course-types";
 import { FontSize } from "@/lib/tiptap-font-size";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
+import { useIsClient } from "@/lib/use-is-client";
 import { cn, stripHtml } from "@/lib/utils";
 import { useActiveEditorContext } from "../active-editor-context";
 import { EditableImage } from "./image-field";
@@ -63,29 +64,6 @@ const FILL_BOX = "h-full w-full";
 // cascade wins, and ProseMirror's happens to. !important sidesteps that
 // race instead of depending on stylesheet load order.
 const SINGLE_LINE_TYPOGRAPHY = "overflow-hidden text-ellipsis !whitespace-nowrap";
-
-// Stable no-op subscribe for the `useIsClient` external store below — there
-// is nothing to subscribe to (the client/server distinction never changes
-// after mount), it only needs to exist so useSyncExternalStore has a
-// subscribe function with a consistent identity across renders.
-function subscribeNever() {
-  return () => {};
-}
-
-// The React-documented way to gate a render to "client only, after
-// hydration" without the extra setState-in-effect anti-pattern (and its
-// associated lint warning) that the equivalent `useState(false) +
-// useEffect(() => setMounted(true), [])` pattern produces. The server
-// snapshot is always `false`; the client snapshot is always `true` — so the
-// first client render (the one hydration reconciles against) still matches
-// the server's `false`, and a real client render only happens after.
-function useIsClient() {
-  return useSyncExternalStore(
-    subscribeNever,
-    () => true,
-    () => false,
-  );
-}
 
 type PositionableField = "title" | "subtitle" | "body" | "body2";
 

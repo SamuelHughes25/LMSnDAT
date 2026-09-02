@@ -24,9 +24,19 @@ import { SlideTypeIcon } from "./slide-type-icon";
 // slide-type-icon.tsx and course-types.ts already follow. Structured as
 // named groups (not one flat list) so a future buildable type can slot into
 // an existing group as a one-line addition, no rewrite.
+// "Interactive" (accordion, flashcards, hotspot_image) is kept separate
+// from "Assessment" (multiple_choice, missing_word, match_pairs,
+// sequencing) since the two are genuinely different in kind: everything in
+// "Assessment" has a real correct answer and reports a score;
+// "Interactive" types are self-paced reveal/study content with no
+// correctness concept, reported as completion only (see
+// slide-interaction.ts's doc comment). sequencing joins "Assessment" — it
+// IS scored (fraction of items in the correct final position), same as the
+// other three there.
 const GROUPS: { label: string; types: SlideType[] }[] = [
   { label: "Content", types: ["content"] },
-  { label: "Assessment", types: ["multiple_choice", "missing_word", "match_pairs"] },
+  { label: "Assessment", types: ["multiple_choice", "missing_word", "match_pairs", "sequencing"] },
+  { label: "Interactive", types: ["accordion", "flashcards", "hotspot_image"] },
 ];
 
 export function AddSlideMenu({ onSelect }: { onSelect: (type: SlideType) => void }) {

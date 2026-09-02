@@ -133,6 +133,105 @@ class SlideSerializer(serializers.ModelSerializer):
                             {'config': 'each pair must have "keyword" and "definition" strings.'}
                         )
 
+        elif slide_type == SlideType.ACCORDION:
+            # Same lenient/progressive-authoring reasoning as MATCH_PAIRS
+            # above: sections are added and typed into one at a time, so
+            # only structural validity and the hard cap are enforced here,
+            # never a minimum section count.
+            sections = config.get('sections')
+            if sections is not None and not isinstance(sections, list):
+                raise serializers.ValidationError({'config': '"sections" must be a list.'})
+            if sections:
+                if len(sections) > 8:
+                    raise serializers.ValidationError(
+                        {'config': 'accordion slides allow at most 8 sections.'}
+                    )
+                for section in sections:
+                    if not isinstance(section, dict):
+                        raise serializers.ValidationError({'config': 'each section must be an object.'})
+                    title = section.get('title')
+                    body = section.get('body')
+                    if not isinstance(title, str) or not isinstance(body, str):
+                        raise serializers.ValidationError(
+                            {'config': 'each section must have "title" and "body" strings.'}
+                        )
+
+        elif slide_type == SlideType.FLASHCARDS:
+            # Same lenient/progressive-authoring reasoning as MATCH_PAIRS.
+            cards = config.get('cards')
+            if cards is not None and not isinstance(cards, list):
+                raise serializers.ValidationError({'config': '"cards" must be a list.'})
+            if cards:
+                if len(cards) > 20:
+                    raise serializers.ValidationError(
+                        {'config': 'flashcards slides allow at most 20 cards.'}
+                    )
+                for card in cards:
+                    if not isinstance(card, dict):
+                        raise serializers.ValidationError({'config': 'each card must be an object.'})
+                    front = card.get('front')
+                    back = card.get('back')
+                    if not isinstance(front, str) or not isinstance(back, str):
+                        raise serializers.ValidationError(
+                            {'config': 'each card must have "front" and "back" strings.'}
+                        )
+
+        elif slide_type == SlideType.SEQUENCING:
+            # Same lenient/progressive-authoring reasoning as MATCH_PAIRS.
+            # The array's authored order IS the correct order — there is no
+            # separate "correct index" field to validate.
+            instructions = config.get('instructions')
+            items = config.get('sequence_items')
+            if instructions is not None and not isinstance(instructions, str):
+                raise serializers.ValidationError({'config': '"instructions" must be a string.'})
+            if items is not None and not isinstance(items, list):
+                raise serializers.ValidationError({'config': '"sequence_items" must be a list.'})
+            if items:
+                if len(items) > 10:
+                    raise serializers.ValidationError(
+                        {'config': 'sequencing slides allow at most 10 items.'}
+                    )
+                for item in items:
+                    if not isinstance(item, dict):
+                        raise serializers.ValidationError({'config': 'each item must be an object.'})
+                    if not isinstance(item.get('text'), str):
+                        raise serializers.ValidationError(
+                            {'config': 'each item must have a "text" string.'}
+                        )
+
+        elif slide_type == SlideType.HOTSPOT_IMAGE:
+            # Same lenient/progressive-authoring reasoning as MATCH_PAIRS —
+            # a hotspot can exist "placed but not yet labeled" mid-authoring,
+            # so an empty "label" is valid, not rejected.
+            image_url = config.get('hotspot_image_url')
+            hotspots = config.get('hotspots')
+            if image_url is not None and not isinstance(image_url, str):
+                raise serializers.ValidationError({'config': '"hotspot_image_url" must be a string or null.'})
+            if hotspots is not None and not isinstance(hotspots, list):
+                raise serializers.ValidationError({'config': '"hotspots" must be a list.'})
+            if hotspots:
+                if len(hotspots) > 10:
+                    raise serializers.ValidationError(
+                        {'config': 'hotspot_image slides allow at most 10 hotspots.'}
+                    )
+                for hotspot in hotspots:
+                    if not isinstance(hotspot, dict):
+                        raise serializers.ValidationError({'config': 'each hotspot must be an object.'})
+                    x_pct = hotspot.get('xPct')
+                    y_pct = hotspot.get('yPct')
+                    if (
+                        not isinstance(x_pct, (int, float)) or isinstance(x_pct, bool)
+                        or not isinstance(y_pct, (int, float)) or isinstance(y_pct, bool)
+                        or not (0 <= x_pct <= 100) or not (0 <= y_pct <= 100)
+                    ):
+                        raise serializers.ValidationError(
+                            {'config': 'each hotspot must have numeric "xPct"/"yPct" between 0 and 100.'}
+                        )
+                    if not isinstance(hotspot.get('label'), str):
+                        raise serializers.ValidationError(
+                            {'config': 'each hotspot must have a "label" string.'}
+                        )
+
         return attrs
 
 

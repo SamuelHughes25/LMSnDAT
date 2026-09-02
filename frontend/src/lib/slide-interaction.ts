@@ -13,12 +13,18 @@ export type SlideInteractionResult = {
   isCorrect: boolean;
   // 0-1, fraction correct — always 0 or 1 for multiple_choice (single
   // answer, no partial credit; those literal values still satisfy this
-  // wider type). missing_word reports a genuine fraction — e.g. 2 of 3
-  // blanks correct. match_pairs always reports 1 once reported at all (see
+  // wider type). missing_word and sequencing report a genuine fraction —
+  // e.g. 2 of 3 blanks correct, or 4 of 5 items in the right final
+  // position. match_pairs always reports 1 once reported at all (see
   // match-pairs-slide-face.tsx: mismatches bounce back for another try
   // rather than being scored as wrong, so "reported" already means
   // "completed" for this type — there is no partial-credit final state to
-  // represent).
+  // represent). accordion/flashcards/hotspot_image have no notion of a
+  // "correct answer" at all — they're self-paced reveal/study content, not
+  // assessments — so all three always report `score: 1, isCorrect: true`
+  // the moment every section/card/hotspot has been viewed at least once;
+  // "reported" there means "completed," the same way it means "completed"
+  // for match_pairs, just without match_pairs' retry-attempt concept.
   score: number;
   answeredAt: string; // ISO timestamp
   detail: unknown; // type-specific raw answer payload, for future review/debugging

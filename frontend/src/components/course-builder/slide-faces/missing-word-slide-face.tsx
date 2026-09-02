@@ -17,6 +17,7 @@ import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { MissingWordBlank, Slide } from "@/lib/course-types";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
+import { useIsClient } from "@/lib/use-is-client";
 import { cn } from "@/lib/utils";
 import type { SlideFaceProps } from "./index";
 
@@ -235,11 +236,28 @@ function MissingWordPresent({
   const [placement, setPlacement] = useState<Placement>(() =>
     Object.fromEntries(blanks.map((b) => [b.id, null])),
   );
-  // Shuffled once via this lazy initializer (mount time), and explicitly
-  // re-shuffled on "try again" below — never recomputed inline in the
-  // render body, which would jump the pool around on every unrelated
-  // re-render.
-  const [scrambledIds, setScrambledIds] = useState<string[]>(() => shuffle(blanks.map((b) => b.id)));
+  // NOT shuffled directly in the useState lazy initializer: confirmed via a
+  // real browser that doing so throws a hydration mismatch ("Hydration
+  // failed because the server rendered text didn't match the client") —
+  // Math.random() inside that initializer runs once during this
+  // "use client" component's server render (Next.js still SSRs the initial
+  // HTML for client components) and once again during the client's own
+  // first render, producing two different orderings React's hydration
+  // reconciliation can't square. Instead, the initial state is the plain
+  // authored order (deterministic, identical on server and client), and the
+  // real shuffle is applied once isClient flips true — see useIsClient's
+  // own comment for why that's the point at which a client-only render is
+  // guaranteed to no longer be compared against the server's output.
+  // hasShuffled guards this from re-firing every render; "try again" below
+  // re-shuffles explicitly via the same setScrambledIds, safely, since a
+  // button click can only ever happen client-side.
+  const isClient = useIsClient();
+  const [scrambledIds, setScrambledIds] = useState<string[]>(() => blanks.map((b) => b.id));
+  const [hasShuffled, setHasShuffled] = useState(false);
+  if (isClient && !hasShuffled) {
+    setHasShuffled(true);
+    setScrambledIds(shuffle(blanks.map((b) => b.id)));
+  }
   const [submitted, setSubmitted] = useState(false);
   const [promptMessage, setPromptMessage] = useState<string | null>(null);
 

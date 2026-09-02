@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { MatchPair, Slide } from "@/lib/course-types";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
+import { useIsClient } from "@/lib/use-is-client";
 import { cn } from "@/lib/utils";
 import type { SlideFaceProps } from "./index";
 
@@ -182,10 +183,28 @@ function MatchPairsPresent({
 }) {
   // Two SEPARATE shuffles (not sharing an order) — this is what makes it a
   // real matching puzzle rather than a matching-to-fixed-order task, per
-  // the plan. Shuffled once via lazy initializer at mount time; deliberately
-  // not re-shuffled on every render (which would jump the columns around).
-  const [keywordOrder] = useState<string[]>(() => shuffle(pairs.map((p) => p.id)));
-  const [definitionOrder] = useState<string[]>(() => shuffle(pairs.map((p) => p.id)));
+  // the plan. NOT shuffled directly in the useState lazy initializer:
+  // confirmed via a real browser that doing so throws a hydration mismatch
+  // ("Hydration failed because the server rendered text didn't match the
+  // client") — Math.random() inside that initializer runs once during this
+  // "use client" component's server render (Next.js still SSRs the initial
+  // HTML for client components) and once again during the client's own
+  // first render, producing two different orderings React's hydration
+  // reconciliation can't square. Instead, the initial state is the plain
+  // authored order (deterministic, identical on server and client), and
+  // the real shuffle is applied once isClient flips true — see
+  // useIsClient's own comment for why that's the point at which a
+  // client-only render is guaranteed to no longer be compared against the
+  // server's output. hasShuffled guards this from re-firing every render.
+  const isClient = useIsClient();
+  const [keywordOrder, setKeywordOrder] = useState<string[]>(() => pairs.map((p) => p.id));
+  const [definitionOrder, setDefinitionOrder] = useState<string[]>(() => pairs.map((p) => p.id));
+  const [hasShuffled, setHasShuffled] = useState(false);
+  if (isClient && !hasShuffled) {
+    setHasShuffled(true);
+    setKeywordOrder(shuffle(pairs.map((p) => p.id)));
+    setDefinitionOrder(shuffle(pairs.map((p) => p.id)));
+  }
 
   const [selectedKeywordId, setSelectedKeywordId] = useState<string | null>(null);
   const [matchedIds, setMatchedIds] = useState<Set<string>>(new Set());

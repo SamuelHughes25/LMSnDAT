@@ -2,10 +2,14 @@ import type { ComponentType } from "react";
 
 import type { Slide, SlideConfig, SlideType } from "@/lib/course-types";
 import type { SlideInteractionResult } from "@/lib/slide-interaction";
+import { AccordionSlideFace } from "./accordion-slide-face";
 import { ContentSlideFace } from "./content-slide-face";
+import { FlashcardsSlideFace } from "./flashcards-slide-face";
+import { HotspotImageSlideFace } from "./hotspot-image-slide-face";
 import { MatchPairsSlideFace } from "./match-pairs-slide-face";
 import { MissingWordSlideFace } from "./missing-word-slide-face";
 import { MultipleChoiceSlideFace } from "./multiple-choice-slide-face";
+import { SequencingSlideFace } from "./sequencing-slide-face";
 
 // Shared prop contract for every slide-type "face" component — the same
 // JSX renders the slide at three scales/interactivity levels (thumbnail,
@@ -42,11 +46,15 @@ export type SlideFaceProps = {
   courseVersionId?: string;
 };
 
-// "content", "multiple_choice", "missing_word", and "match_pairs" are all
-// buildable now (Stage 4 completes the three interactive types).
+// "content", "multiple_choice", "missing_word", "match_pairs", "accordion",
+// "flashcards", "sequencing", and "hotspot_image" are all buildable now.
 export const SLIDE_TYPE_FACES: Record<SlideType, ComponentType<SlideFaceProps>> = {
   content: ContentSlideFace,
   multiple_choice: MultipleChoiceSlideFace,
   missing_word: MissingWordSlideFace,
   match_pairs: MatchPairsSlideFace,
+  accordion: AccordionSlideFace,
+  flashcards: FlashcardsSlideFace,
+  sequencing: SequencingSlideFace,
+  hotspot_image: HotspotImageSlideFace,
 };

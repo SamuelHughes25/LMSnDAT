@@ -4,12 +4,21 @@
 // templates/questions domain) so the two authoring domains stay
 // independently legible.
 
-// "content", "multiple_choice", "missing_word", and "match_pairs" are
-// buildable so far (Stage 4). Typed as a string union (not a single string
-// literal alias) so later stages can widen it to also include "categorize" |
-// "survey_rating" | "number_slider" | "game_rapid_fire" without touching
-// call sites — mirrors backend/apps/courses/constants.py's SlideType enum.
-export type SlideType = "content" | "multiple_choice" | "missing_word" | "match_pairs";
+// "content", "multiple_choice", "missing_word", "match_pairs", "accordion",
+// "flashcards", "sequencing", and "hotspot_image" are buildable so far.
+// Typed as a string union (not a single string literal alias) so later
+// stages can widen it to also include "categorize" | "survey_rating" |
+// "number_slider" | "game_rapid_fire" without touching call sites — mirrors
+// backend/apps/courses/constants.py's SlideType enum.
+export type SlideType =
+  | "content"
+  | "multiple_choice"
+  | "missing_word"
+  | "match_pairs"
+  | "accordion"
+  | "flashcards"
+  | "sequencing"
+  | "hotspot_image";
 
 export type CourseVersionStatus = "draft" | "published" | "archived";
 
@@ -90,6 +99,56 @@ export type MatchPair = {
   id: string;
   keyword: string;
   definition: string;
+};
+
+// A single accordion section. `body` is deliberately plain text (rendered
+// with `white-space: pre-wrap`, never HTML) — not the same rich-text
+// treatment as content-slide-face.tsx's `body`. RichTextBody there is
+// tightly coupled to SlideTextToolbar's focus-follows-selection wiring and
+// to PositionableBox, not reusable per-row as-is, and every other
+// structured-list field in this app (multiple_choice options, match_pairs
+// keyword/definition, table cells) is plain for the same reason: avoiding a
+// grid of per-item TipTap instances. A real trade-off for content as long
+// as a 5-step process description, not an oversight — manual line breaks
+// plus typed "1."/"2." numbering read fine with pre-wrap.
+export type AccordionSection = {
+  id: string;
+  title: string;
+  body: string;
+};
+
+// A single flashcard. Plain text both sides, same "avoid a grid of TipTap
+// instances" reasoning as AccordionSection's `body` above.
+export type FlashcardItem = {
+  id: string;
+  front: string;
+  back: string;
+};
+
+// A single sequencing item. There is no separate "correct index" field —
+// the AUTHORED ORDER of config.sequence_items IS the correct order, the
+// same "the shape itself is the answer key" idea as MissingWordBlank's
+// offsets or MatchPair's shared id. Present-mode shuffles a copy of these
+// ids for display and scores by comparing the learner's final order back
+// against this array's original order.
+export type SequencingItem = {
+  id: string;
+  text: string;
+};
+
+// A single hotspot marker on a hotspot_image slide. xPct/yPct are
+// percentages of the image's own rendered box (0-100), following the same
+// percentage-of-container convention as BoxTransform/imageBoxStyle
+// elsewhere in this file — but note this is NOT a BoxTransform: a hotspot
+// is a single point, not a resizable box, so there's no width/height here.
+// `label` is allowed to be empty — "placed but not yet labeled" is a valid
+// mid-authoring state (the author places the pin, then types the label).
+export type HotspotMarker = {
+  id: string;
+  xPct: number;
+  yPct: number;
+  label: string;
+  description?: string;
 };
 
 // A "title-table" layout's structured table. Plain strings only, both for
@@ -216,8 +275,34 @@ export type SlideConfig = {
   // Optional prompt shown above the two columns in "present"/"static" modes
   // (e.g. "Match each term to its definition.") — blank is fine, same
   // optional-with-no-fallback-copy treatment as feedback_incorrect above.
+  // Also reused by "sequencing" below for the same purpose (an optional
+  // prompt line above its list) — the two types never coexist on one
+  // slide, so sharing the field name is safe and avoids a near-duplicate.
   instructions?: string;
   pairs?: MatchPair[];
+  // accordion
+  sections?: AccordionSection[];
+  // flashcards
+  cards?: FlashcardItem[];
+  // sequencing
+  // Deliberately not named "items" — backend/apps/courses/constants.py's
+  // reserved-but-unbuilt "categorize" slide_type already uses config.items
+  // for a different shape (a bucket-sort item list); this app's SlideConfig
+  // is one flat namespace shared across every slide_type, so a distinct
+  // name keeps the two unambiguous even though there's no runtime
+  // collision (a slide is only ever one slide_type at a time).
+  sequence_items?: SequencingItem[];
+  // hotspot_image
+  // A dedicated field, not a reuse of image_url/background_image_url —
+  // parallel to why those two are already kept separate from each other:
+  // different sizing/rendering story. Unlike image_url (a resizable,
+  // stretchable box via image-field.tsx) this image renders at a FIXED
+  // content region with object-fit:contain and is never resized/
+  // repositioned itself, since hotspot xPct/yPct must map onto a stable,
+  // undistorted image. null once removed, undefined if never set — same
+  // convention as image_url/background_image_url.
+  hotspot_image_url?: string | null;
+  hotspots?: HotspotMarker[];
   [key: string]: unknown;
 };
 
@@ -292,4 +377,8 @@ export const SLIDE_TYPE_LABELS: Record<SlideType, string> = {
   multiple_choice: "Multiple Choice",
   missing_word: "Missing Word",
   match_pairs: "Match the Pair",
+  accordion: "Dropdown / Accordion",
+  flashcards: "Flashcards",
+  sequencing: "Sequencing",
+  hotspot_image: "Hotspot Image",
 };
