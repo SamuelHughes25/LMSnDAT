@@ -6,12 +6,38 @@ import type { BoxTransform } from "@/lib/course-types";
 import { cn } from "@/lib/utils";
 import { useActiveEditorContext } from "../active-editor-context";
 import { useSlideSelection } from "../slide-selection-context";
-import { HANDLES, type HandleDir, clampPositionPct, clampSizePct } from "./image-shared";
+import { HANDLES, type HandleDir, clampPositionPct } from "./image-shared";
 import type { SlideFaceProps } from "./index";
 
 // Width of the invisible "grab to move" band just inside the box's own
 // edges — see the perimeter strips below.
 const MOVE_BAND_PX = 10;
+
+// Text boxes' OWN size clamp — deliberately NOT image-shared.tsx's
+// clampSizePct (whose 20% floor is tuned for images, which default to
+// 100% size). A title's natural single-line height is only ~7% of the
+// slide, well BELOW that 20% floor — confirmed via a real browser that
+// grabbing any resize handle with a vertical component (a corner, or a
+// pure N/S edge) instantly clamped the height UP to 20% the moment the
+// drag began, before the pointer had even moved, since 20% floor > the
+// box's actual ~7% starting height. Combined with the opposite-edge
+// anchor math (`yPct = bottomAnchor - heightPct`), that sudden +13-point
+// height jump pushed the box's top edge to a NEGATIVE yPct — off the top
+// of the canvas, clipped there — and because the floor is a floor, no
+// further drag could ever bring it back down: "jumps out of place the
+// instant you resize it, and can't be resized back down" was this exact
+// mechanism, not a text-wrapping bug (SINGLE_LINE_TYPOGRAPHY in
+// content-slide-face.tsx was never actually broken). 4% (~22px on this
+// app's fixed 540px-tall canvas) is comfortably below any single line's
+// natural height at any of this face's font sizes, so it only ever
+// stops a box from being shrunk to literally-invisible, never forces an
+// unwanted jump on a normal-sized resize.
+const TEXT_MIN_SIZE_PCT = 4;
+const TEXT_MAX_SIZE_PCT = 300;
+
+function clampTextSizePct(v: number): number {
+  return Math.min(TEXT_MAX_SIZE_PCT, Math.max(TEXT_MIN_SIZE_PCT, v));
+}
 
 // (xPct, yPct) here is the box's TOP-LEFT corner, not its center —
 // deliberately different from image-shared.tsx's imageBoxStyle (which
@@ -269,17 +295,17 @@ export function PositionableBox({
       let { xPct, yPct, widthPct, heightPct } = start;
 
       if (dir.includes("e")) {
-        widthPct = clampSizePct(start.widthPct + dxPct);
+        widthPct = clampTextSizePct(start.widthPct + dxPct);
       }
       if (dir.includes("w")) {
-        widthPct = clampSizePct(start.widthPct - dxPct);
+        widthPct = clampTextSizePct(start.widthPct - dxPct);
         xPct = rightAnchor - widthPct;
       }
       if (dir.includes("s")) {
-        heightPct = clampSizePct(start.heightPct + dyPct);
+        heightPct = clampTextSizePct(start.heightPct + dyPct);
       }
       if (dir.includes("n")) {
-        heightPct = clampSizePct(start.heightPct - dyPct);
+        heightPct = clampTextSizePct(start.heightPct - dyPct);
         yPct = bottomAnchor - heightPct;
       }
 
@@ -312,21 +338,57 @@ export function PositionableBox({
 
   const effective = live ?? baseline;
 
+  // Whether this box renders absolutely-positioned (topLeftBoxStyle) at
+  // all — deliberately NOT just `!!transform`. `transform` only reflects
+  // the last COMMITTED (saved-to-config) position; gating render on it
+  // alone meant a box's very FIRST drag/resize had nowhere to show its
+  // live in-progress position, since `live` was updating every pointermove
+  // but the box kept rendering at its old flex position throughout the
+  // whole gesture (transform stayed undefined until pointerup) — then
+  // visually snapped straight to the final spot the instant the drag
+  // ended. Confirmed via a real browser: only the FIRST drag ever did
+  // this; every drag after that felt live, because by then `transform`
+  // was already truthy from the start. Gating on `transform || live`
+  // instead means the very first drag also renders from `live` (itself
+  // seeded from the same measured baseline `transform` would have used),
+  // so it feels identical to every drag after it.
+  const isPositioned = !!(transform || live);
+
   return (
     <div
       ref={wrapperRef}
       onFocus={handleFocus}
       onBlur={handleBlur}
-      // z-10 once transformed: a dragged box escapes flex flow and can end
-      // up visually overlapping an untransformed sibling that's still in
-      // its normal flex position (e.g. drag the title down into the space
-      // body normally occupies). Neither had an explicit z-index before
-      // this, so they stacked by DOM order — title renders before body in
-      // the JSX, so body (painted later) silently covered the just-moved
-      // title, making it unclickable. Fixed by giving a transformed box
-      // z-10 so it's always on top of anything untouched.
-      className={cn("relative", !transform && flexClassName, transform && "absolute z-10")}
-      style={transform && effective ? topLeftBoxStyle(effective.xPct, effective.yPct, effective.widthPct, effective.heightPct) : undefined}
+      // Transformed boxes escape flex flow and can visually overlap an
+      // untransformed sibling still in its normal flex position (e.g. drag
+      // the title down into the space body normally occupies) — z-10 (vs.
+      // an untransformed sibling's implicit z-auto) keeps a transformed box
+      // on top of anything untouched, so it's never silently buried by a
+      // later-rendered-but-still-static sibling.
+      //
+      // The currently SELECTED box additionally jumps to z-30, above every
+      // other transformed-but-unselected box (still z-10) — otherwise,
+      // whichever box happens to render later in the JSX (body always
+      // after title) permanently wins any visual overlap regardless of
+      // which one the user is actually trying to work with, burying that
+      // box's own perimeter band and resize handles with no way to grab
+      // them. Selecting a box now visibly brings it to the front, the same
+      // way clicking an object in front-to-back-ordered design tools
+      // (PowerPoint, Figma, etc.) conventionally surfaces it. This doesn't
+      // help selecting a box that's 100% fully covered with no exposed
+      // pixel to click at all — there's no click target left to grab in
+      // that case, an inherent limit of pointer-based selection rather
+      // than something this z-index change can fix — but it's enough for
+      // the much more common partial-overlap case, since z-30 applies to
+      // the box's ENTIRE bounds (including any portion that was previously
+      // hidden) the moment any exposed sliver of it is clicked.
+      className={cn(
+        "relative",
+        !isPositioned && flexClassName,
+        isPositioned && "absolute",
+        isPositioned && (isSelected ? "z-30" : "z-10"),
+      )}
+      style={isPositioned && effective ? topLeftBoxStyle(effective.xPct, effective.yPct, effective.widthPct, effective.heightPct) : undefined}
     >
       {/* overflow-hidden lives HERE, on the inner content wrapper, not on
           the outer positioned box above — it used to sit on the outer box,
