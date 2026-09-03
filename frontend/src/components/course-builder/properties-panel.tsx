@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { SLIDE_TYPE_LABELS } from "@/lib/course-types";
+import { DEFAULT_SLIDE_TITLE, SLIDE_TYPE_LABELS } from "@/lib/course-types";
 import type { ContentSlideLayout, Lesson, Slide, SlideConfig } from "@/lib/course-types";
 import { cn, stripHtml } from "@/lib/utils";
 import { LessonProperties } from "./lesson-properties";
@@ -102,9 +102,20 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
 // already uses to tell "genuinely empty" apart from TipTap's `<p></p>`
 // round-trip of a field that was typed into and then fully cleared — same
 // reasoning applies here: a config.body of `"<p></p>"` is not content.
+//
+// slide.title is checked against DEFAULT_SLIDE_TITLE, not just against
+// "" — every slide is created with a real, non-empty title ("New slide",
+// see app/actions/courses.ts's createSlide), so the plain hasText() check
+// alone treated an untouched, freshly-created slide as already having
+// content. Confirmed via a real browser: switching a brand-new slide's
+// layout the very first time always warned about losing content that was
+// never actually authored, purely because of this untouched default —
+// and only the first time, since applying a switch resets the title to
+// "" (see applyLayoutChange below), at which point the plain empty-string
+// check alone starts working correctly for every switch after that.
 function hasSlideContent(slide: Slide): boolean {
   const hasText = (v: string | undefined) => !!v && stripHtml(v).trim().length > 0;
-  if (hasText(slide.title)) return true;
+  if (slide.title !== DEFAULT_SLIDE_TITLE && hasText(slide.title)) return true;
   if (hasText(slide.config.subtitle)) return true;
   if (hasText(slide.config.body)) return true;
   if (hasText(slide.config.body2)) return true;
@@ -139,13 +150,19 @@ function SlideProperties({
   // (not just box_transforms, which the picker always cleared even before
   // this confirmation existed) and applies the new layout, so the slide
   // ends up looking exactly like a freshly-added slide in that layout — "an
-  // empty template," per the request. image_url is set to `null` (removed)
-  // rather than left `undefined`, matching how EditableImage's own Remove
-  // button clears it — image_width_pct/height_pct are left as `undefined`
-  // rather than a literal removed marker, same as an image that was simply
-  // never resized.
+  // empty template," per the request. Title resets to DEFAULT_SLIDE_TITLE,
+  // not "" — a truly fresh slide (app/actions/courses.ts's createSlide)
+  // starts with that same literal title, not an empty one, so resetting to
+  // "" here would leave a wiped slide looking subtly different from (and
+  // triggering the layout picker's own hasSlideContent check differently
+  // than) a genuinely new one — the exact inconsistency that surfaced as a
+  // false "you'll lose content" warning the first time a brand-new slide's
+  // layout was switched. image_url is set to `null` (removed) rather than
+  // left `undefined`, matching how EditableImage's own Remove button clears
+  // it — image_width_pct/height_pct are left as `undefined` rather than a
+  // literal removed marker, same as an image that was simply never resized.
   function applyLayoutChange(layout: ContentSlideLayout) {
-    onTitleChange("");
+    onTitleChange(DEFAULT_SLIDE_TITLE);
     onConfigChange({
       layout,
       box_transforms: undefined,

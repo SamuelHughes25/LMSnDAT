@@ -4,6 +4,20 @@
 // templates/questions domain) so the two authoring domains stay
 // independently legible.
 
+// The literal title app/actions/courses.ts's createSlide gives every new
+// slide (a real, non-empty string — not "" — so a slide has *something*
+// to display in the rail before the author ever types anything). Exported
+// so any "has this slide actually been authored yet?" check (see
+// properties-panel.tsx's hasSlideContent) can treat this exact default the
+// same as truly empty, rather than as content the author entered —
+// confirmed via a real browser that without this, switching a
+// freshly-created slide's layout ONCE ALWAYS warned about losing content
+// that was never really there, purely because the untouched default title
+// itself counted as "content." Kept as one shared constant, not two
+// independently-typed "New slide" string literals, so the creation side
+// and the detection side can never silently drift apart.
+export const DEFAULT_SLIDE_TITLE = "New slide";
+
 // "content", "multiple_choice", "missing_word", "match_pairs", "accordion",
 // "flashcards", "sequencing", and "hotspot_image" are buildable so far.
 // Typed as a string union (not a single string literal alias) so later

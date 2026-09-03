@@ -16,6 +16,7 @@ import { ChevronDown, ChevronRight, GripVertical, Plus, Trash2 } from "lucide-re
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Lesson, SlideType } from "@/lib/course-types";
+import { restrictToParentElement, restrictToVerticalAxis } from "@/lib/dnd-modifiers";
 import { cn } from "@/lib/utils";
 import { AddSlideMenu } from "./add-slide-menu";
 import { SlideThumbnail } from "./slide-thumbnail";
@@ -179,7 +180,23 @@ function LessonSection({
 
       {expanded && (
         <div className="space-y-2 border-t border-border p-2">
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onSlideDragEnd}>
+          {/* modifiers keep a dragged slide's own visual position confined
+              to this lesson's own slide-list div (dnd-kit's
+              containerNodeRect — the dragged item's own DOM parent, which
+              here is exactly the "flex flex-col gap-2" div two lines
+              below) and moving vertically only — without this, dragging a
+              slide let it visually follow the pointer anywhere on the
+              screen, well outside the lesson it belongs to, before
+              dropping back into place on release. Reordering itself
+              (onSlideDragEnd, driven by onDragEnd/collision detection) is
+              unaffected either way — these only constrain the drag's own
+              visual transform, not which slide ends up `over` on drop. */}
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={onSlideDragEnd}
+            modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+          >
             <SortableContext items={slides.map((s) => s.id)} strategy={verticalListSortingStrategy}>
               <div className="flex flex-col gap-2">
                 {slides.map((slide, index) => (

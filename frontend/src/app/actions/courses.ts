@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { djangoFetch } from "@/lib/django";
+import { DEFAULT_SLIDE_TITLE } from "@/lib/course-types";
 import type { Course, CourseAsset, CourseVersion, Lesson, Slide, SlideConfig, SlideType } from "@/lib/course-types";
 
 // --- Courses ---
@@ -113,7 +114,7 @@ export async function createSlide(lessonId: string, slideType: SlideType, order:
     body: JSON.stringify({
       lesson: lessonId,
       slide_type: slideType,
-      title: "New slide",
+      title: DEFAULT_SLIDE_TITLE,
       order,
       config: defaultSlideConfig(slideType),
     }),
