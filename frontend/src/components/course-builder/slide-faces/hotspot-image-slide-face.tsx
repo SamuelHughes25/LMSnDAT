@@ -437,6 +437,29 @@ function HotspotImagePresent({
   const [foundIds, setFoundIds] = useState<Set<string>>(new Set());
   const [openId, setOpenId] = useState<string | null>(null);
   const [reported, setReported] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // In an actual presentation, clicking a pin again (or a different pin)
+  // isn't the only realistic way someone tries to dismiss a popup — they
+  // click wherever, expecting it to go away. Mirrors the identical
+  // "click outside closes it" pattern already used for the editor's own
+  // hotspot panels and background-image-field.tsx's controls: closes
+  // whenever a pointerdown lands outside the currently-open panel itself.
+  // A click on a *different* pin still opens that one correctly — its own
+  // onClick (fired on pointerUP, after this listener's pointerDOWN) sets
+  // openId to the new id, overriding whatever this effect set moments
+  // earlier — so pin-to-pin clicking was never at risk of a race here.
+  useEffect(() => {
+    if (!openId) return;
+    function handlePointerDownOutside(e: PointerEvent) {
+      const panel = panelRef.current;
+      if (panel && e.target instanceof Node && !panel.contains(e.target)) {
+        setOpenId(null);
+      }
+    }
+    document.addEventListener("pointerdown", handlePointerDownOutside, true);
+    return () => document.removeEventListener("pointerdown", handlePointerDownOutside, true);
+  }, [openId]);
 
   // Reads foundIds directly from the closure and calls setFoundIds with a
   // plain computed value, rather than a functional updater — same shape as
@@ -492,6 +515,7 @@ function HotspotImagePresent({
           return (
             <div
               key={hotspot.id}
+              ref={panelRef}
               className="absolute z-20 w-56 rounded-lg border border-border bg-white p-3 shadow-lg"
               style={{ left: `${hotspot.xPct}%`, top: `${hotspot.yPct}%`, transform: "translate(-50%, 14px)" }}
             >

@@ -34,6 +34,25 @@ function shuffle<T>(items: T[]): T[] {
   return result;
 }
 
+// A plain Fisher-Yates shuffle CAN legitimately reproduce the original
+// order by chance — more likely the fewer items there are (a 2-item list
+// has a 1-in-2 chance every single time). For this type specifically, the
+// authored order IS the answer key, so a shuffle that happens to already
+// match it would hand the learner a solved puzzle before they've touched
+// anything — the opposite of the point. This re-rolls (bounded, so it can
+// never hang) until the result genuinely differs from the input, making
+// "the puzzle starts scrambled" a guarantee rather than just probable.
+function shuffleDiffering<T>(items: T[]): T[] {
+  if (items.length < 2) return [...items];
+  let result = shuffle(items);
+  let attempts = 0;
+  while (result.every((v, i) => v === items[i]) && attempts < 20) {
+    result = shuffle(items);
+    attempts += 1;
+  }
+  return result;
+}
+
 export function SequencingSlideFace({ slide, mode, onConfigChange, onInteraction }: SlideFaceProps) {
   const instructions = slide.config.instructions ?? "";
   const items = slide.config.sequence_items ?? [];
@@ -233,7 +252,7 @@ function SequencingPresent({
   const [hasShuffled, setHasShuffled] = useState(false);
   if (isClient && !hasShuffled) {
     setHasShuffled(true);
-    setOrderedIds(shuffle(items.map((it) => it.id)));
+    setOrderedIds(shuffleDiffering(items.map((it) => it.id)));
   }
   const [submitted, setSubmitted] = useState(false);
   const [score, setScore] = useState(0);
@@ -270,7 +289,7 @@ function SequencingPresent({
   }
 
   function handleTryAgain() {
-    setOrderedIds(shuffle(items.map((it) => it.id)));
+    setOrderedIds(shuffleDiffering(items.map((it) => it.id)));
     setSubmitted(false);
   }
 
@@ -294,7 +313,6 @@ function SequencingPresent({
                 <SequencingPresentRow
                   key={id}
                   id={id}
-                  index={index}
                   text={itemsById[id]?.text ?? ""}
                   submitted={submitted}
                   isCorrectPosition={originalIndexById[id] === index}
@@ -323,15 +341,21 @@ function SequencingPresent({
   );
 }
 
+// Deliberately no position-number badge (unlike SequencingEditorRow and
+// SequencingStatic below, both of which show one) — a number next to a
+// row here would read as "this IS step N," an implied claim of
+// correctness the row hasn't earned yet: the learner might be looking at
+// a still-scrambled arrangement, and even a purely positional "row 1 of
+// N" label is easy to misread as an answer key. Editor and static both
+// show items in the AUTHORED (already-correct) order, where a number
+// genuinely means something.
 function SequencingPresentRow({
   id,
-  index,
   text,
   submitted,
   isCorrectPosition,
 }: {
   id: string;
-  index: number;
   text: string;
   submitted: boolean;
   isCorrectPosition: boolean;
@@ -361,7 +385,6 @@ function SequencingPresentRow({
       >
         <GripVertical className="h-4 w-4" />
       </button>
-      <div className="w-6 shrink-0 text-center text-sm text-muted-foreground">{index + 1}</div>
       <div className="flex-1 text-base">{text || "—"}</div>
     </div>
   );

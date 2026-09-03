@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Plus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -213,10 +213,20 @@ function MultipleChoiceEditor({
 
 // Genuinely interactive learner-facing render (course-preview-viewer.tsx
 // today, a real learner player later). No correct-answer indicator is shown
-// before answering. A single attempt per view: once `selectedId` is set,
-// further clicks on other options are ignored (the buttons are also
-// `disabled`) — a simple single-attempt model, deliberately not building a
-// "try again" reset for a type that doesn't need one per the plan.
+// before answering. Picking the CORRECT option locks in immediately and
+// permanently (same as before). Picking a WRONG one is NOT permanent: it
+// flashes red for a moment — same "flash then bounce back" shape as
+// match-pairs-slide-face.tsx's flashMismatch — then automatically resets
+// so the learner can try again, rather than being stuck having permanently
+// "failed" the slide on a single wrong click. onInteraction only ever
+// fires once, for the eventual CORRECT selection — a wrong attempt isn't
+// a final answer here, so it isn't reported as one (same "a bounce-back
+// attempt doesn't count as the scored outcome" idea match_pairs already
+// uses for mismatches); how many wrong attempts happened along the way is
+// still included in the final report's `detail`, for a future analytics
+// pass, without this stage building any scoring around it.
+const INCORRECT_FLASH_MS = 1400;
+
 function MultipleChoicePresent({
   slide,
   question,
@@ -230,23 +240,48 @@ function MultipleChoicePresent({
   feedbackIncorrect: string;
   onInteraction: SlideFaceProps["onInteraction"];
 }) {
+  // Set once the CORRECT option is picked — permanent, unlike
+  // flashIncorrectId below.
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Briefly holds a WRONG option's id so it can flash red before both the
+  // flash and the selection itself reset — cleared by a timeout.
+  const [flashIncorrectId, setFlashIncorrectId] = useState<string | null>(null);
+  // Purely for the final report's `detail` payload, not for scoring (see
+  // the comment above) — a ref, not state: it doesn't drive any render, it
+  // only needs to be read once, at the moment the correct option finally
+  // gets picked.
+  const incorrectAttemptsRef = useRef(0);
+
+  // Clears the red flash (and the selection with it) ~1.4s after a wrong
+  // pick, giving the learner enough time to read the wrong-answer
+  // explanation (if one is set) before the options become clickable again.
+  useEffect(() => {
+    if (!flashIncorrectId) return;
+    const timer = setTimeout(() => {
+      setFlashIncorrectId(null);
+    }, INCORRECT_FLASH_MS);
+    return () => clearTimeout(timer);
+  }, [flashIncorrectId]);
 
   function handleSelect(option: MultipleChoiceOption) {
-    if (selectedId) return;
-    setSelectedId(option.id);
-    onInteraction?.({
-      slideId: slide.id,
-      slideType: slide.slide_type,
-      isCorrect: option.is_correct,
-      score: option.is_correct ? 1 : 0,
-      answeredAt: new Date().toISOString(),
-      detail: { selectedOptionId: option.id },
-    });
+    if (selectedId || flashIncorrectId) return;
+    if (option.is_correct) {
+      setSelectedId(option.id);
+      onInteraction?.({
+        slideId: slide.id,
+        slideType: slide.slide_type,
+        isCorrect: true,
+        score: 1,
+        answeredAt: new Date().toISOString(),
+        detail: { selectedOptionId: option.id, incorrectAttempts: incorrectAttemptsRef.current },
+      });
+    } else {
+      incorrectAttemptsRef.current += 1;
+      setFlashIncorrectId(option.id);
+    }
   }
 
-  const selectedOption = selectedId ? (options.find((o) => o.id === selectedId) ?? null) : null;
-  const showIncorrectFeedback = !!selectedOption && !selectedOption.is_correct && feedbackIncorrect.trim().length > 0;
+  const showIncorrectFeedback = !!flashIncorrectId && feedbackIncorrect.trim().length > 0;
 
   return (
     <div className="flex h-full w-full flex-col gap-6 px-16 py-12 text-foreground">
@@ -256,15 +291,15 @@ function MultipleChoicePresent({
 
       <div className="flex flex-1 flex-col justify-center gap-3">
         {options.map((option) => {
-          const isSelected = selectedId === option.id;
-          const revealState = isSelected ? (option.is_correct ? "correct" : "incorrect") : "neutral";
+          const revealState =
+            selectedId === option.id ? "correct" : flashIncorrectId === option.id ? "incorrect" : "neutral";
 
           return (
             <button
               key={option.id}
               type="button"
               onClick={() => handleSelect(option)}
-              disabled={!!selectedId}
+              disabled={!!selectedId || !!flashIncorrectId}
               className={cn(
                 "rounded-lg border-2 px-4 py-3 text-left text-lg transition-colors disabled:cursor-default",
                 revealState === "correct" && "border-green-600 bg-green-50 text-green-900",

@@ -281,7 +281,25 @@ function FlashcardsPresent({
               "absolute inset-0 flex items-center justify-center overflow-hidden rounded-xl border-2 border-primary/60 bg-white p-6 text-center font-semibold break-words shadow-md",
               cardFaceTextSizeClass(card.front),
             )}
-            style={{ backfaceVisibility: "hidden" }}
+            // `transform: rotateY(0deg)` is set EXPLICITLY here, not
+            // omitted — confirmed via a real browser that leaving it
+            // unset (relying on "no transform" being equivalent to an
+            // identity rotation) produced a real, one-directional bug:
+            // once flipped, the front face's text stayed visibly bleeding
+            // through the back face instead of being hidden, while the
+            // back face (which already had an explicit transform) hid
+            // correctly when unflipped. An element with no `transform` at
+            // all isn't treated identically to one with an explicit
+            // identity transform for backface-visibility purposes in at
+            // least some rendering paths — giving both faces the same
+            // "has its own explicit 3D transform" shape fixes it.
+            // WebkitBackfaceVisibility is the vendor-prefixed form Safari
+            // has historically needed for reliable 3D flips.
+            style={{
+              transform: "rotateY(0deg)",
+              backfaceVisibility: "hidden",
+              WebkitBackfaceVisibility: "hidden",
+            }}
           >
             {card.front || "—"}
           </div>
@@ -290,7 +308,11 @@ function FlashcardsPresent({
               "absolute inset-0 flex items-center justify-center overflow-hidden rounded-xl border-2 border-primary bg-primary/5 p-6 text-center font-semibold break-words shadow-md",
               cardFaceTextSizeClass(card.back),
             )}
-            style={{ backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}
+            style={{
+              transform: "rotateY(180deg)",
+              backfaceVisibility: "hidden",
+              WebkitBackfaceVisibility: "hidden",
+            }}
           >
             {card.back || "—"}
           </div>
