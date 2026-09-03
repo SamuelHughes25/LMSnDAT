@@ -25,6 +25,35 @@ function makeCardId(n: number) {
   return `card_${n}_${Date.now().toString(36)}`;
 }
 
+// Picks a smaller Tailwind text-size utility as a card face's text gets
+// longer, so a full sentence (or two) shrinks to actually fit the card's
+// fixed box instead of spilling past its edges — confirmed via a real
+// browser that a long front/back at a fixed text-2xl visibly overflowed
+// the card, unconstrained, since neither face div previously had
+// overflow-hidden either. A character-count lookup rather than a real
+// measure-and-shrink loop (the more precise but stateful/DOM-measuring
+// approach) — the card's box is a fixed, known size (see the h-56 w-96
+// wrapper below), so a deterministic size-per-length-bucket table is
+// simpler and needs no ResizeObserver/layout-effect machinery, at the cost
+// of being tuned to that fixed box rather than truly dynamic. Character
+// count is directly proportional to line count at a given font size for a
+// centered block of prose, so this is a reasonable proxy for "how many
+// lines will this actually wrap to." Tuned against the card's own content
+// area (384x224 box, p-6 padding → roughly 336x176 usable): each tier is
+// picked so its text still comfortably fits that area at that Tailwind
+// size. overflow-hidden + break-words on the face divs (below) is a hard
+// backstop for any text this heuristic still underestimates (e.g. one
+// pathologically long unbroken "word"), not the primary mechanism.
+function cardFaceTextSizeClass(text: string): string {
+  const len = text.length;
+  if (len <= 24) return "text-2xl";
+  if (len <= 50) return "text-xl";
+  if (len <= 90) return "text-lg";
+  if (len <= 150) return "text-base";
+  if (len <= 240) return "text-sm";
+  return "text-xs";
+}
+
 export function FlashcardsSlideFace({ slide, mode, onConfigChange, onInteraction }: SlideFaceProps) {
   const cards = slide.config.cards ?? [];
 
@@ -248,13 +277,19 @@ function FlashcardsPresent({
           aria-label="Click to flip the card"
         >
           <div
-            className="absolute inset-0 flex items-center justify-center rounded-xl border-2 border-primary/60 bg-white p-6 text-center text-2xl font-semibold shadow-md"
+            className={cn(
+              "absolute inset-0 flex items-center justify-center overflow-hidden rounded-xl border-2 border-primary/60 bg-white p-6 text-center font-semibold break-words shadow-md",
+              cardFaceTextSizeClass(card.front),
+            )}
             style={{ backfaceVisibility: "hidden" }}
           >
             {card.front || "—"}
           </div>
           <div
-            className="absolute inset-0 flex items-center justify-center rounded-xl border-2 border-primary bg-primary/5 p-6 text-center text-2xl font-semibold shadow-md"
+            className={cn(
+              "absolute inset-0 flex items-center justify-center overflow-hidden rounded-xl border-2 border-primary bg-primary/5 p-6 text-center font-semibold break-words shadow-md",
+              cardFaceTextSizeClass(card.back),
+            )}
             style={{ backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}
           >
             {card.back || "—"}
@@ -294,7 +329,8 @@ function FlashcardsStatic({ cards }: { cards: FlashcardItem[] }) {
         <>
           <div
             className={cn(
-              "flex h-40 w-72 items-center justify-center rounded-xl border-2 border-border bg-white p-4 text-center text-xl font-semibold shadow-sm",
+              "flex h-40 w-72 items-center justify-center overflow-hidden rounded-xl border-2 border-border bg-white p-4 text-center font-semibold break-words shadow-sm",
+              cardFaceTextSizeClass(cards[0].front),
             )}
           >
             {cards[0].front || "—"}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ImagePlus, Loader2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -116,13 +116,42 @@ function HotspotImageEditor({
     onConfigChange?.({ hotspots: next });
   }
 
+  // Closes any open hotspot's edit panel whenever a pointerdown lands
+  // outside the whole image container — clicking the properties panel, the
+  // hint text below the image, or anywhere else on the slide. Mirrors
+  // background-image-field.tsx's identical "click outside to deselect"
+  // pattern. Only active while a panel is actually open, so it costs
+  // nothing the rest of the time.
+  useEffect(() => {
+    if (!editingId) return;
+    function handlePointerDownOutside(e: PointerEvent) {
+      const container = containerRef.current;
+      if (container && e.target instanceof Node && !container.contains(e.target)) {
+        setEditingId(null);
+      }
+    }
+    document.addEventListener("pointerdown", handlePointerDownOutside, true);
+    return () => document.removeEventListener("pointerdown", handlePointerDownOutside, true);
+  }, [editingId]);
+
   // Placement only fires when the click target IS the container itself —
   // a click that bubbled up from a marker (the target is that marker's own
   // element, a descendant) is excluded automatically, no stopPropagation
   // needed anywhere.
+  //
+  // Whenever a panel is already open, this click's ONLY job is to close
+  // it — it deliberately does NOT also place a new hotspot at the same
+  // click. Without this split, clicking the image just to dismiss the
+  // panel (to see the image underneath it) always planted another marker
+  // in the same motion, with no way to close a panel without creating —
+  // and then having to immediately delete — an unwanted extra hotspot.
+  // Placement only resumes on a later click, once nothing is open.
   function handleContainerClick(e: React.MouseEvent<HTMLDivElement>) {
-    setEditingId(null);
     if (e.target !== e.currentTarget) return;
+    if (editingId) {
+      setEditingId(null);
+      return;
+    }
     if (!imageUrl || localHotspots.length >= MAX_HOTSPOTS) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const xPct = clampPositionPct(((e.clientX - rect.left) / rect.width) * 100);
@@ -170,7 +199,17 @@ function HotspotImageEditor({
         onClick={handleContainerClick}
         tabIndex={0}
         onPaste={handlePaste}
-        className="group relative min-h-0 flex-1 rounded-md bg-muted outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+        className={cn(
+          "group relative min-h-0 flex-1 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+          // Muted background only while there's no image yet — it's the
+          // visual affordance for "this is an empty dropzone." Once an
+          // image is set, the goal is "just the plain image showing with
+          // hotspots," not a grey card behind it — object-contain
+          // letterboxes a non-square image inside this box, and that
+          // letterboxed space should read as transparent (blending into
+          // the slide's own white canvas), not as a colored backdrop.
+          !imageUrl && "bg-muted",
+        )}
       >
         <input ref={inputRef} type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
 
@@ -434,7 +473,7 @@ function HotspotImagePresent({
 
   return (
     <div className="flex h-full w-full flex-col px-16 py-12 text-foreground">
-      <div className="relative min-h-0 flex-1 rounded-md bg-muted">
+      <div className="relative min-h-0 flex-1 rounded-md">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={imageUrl} alt="" className="h-full w-full rounded-md object-contain" />
         {hotspots.map((hotspot, index) => (
@@ -483,7 +522,7 @@ function HotspotImageStatic({ imageUrl, hotspots }: { imageUrl: string | null; h
 
   return (
     <div className="flex h-full w-full flex-col px-16 py-12 text-foreground">
-      <div className="relative h-full w-full rounded-md bg-muted">
+      <div className="relative h-full w-full rounded-md">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={imageUrl} alt="" className="h-full w-full rounded-md object-contain" />
         {hotspots.map((hotspot) => (
