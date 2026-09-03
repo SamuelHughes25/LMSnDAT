@@ -9,6 +9,7 @@ import DOMPurify from "dompurify";
 
 import type { BoxTransform, ContentSlideLayout } from "@/lib/course-types";
 import { FontSize } from "@/lib/tiptap-font-size";
+import { Color } from "@/lib/tiptap-text-color";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { useIsClient } from "@/lib/use-is-client";
 import { cn, stripHtml } from "@/lib/utils";
@@ -548,6 +549,7 @@ function RichTextBody({
       }),
       TextStyle,
       FontSize,
+      Color,
       Placeholder.configure({ placeholder: "Click to add text" }),
     ],
     editorProps: {
@@ -685,6 +687,7 @@ function useSingleLineSlideEditor({
       }),
       TextStyle,
       FontSize,
+      Color,
       Placeholder.configure({ placeholder }),
     ],
     editorProps: {

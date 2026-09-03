@@ -1,8 +1,15 @@
 "use client";
 
-import { useLayoutEffect, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useState, type CSSProperties } from "react";
 import { Bold, Italic, List, ListOrdered, Underline as UnderlineIcon } from "lucide-react";
 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useActiveEditorContext } from "./active-editor-context";
@@ -22,18 +29,42 @@ const GAP = 8;
 // the variable-width font-size Select, so this is intentionally generous.
 const ESTIMATED_SIZE = { width: 320, height: 44 };
 
-// "Normal" intentionally maps to *unsetting* the fontSize mark rather than
-// to an explicit `18px` value — the field's default body text is Tailwind's
-// `text-lg` (1.125rem = 18px at the default root size), so removing the
-// override is what actually makes picking "Normal" a true no-op: it falls
-// back to the same CSS the field always had, rather than baking a redundant
-// (if numerically identical) inline style into the stored HTML.
-const FONT_SIZE_PRESETS = [
-  { key: "small", label: "Small", value: "14px" },
-  { key: "normal", label: "Normal", value: null },
-  { key: "large", label: "Large", value: "24px" },
-  { key: "xl", label: "Extra Large", value: "32px" },
-] as const;
+// "Default" intentionally maps to *unsetting* the fontSize mark rather than
+// to an explicit px value — the field's default body text is Tailwind's
+// `text-lg` (1.125rem = 18px at the default root size, different again for
+// the title/subtitle fields' own larger classes), so removing the override
+// is what actually makes picking "Default" a true no-op: it falls back to
+// the same CSS the field always had, rather than baking a redundant (and,
+// for title/subtitle, actively wrong) inline style into the stored HTML.
+//
+// 1-34px in plain integer steps, per the request — every whole point size
+// in that range, not a curated handful of presets. `value` is a real CSS
+// px string (`setFontSize` takes a raw CSS value, same as the extension's
+// own example: `editor.commands.setFontSize('16px')`), so this list is
+// generated once, not hand-written 34 times.
+const FONT_SIZE_OPTIONS: { key: string; label: string; value: string | null }[] = [
+  { key: "default", label: "Default", value: null },
+  ...Array.from({ length: 34 }, (_, i) => {
+    const size = i + 1;
+    return { key: String(size), label: String(size), value: `${size}px` };
+  }),
+];
+
+// A small, fixed palette rather than nothing-but-the-native-picker — lets a
+// common choice (including "back to the field's own default color") be
+// applied in one click, while the native <input type="color"> swatch next
+// to it (see the toolbar JSX below) still covers any exact custom color.
+// "Default" here means the same thing it does for font size: unset the
+// mark's `color` attribute rather than writing an explicit (if visually
+// matching) black inline color.
+const TEXT_COLOR_PRESETS: { label: string; value: string | null }[] = [
+  { label: "Default", value: null },
+  { label: "Black", value: "#000000" },
+  { label: "White", value: "#ffffff" },
+  { label: "Red", value: "#dc2626" },
+  { label: "Green", value: "#16a34a" },
+  { label: "Blue", value: "#2563eb" },
+];
 
 // Every button here needs `onMouseDown={(e) => e.preventDefault()}` — a
 // well-known necessary pattern for any text-formatting toolbar. Without it,
@@ -98,6 +129,34 @@ export function SlideTextToolbar() {
   const { activeEditor, hasSelection, selectionRect, toolbarRef, toolbarInteractingRef } = useActiveEditorContext();
   const [size, setSize] = useState(ESTIMATED_SIZE);
 
+  // Forces a re-render on every editor transaction, not just this
+  // component's own state changing — without this, picking a font size or
+  // color updated the EDITOR correctly (confirmed via a real browser: the
+  // text visibly changed size/color immediately) but the toolbar's OWN
+  // displayed "current size"/"current color" stayed stuck on whatever they
+  // were before the change, since active-editor-context.tsx only re-fires
+  // its own state on "selectionUpdate" (the selection RANGE changing) —
+  // applying a mark to an already-selected range doesn't necessarily move
+  // that range at all, so that event never fires, and nothing else here
+  // was telling React this component needed to recompute
+  // `activeEditor.getAttributes(...)` fresh. Scoped to this component
+  // (not added to the shared context) since it's the only thing that reads
+  // live mark attributes on every render; "transaction" fires on every
+  // edit TipTap makes, which is more than strictly necessary but cheap for
+  // a toolbar this small and only ever subscribed to while it's mounted
+  // with a live activeEditor.
+  const [, forceUpdate] = useState(0);
+  useEffect(() => {
+    if (!activeEditor) return;
+    function handleTransaction() {
+      forceUpdate((v) => v + 1);
+    }
+    activeEditor.on("transaction", handleTransaction);
+    return () => {
+      activeEditor.off("transaction", handleTransaction);
+    };
+  }, [activeEditor]);
+
   // Hooks must run unconditionally before the early return below (Rules of
   // Hooks), so this measures on every render regardless of whether the
   // toolbar is currently visible — `toolbarRef.current` is simply null
@@ -133,15 +192,26 @@ export function SlideTextToolbar() {
   if (!activeEditor || !hasSelection) return null;
 
   const currentFontSize = (activeEditor.getAttributes("textStyle").fontSize as string | undefined) ?? null;
-  const currentPreset = FONT_SIZE_PRESETS.find((p) => p.value === currentFontSize) ?? FONT_SIZE_PRESETS[1];
+  const currentSizeOption = FONT_SIZE_OPTIONS.find((o) => o.value === currentFontSize) ?? FONT_SIZE_OPTIONS[0];
 
   function applyFontSize(key: string | null) {
-    const preset = FONT_SIZE_PRESETS.find((p) => p.key === key);
-    if (!preset || !activeEditor) return;
-    if (preset.value === null) {
+    const option = FONT_SIZE_OPTIONS.find((o) => o.key === key);
+    if (!option || !activeEditor) return;
+    if (option.value === null) {
       activeEditor.chain().focus().unsetFontSize().run();
     } else {
-      activeEditor.chain().focus().setFontSize(preset.value).run();
+      activeEditor.chain().focus().setFontSize(option.value).run();
+    }
+  }
+
+  const currentColor = (activeEditor.getAttributes("textStyle").color as string | undefined) ?? null;
+
+  function applyColor(color: string | null) {
+    if (!activeEditor) return;
+    if (color === null) {
+      activeEditor.chain().focus().unsetColor().run();
+    } else {
+      activeEditor.chain().focus().setColor(color).run();
     }
   }
 
@@ -214,7 +284,7 @@ export function SlideTextToolbar() {
       <div className="mx-1 h-5 w-px bg-border" />
 
       <Select
-        value={currentPreset.key}
+        value={currentSizeOption.key}
         onValueChange={applyFontSize}
         // Base UI's Select doesn't just focus its trigger when it opens —
         // it opens straight to a listbox item and focuses that directly,
@@ -228,7 +298,7 @@ export function SlideTextToolbar() {
         }}
       >
         <SelectTrigger
-          className="h-7 w-32"
+          className="h-7 w-20"
           // Same reasoning as ToolbarButton: mousedown on the trigger must
           // not be allowed to collapse the editor's selection before the
           // user has picked a size. Also flip the ref a tick earlier than
@@ -243,13 +313,90 @@ export function SlideTextToolbar() {
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {FONT_SIZE_PRESETS.map((preset) => (
-            <SelectItem key={preset.key} value={preset.key}>
-              {preset.label}
+          {FONT_SIZE_OPTIONS.map((option) => (
+            <SelectItem key={option.key} value={option.key}>
+              {option.label}
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
+
+      <div className="mx-1 h-5 w-px bg-border" />
+
+      <TextColorPicker currentColor={currentColor} onChange={applyColor} toolbarInteractingRef={toolbarInteractingRef} />
     </div>
+  );
+}
+
+// A preset swatch list (one click, matches the font-size Select's "pick
+// from a short list" feel) plus a native <input type="color"> for any
+// exact custom color — no custom color-picker UI to build/maintain, the
+// browser already has one. Kept as its own component (not inlined in
+// SlideTextToolbar) purely for readability; it shares no state with its
+// parent beyond the props passed in.
+function TextColorPicker({
+  currentColor,
+  onChange,
+  toolbarInteractingRef,
+}: {
+  currentColor: string | null;
+  onChange: (color: string | null) => void;
+  toolbarInteractingRef: React.RefObject<boolean>;
+}) {
+  return (
+    <DropdownMenu
+      // Same reasoning as the font-size Select's onOpenChange above — Base
+      // UI's dropdown menu items render in a portal outside this toolbar's
+      // own DOM node, so a plain containment check on blur can't see them.
+      onOpenChange={(open) => {
+        toolbarInteractingRef.current = open;
+      }}
+    >
+      <DropdownMenuTrigger
+        render={<button type="button" />}
+        aria-label="Text color"
+        title="Text color"
+        // Same reasoning as every other toolbar control: mousedown must
+        // not be allowed to collapse the editor's selection before the
+        // user has picked a color.
+        onMouseDown={(e) => {
+          e.preventDefault();
+          toolbarInteractingRef.current = true;
+        }}
+        className="flex h-7 w-7 shrink-0 flex-col items-center justify-center gap-0.5 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+      >
+        <span className="text-xs font-bold leading-none">A</span>
+        <span
+          className="h-1 w-4 rounded-sm border border-border/60"
+          style={{ backgroundColor: currentColor ?? "transparent" }}
+        />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        {TEXT_COLOR_PRESETS.map((preset) => (
+          <DropdownMenuItem key={preset.label} onClick={() => onChange(preset.value)}>
+            <span
+              className="h-3.5 w-3.5 shrink-0 rounded-full border border-border"
+              style={{ backgroundColor: preset.value ?? "transparent" }}
+            />
+            {preset.label}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator />
+        {/* The native picker, not a custom-built one — clicking the swatch
+            opens the browser/OS's own color picker; onChange fires live as
+            the user drags around it, same "apply immediately" feel as the
+            preset swatches above. */}
+        <label className="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-sm">
+          <input
+            type="color"
+            value={currentColor ?? "#000000"}
+            onChange={(e) => onChange(e.target.value)}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="h-5 w-5 shrink-0 cursor-pointer rounded border border-border p-0"
+          />
+          Custom…
+        </label>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
