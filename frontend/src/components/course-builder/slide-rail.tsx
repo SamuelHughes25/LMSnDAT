@@ -132,6 +132,9 @@ function LessonSection({
       className={cn("rounded-lg border-2 bg-card shadow-sm", isSelected ? "border-primary" : "border-border")}
     >
       <div className="flex items-center gap-1 p-2" role="button" tabIndex={0} onClick={onSelect} onKeyDown={(e) => {
+        // Guard against bubbling from the title Input below — see the
+        // identical fix (and full explanation) in question-row.tsx.
+        if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onSelect();

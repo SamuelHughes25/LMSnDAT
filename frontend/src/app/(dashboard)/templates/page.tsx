@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { DeleteTemplateButton } from "@/components/delete-template-button";
 import { NewTemplateDialog } from "@/components/new-template-dialog";
 import {
   Table,
@@ -28,6 +29,7 @@ export default async function TemplatesPage() {
               <TableHead>Name</TableHead>
               <TableHead>Description</TableHead>
               <TableHead>Created</TableHead>
+              <TableHead className="w-10" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -40,11 +42,14 @@ export default async function TemplatesPage() {
                 </TableCell>
                 <TableCell>{template.description || "—"}</TableCell>
                 <TableCell>{new Date(template.created_at).toLocaleDateString()}</TableCell>
+                <TableCell>
+                  <DeleteTemplateButton templateId={template.id} templateName={template.name} />
+                </TableCell>
               </TableRow>
             ))}
             {data.results.length === 0 && (
               <TableRow>
-                <TableCell colSpan={3} className="text-center text-muted-foreground">
+                <TableCell colSpan={4} className="text-center text-muted-foreground">
                   No templates yet.
                 </TableCell>
               </TableRow>

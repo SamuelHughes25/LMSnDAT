@@ -40,6 +40,11 @@ export function QuestionRow({
       tabIndex={0}
       onClick={onSelect}
       onKeyDown={(e) => {
+        // Guard against bubbling from the label Input below: without this,
+        // every space typed into the label field is caught here first,
+        // preventDefault()'d (as this row's own "activate" key), and never
+        // reaches the input — so typed text loses all its spaces.
+        if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onSelect();

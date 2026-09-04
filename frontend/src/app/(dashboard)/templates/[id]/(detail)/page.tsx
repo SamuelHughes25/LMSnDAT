@@ -1,12 +1,11 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CreateDraftButton } from "@/components/create-draft-button";
 import { PublishButton } from "@/components/publish-button";
-import { DjangoApiError, djangoFetch } from "@/lib/django";
-import type { Paginated, Template, TemplateVersion } from "@/lib/types";
+import { djangoFetch } from "@/lib/django";
+import type { Paginated, TemplateVersion } from "@/lib/types";
 
 const STATUS_VARIANT: Record<TemplateVersion["status"], "default" | "secondary" | "outline"> = {
   draft: "secondary",
@@ -14,16 +13,10 @@ const STATUS_VARIANT: Record<TemplateVersion["status"], "default" | "secondary" 
   archived: "outline",
 };
 
-export default async function TemplateDetailPage({ params }: { params: Promise<{ id: string }> }) {
+// Template existence/404 is already handled by the (detail) layout, which
+// fetches the template itself — this page only needs the version list.
+export default async function TemplateOverviewPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-
-  let template: Template;
-  try {
-    template = await djangoFetch<Template>(`/templates/${id}/`);
-  } catch (err) {
-    if (err instanceof DjangoApiError && err.status === 404) notFound();
-    throw err;
-  }
 
   const versions = await djangoFetch<Paginated<TemplateVersion>>(`/template-versions/?template=${id}`);
   const sorted = [...versions.results].sort((a, b) => b.version_number - a.version_number);
@@ -32,11 +25,6 @@ export default async function TemplateDetailPage({ params }: { params: Promise<{
 
   return (
     <div className="max-w-2xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">{template.name}</h1>
-        {template.description && <p className="mt-1 text-muted-foreground">{template.description}</p>}
-      </div>
-
       <div className="flex items-center justify-between rounded-lg border-2 border-border bg-card p-4 shadow-sm">
         <div>
           <div className="font-medium">Draft</div>

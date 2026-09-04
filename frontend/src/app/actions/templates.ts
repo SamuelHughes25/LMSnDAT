@@ -33,6 +33,11 @@ export async function publishVersion(templateId: string, versionId: string): Pro
   return version;
 }
 
+export async function deleteTemplate(templateId: string): Promise<void> {
+  await djangoFetch<void>(`/templates/${templateId}/`, { method: "DELETE" });
+  revalidatePath("/templates");
+}
+
 // --- Sections ---
 // No revalidatePath below: the builder page keeps its own client-side state
 // (needed for drag-and-drop) and syncs it directly from each action's
