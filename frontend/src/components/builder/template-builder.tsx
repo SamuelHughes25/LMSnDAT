@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
 import {
   DndContext,
   closestCenter,
@@ -200,11 +202,20 @@ export function TemplateBuilder({
   return (
     <div>
       <div className="mb-4 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">{template.name}</h1>
-          <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
-            <Badge variant="secondary">Draft</Badge>
-            <span>Version {initialVersion.version_number}</span>
+        <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            render={<Link href={`/templates/${template.id}`} aria-label="Back to template" />}
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div>
+            <h1 className="text-2xl font-semibold">{template.name}</h1>
+            <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+              <Badge variant="secondary">Draft</Badge>
+              <span>Version {initialVersion.version_number}</span>
+            </div>
           </div>
         </div>
         <Button disabled={publishing} onClick={handlePublish}>
