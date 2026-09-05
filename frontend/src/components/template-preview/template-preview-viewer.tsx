@@ -160,7 +160,22 @@ function QuestionInput({
     case "single_select": {
       const options = question.config.options ?? [];
       return (
-        <Select value={typeof value === "string" ? value : undefined} onValueChange={onChange}>
+        // Base UI's Select.Value only shows the label of the selected item
+        // for values whose Select.Item is still mounted (i.e. the popup is
+        // open) unless the root is also given `items` up front — without it,
+        // once the popup closes, Select.Value falls back to rendering the
+        // raw value string. That was invisible for e.g. the font-size Select
+        // (value and label are identical strings there), but option values
+        // here carry a generated uniqueness suffix (see
+        // select-options-editor.tsx's `option_${n}_${Date.now().toString(36)}`)
+        // distinct from their label, so the raw value showed up as the
+        // trigger text after picking an option — reported as "random chars
+        // appended" to the label.
+        <Select
+          items={options}
+          value={typeof value === "string" ? value : undefined}
+          onValueChange={onChange}
+        >
           <SelectTrigger className="w-full max-w-72">
             <SelectValue placeholder="Select an option" />
           </SelectTrigger>

@@ -284,6 +284,14 @@ export function SlideTextToolbar() {
       <div className="mx-1 h-5 w-px bg-border" />
 
       <Select
+        // Without `items`, Base UI's Select.Value falls back to the raw
+        // value once the popup closes and its Select.Items unmount — a
+        // no-op visually for every numeric size (key and label are the same
+        // string, e.g. "28"/"28"), but for the "default" key ("Default"
+        // label) picking Default would leave the trigger showing lowercase
+        // "default" instead. Same root cause as template-preview-viewer.tsx's
+        // single_select fix.
+        items={FONT_SIZE_OPTIONS.map((option) => ({ value: option.key, label: option.label }))}
         value={currentSizeOption.key}
         onValueChange={applyFontSize}
         // Base UI's Select doesn't just focus its trigger when it opens —
