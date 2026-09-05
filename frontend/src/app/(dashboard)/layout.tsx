@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { LogoutButton } from "@/components/logout-button";
 import { getCurrentUser } from "@/lib/dal";
@@ -11,6 +12,13 @@ const NAV_LINKS = [
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
+
+  // This whole section is the authoring/admin tool — course/template
+  // builders, delete buttons, etc. Members have no use for it (and would
+  // just hit 403s from IsAdminOrReadOnly on any write), so they're bounced
+  // to their own portal instead of landing here after login or navigating
+  // back to "/".
+  if (user.role === "member") redirect("/portal");
 
   return (
     <div className="flex min-h-screen">

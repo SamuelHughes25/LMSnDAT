@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Camera, MapPin, PenLine, ScanLine } from "lucide-react";
+import { Camera, CheckCircle2, MapPin, PenLine, ScanLine } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -17,14 +17,40 @@ import { cn } from "@/lib/utils";
 // Answer yet (only the backend models exist, apps.submissions), so this is a
 // layout/UX preview, not a functioning submission, same scope boundary as
 // the Members tab's "assignment isn't built yet" stub.
-export function TemplatePreviewViewer({ sections }: { sections: Section[] }) {
+//
+// `mode` mirrors the editor/present/static convention used throughout the
+// slide faces: "preview" (default) is the admin's own sanity-check view of
+// the form's layout, no submit action. "fill" is the operative-facing
+// experience — same rendering, plus a Submit button that ends in an honest
+// completion screen (not a real submission yet; see the note above).
+export function TemplatePreviewViewer({
+  sections,
+  mode = "preview",
+}: {
+  sections: Section[];
+  mode?: "preview" | "fill";
+}) {
   const [answers, setAnswers] = useState<Record<string, unknown>>({});
+  const [submitted, setSubmitted] = useState(false);
 
   function setAnswer(questionId: string, value: unknown) {
     setAnswers((prev) => ({ ...prev, [questionId]: value }));
   }
 
   const sortedSections = [...sections].sort((a, b) => a.order - b.order);
+
+  if (submitted) {
+    return (
+      <div className="mx-auto flex max-w-2xl flex-col items-center gap-3 rounded-lg border-2 border-border bg-card p-10 text-center shadow-sm">
+        <CheckCircle2 className="h-10 w-10 text-primary" />
+        <div className="text-lg font-medium">Audit complete</div>
+        <p className="max-w-sm text-sm text-muted-foreground">
+          Nice work. Submissions aren&apos;t synced anywhere yet — that&apos;s coming in a later phase — but
+          everything here has been filled in.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 pb-12">
@@ -51,6 +77,12 @@ export function TemplatePreviewViewer({ sections }: { sections: Section[] }) {
           </div>
         </div>
       ))}
+
+      {mode === "fill" && (
+        <Button className="w-full" onClick={() => setSubmitted(true)}>
+          Submit
+        </Button>
+      )}
     </div>
   );
 }
@@ -173,7 +205,12 @@ function QuestionInput({
         // appended" to the label.
         <Select
           items={options}
-          value={typeof value === "string" ? value : undefined}
+          // `null`, not `undefined`: Base UI's Select treats a value of
+          // `undefined` on the very first render as "uncontrolled", then
+          // warns when a later render passes a real string (switching
+          // controlled-ness mid-lifetime). `null` is a controlled "nothing
+          // selected" from the start, matching the placeholder branch below.
+          value={typeof value === "string" ? value : null}
           onValueChange={onChange}
         >
           <SelectTrigger className="w-full max-w-72">
