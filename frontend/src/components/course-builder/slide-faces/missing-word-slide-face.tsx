@@ -1,10 +1,10 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   closestCenter,
   DndContext,
-  DragOverlay,
   PointerSensor,
   useDraggable,
   useDroppable,
@@ -12,7 +12,6 @@ import {
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
-  type Modifier,
 } from "@dnd-kit/core";
 import { X } from "lucide-react";
 
@@ -78,14 +77,7 @@ function shuffle<T>(items: T[]): T[] {
   return result;
 }
 
-// See the DragOverlay comment in MissingWordPresent for why this exists —
-// cancels out a real, measured drift in dnd-kit's own drag-position math
-// whenever an ancestor renders at a CSS zoom other than 1.
-function makeUnzoomModifier(zoom: number): Modifier {
-  return ({ transform }) => ({ ...transform, x: transform.x / zoom, y: transform.y / zoom });
-}
-
-export function MissingWordSlideFace({ slide, mode, onConfigChange, onInteraction, stageZoom }: SlideFaceProps) {
+export function MissingWordSlideFace({ slide, mode, onConfigChange, onInteraction }: SlideFaceProps) {
   const paragraph = slide.config.paragraph ?? "";
   const blanks = slide.config.blanks ?? [];
 
@@ -95,13 +87,7 @@ export function MissingWordSlideFace({ slide, mode, onConfigChange, onInteractio
 
   if (mode === "present") {
     return (
-      <MissingWordPresent
-        slide={slide}
-        paragraph={paragraph}
-        blanks={blanks}
-        onInteraction={onInteraction}
-        stageZoom={stageZoom}
-      />
+      <MissingWordPresent slide={slide} paragraph={paragraph} blanks={blanks} onInteraction={onInteraction} />
     );
   }
 
@@ -242,13 +228,11 @@ function MissingWordPresent({
   paragraph,
   blanks,
   onInteraction,
-  stageZoom,
 }: {
   slide: Slide;
   paragraph: string;
   blanks: MissingWordBlank[];
   onInteraction: SlideFaceProps["onInteraction"];
-  stageZoom: SlideFaceProps["stageZoom"];
 }) {
   const [placement, setPlacement] = useState<Placement>(() =>
     Object.fromEntries(blanks.map((b) => [b.id, null])),
@@ -282,7 +266,6 @@ function MissingWordPresent({
   const [activeId, setActiveId] = useState<string | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
-  const dragOverlayModifiers = useMemo(() => [makeUnzoomModifier(stageZoom ?? 1)], [stageZoom]);
 
   const blanksById = useMemo(() => Object.fromEntries(blanks.map((b) => [b.id, b])), [blanks]);
   const segments = useMemo(() => buildSegments(paragraph, blanks), [paragraph, blanks]);
@@ -382,42 +365,13 @@ function MissingWordPresent({
 
         <WordPool wordIds={poolIds} blanksById={blanksById} submitted={submitted} />
 
-        {/* Renders the dragged chip as a layout-independent clone that
-            follows the cursor via a portal, instead of relying on
-            useDraggable's own CSS transform to move the ORIGINAL node in
-            place. That in-place approach is what caused the reported "goes
-            massive" bug: the same word chip renders at a genuinely
-            different natural size depending on which container currently
-            holds it (unconstrained in the pool's flex-wrap row vs.
-            constrained by a blank's `Xch` minWidth) — dragging it back
-            toward a blank while it's still physically parented inside its
-            CURRENT container made dnd-kit's built-in scale-compensation
-            math (it tries to keep the moving clone visually consistent
-            with the dragged node's re-measured rect) apply a real, visible
-            scaleX/scaleY blow-up. Confirmed via a real browser + reading
-            the computed transform mid-drag: matrix(1.35, 0, 0, 1.27, ...)
-            — a genuine ~35% size increase, not a rendering illusion.
-            DragOverlay sidesteps this entirely: its clone is a fresh,
-            unconstrained element with no ancestor to inherit a conflicting
-            size from, so it always renders at its own natural size.
-
-            `modifiers` compensates for a SEPARATE dnd-kit quirk this
-            slide's canvas exposes on the portal/preview player, where the
-            canvas is rendered at some live CSS `zoom` factor other than 1
-            (course-preview-viewer.tsx scales it to fill the available
-            space — see stageZoom's doc comment in slide-faces/index.ts).
-            Confirmed via a real browser + logging the overlay's own
-            getBoundingClientRect() through a drag: at zoom 1 the overlay
-            tracks the cursor pixel-for-pixel, but at zoom 1.2 every real
-            pointer-move delta of N px moved the overlay by N*1.2 px — not
-            a coincidence, reproduced identically whether the canvas was
-            zoomed via CSS `zoom` or `transform: scale()`. Dividing the
-            overlay's own transform by the same zoom factor exactly cancels
-            that drift back out, regardless of which of dnd-kit's internal
-            calculations is actually responsible for introducing it. */}
-        <DragOverlay dropAnimation={null} modifiers={dragOverlayModifiers}>
-          {activeId ? <WordChipVisual text={blanksById[activeId]?.text ?? ""} /> : null}
-        </DragOverlay>
+        {/* A hand-rolled drag ghost, not dnd-kit's own <DragOverlay> — see
+            DragGhost's own comment below for why: dnd-kit's built-in
+            overlay positioning doesn't compose correctly with this canvas's
+            live CSS zoom (course-preview-viewer.tsx scales it to fill the
+            available space), in two different, unrelated ways depending on
+            which zoom technique was tried. */}
+        {activeId && <DragGhost text={blanksById[activeId]?.text ?? ""} />}
       </DndContext>
 
       {promptMessage && <div className="text-sm text-red-600">{promptMessage}</div>}
@@ -501,10 +455,10 @@ function WordPool({
 
 // The real, droppable/draggable chip — rendered wherever it currently
 // lives (pool or a blank). No longer applies useDraggable's own `transform`
-// while dragging (that's what produced the "goes massive" bug — see the
-// DragOverlay comment above); instead it just stays put, dimmed, as a
-// placeholder for its own slot while DragOverlay's clone (WordChipVisual
-// below) does the actual following-the-cursor visual.
+// while dragging (that's what produced the "goes massive" bug — see
+// DragGhost's comment below); instead it just stays put, dimmed, as a
+// placeholder for its own slot while DragGhost (WordChipVisual below, but
+// portaled to the cursor) does the actual following-the-cursor visual.
 function WordChip({ id, text, disabled }: { id: string; text: string; disabled?: boolean }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id, disabled });
 
@@ -526,8 +480,8 @@ function WordChip({ id, text, disabled }: { id: string; text: string; disabled?:
   );
 }
 
-// Presentational-only clone rendered inside DragOverlay — same look as
-// WordChip, but no useDraggable wiring of its own (DragOverlay already
+// Presentational-only clone rendered inside DragGhost — same look as
+// WordChip, but no useDraggable wiring of its own (DragGhost already
 // positions it to follow the cursor) and no ancestor to inherit a
 // conflicting natural size from, which is the whole point: it always
 // renders at ITS own intrinsic size regardless of which container the real
@@ -540,6 +494,71 @@ function WordChipVisual({ text }: { text: string }) {
     >
       {text}
     </button>
+  );
+}
+
+// A hand-rolled replacement for dnd-kit's own <DragOverlay>, portaled to
+// document.body and positioned directly from raw pointermove clientX/clientY
+// — deliberately NOT using dnd-kit's own overlay-positioning transform math
+// at all. That math doesn't compose correctly with this canvas's live CSS
+// zoom (course-preview-viewer.tsx scales the whole slide to fill the
+// available space on the portal/preview player): confirmed via a real
+// browser, reading the overlay's own getBoundingClientRect() through a
+// drag, under BOTH zoom techniques tried —
+//   - `transform: scale()` on the canvas: the overlay tracked the general
+//     direction of the cursor but drifted from it by exactly the zoom
+//     factor per pixel moved (a real pointer delta of N px moved the
+//     overlay by N * zoom px) — fixable in principle with a compensating
+//     `modifiers` function on DragOverlay, which was tried and confirmed to
+//     eliminate that drift.
+//   - `zoom` (switched to specifically to fix the above, since `zoom`
+//     — unlike `transform` — genuinely resizes an element's layout box, so
+//     every other coordinate API stays consistent): DragOverlay's *initial*
+//     position jumped immediately on grab, offset from the original chip by
+//     exactly (chip position × zoom) minus (chip position) — i.e. dnd-kit's
+//     own fixed-position placement for the overlay applies the zoom factor
+//     a second time on top of an already-zoom-correct measurement. This
+//     reproduced identically with the compensating `modifiers` function
+//     both present and removed, proving it's independent of — and a
+//     different bug from — the first one.
+// Two different, unrelated dnd-kit-vs-zoom incompatibilities from two
+// different zoom techniques is a strong signal that dnd-kit's own overlay
+// positioning simply isn't meant to sit under a zoomed ancestor at all.
+// Raw `clientX`/`clientY` sidesteps the whole question: those are always
+// real viewport pixels, unaffected by any CSS zoom/transform anywhere in
+// the tree, so a `position: fixed` ghost placed directly from them needs no
+// zoom-awareness or compensation of any kind.
+function DragGhost({ text }: { text: string }) {
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    function handlePointerMove(e: PointerEvent) {
+      setPos({ x: e.clientX, y: e.clientY });
+    }
+    window.addEventListener("pointermove", handlePointerMove);
+    return () => window.removeEventListener("pointermove", handlePointerMove);
+  }, []);
+
+  // Nothing to render until the first pointermove reports where the cursor
+  // actually is — this component only ever mounts once a drag has already
+  // started (see activeId in MissingWordPresent), so that first event is at
+  // most a few pixels away, never a visible jump from some default spot.
+  if (!pos) return null;
+
+  return createPortal(
+    <div
+      style={{
+        position: "fixed",
+        left: pos.x,
+        top: pos.y,
+        transform: "translate(-50%, -50%)",
+        pointerEvents: "none",
+        zIndex: 9999,
+      }}
+    >
+      <WordChipVisual text={text} />
+    </div>,
+    document.body,
   );
 }
 

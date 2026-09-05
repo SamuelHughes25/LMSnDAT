@@ -171,13 +171,7 @@ export function CoursePreviewViewer({ slides }: { slides: PreviewSlide[] }) {
                 heightPct={current.slide.config.background_image_height_pct}
               />
               <div className="relative z-10 h-full w-full">
-                <Face
-                  key={current.slide.id}
-                  slide={current.slide}
-                  mode="present"
-                  onInteraction={handleInteraction}
-                  stageZoom={scale}
-                />
+                <Face key={current.slide.id} slide={current.slide} mode="present" onInteraction={handleInteraction} />
               </div>
             </div>
           </div>
