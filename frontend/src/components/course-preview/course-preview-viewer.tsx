@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { ActiveEditorProvider } from "@/components/course-builder/active-editor-context";
@@ -13,6 +13,53 @@ import type { Slide } from "@/lib/course-types";
 import type { SlideInteractionResult } from "@/lib/slide-interaction";
 
 export type PreviewSlide = { slide: Slide; lessonTitle: string };
+
+// Scales the fixed 960x540 canvas (CANVAS_W/CANVAS_H — the same coordinate
+// system the builder itself uses, so every slide face's percentage-based
+// positioning renders identically here) up or down to fill however much
+// width its container actually has, same technique slide-thumbnail.tsx
+// already uses to shrink a canvas DOWN to a 160px thumbnail — just measured
+// live via ResizeObserver instead of a fixed constant, since here the
+// available space varies (a wide admin preview pane vs. the much larger
+// portal course-player column). A pure CSS width/aspect-ratio resize
+// wouldn't work for this: font sizes inside a slide are literal pixel
+// values (the toolbar's 1-34px font-size picker), which don't scale with a
+// container's width on their own — only actually resizing the whole
+// 960x540 box scales those px values along with everything else, the same
+// way zooming a real slide deck would.
+//
+// Applied via the CSS `zoom` property below, deliberately NOT
+// `transform: scale()` (slide-thumbnail.tsx's own technique) — confirmed
+// via a real browser that missing_word's drag-and-drop present-mode
+// interaction breaks under `transform: scale()`: dnd-kit's PointerSensor
+// computes drag deltas from real screen-pixel pointer coordinates, but
+// `transform: scale()` only affects PAINTING, not the coordinate system
+// `getBoundingClientRect()`/pointer events report — so a chip's DragOverlay
+// clone drifted away from the actual cursor position at exactly the
+// ancestor's scale factor (a 10px real pointer move produced an 11px/1.2 =
+// 12px clone move at scale 1.2). `zoom`, unlike `transform`, genuinely
+// resizes the element's rendered layout box — every descendant coordinate
+// API (getBoundingClientRect, pointer clientX/clientY) already accounts for
+// it correctly, so dnd-kit needs no special handling at all. Trade-off:
+// `zoom` is Chromium/Safari/Firefox 126+ (mid-2024) — no concern for this
+// internal tool's browser support target.
+function useStageScale() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (width) setScale(width / CANVAS_W);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return { containerRef, scale };
+}
 
 // Read-only "slide through the deck" viewer — reuses the exact slide faces
 // and canvas sizing the builder uses (CANVAS_W/CANVAS_H, SLIDE_TYPE_FACES)
@@ -58,6 +105,8 @@ export function CoursePreviewViewer({ slides }: { slides: PreviewSlide[] }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [slides.length]);
 
+  const { containerRef, scale } = useStageScale();
+
   if (slides.length === 0) {
     return (
       <div className="flex h-64 items-center justify-center rounded-lg border-2 border-border bg-card p-6 text-center shadow-sm">
@@ -91,13 +140,27 @@ export function CoursePreviewViewer({ slides }: { slides: PreviewSlide[] }) {
     // consistency — the two providers don't interact.
     <ActiveEditorProvider>
       <SlideSelectionProvider>
-        <div className="flex flex-col items-center">
+        <div className="flex w-full flex-col items-center">
           <div className="mb-2 text-sm text-muted-foreground">{current.lessonTitle}</div>
 
-          <div className="flex items-center justify-center overflow-auto rounded-lg bg-muted p-8">
+          {/* The scaling container: sized purely by width (whatever its
+              non-flex block-level parent gives it, up to max-w-6xl), with
+              height LOCKED to that width via aspect-ratio — so there's no
+              dependency on some ancestor further up passing down an actual
+              pixel height through a chain of flex/min-h-0 rules, which
+              would be far more fragile to get right across two very
+              differently-shaped pages (the admin preview column vs. the
+              portal's course-player page). ResizeObserver in useStageScale
+              reads this container's actual rendered width and turns it
+              into the inner canvas's scale factor. */}
+          <div
+            ref={containerRef}
+            className="w-full max-w-6xl overflow-hidden rounded-lg bg-muted"
+            style={{ aspectRatio: `${CANVAS_W} / ${CANVAS_H}` }}
+          >
             <div
-              className="relative shrink-0 overflow-hidden rounded-sm bg-white shadow-lg"
-              style={{ width: CANVAS_W, height: CANVAS_H }}
+              className="relative overflow-hidden rounded-sm bg-white shadow-lg"
+              style={{ width: CANVAS_W, height: CANVAS_H, zoom: scale }}
             >
               <SlideBackgroundLayer
                 value={current.slide.config.background_image_url}
@@ -108,7 +171,13 @@ export function CoursePreviewViewer({ slides }: { slides: PreviewSlide[] }) {
                 heightPct={current.slide.config.background_image_height_pct}
               />
               <div className="relative z-10 h-full w-full">
-                <Face key={current.slide.id} slide={current.slide} mode="present" onInteraction={handleInteraction} />
+                <Face
+                  key={current.slide.id}
+                  slide={current.slide}
+                  mode="present"
+                  onInteraction={handleInteraction}
+                  stageZoom={scale}
+                />
               </div>
             </div>
           </div>

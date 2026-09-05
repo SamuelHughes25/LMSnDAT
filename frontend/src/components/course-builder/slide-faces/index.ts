@@ -44,6 +44,17 @@ export type SlideFaceProps = {
   // upload anything, so slide-thumbnail.tsx and course-preview-viewer.tsx
   // never need to pass it.
   courseVersionId?: string;
+  // The live CSS `zoom` factor course-preview-viewer.tsx is currently
+  // rendering this slide's 960x540 canvas at (1 everywhere else — the
+  // builder's own canvas and every thumbnail always render at native
+  // scale). Needed only by present-mode components that use raw dnd-kit
+  // dragging (currently just missing-word-slide-face.tsx's DragOverlay):
+  // confirmed via a real browser that dnd-kit's drag-position math doesn't
+  // account for an ancestor's CSS zoom/transform:scale on its own — a
+  // dragged chip's overlay drifted from the actual cursor by exactly the
+  // zoom factor. Only threaded to the slide types that need it (currently
+  // just missing_word) rather than read by every face.
+  stageZoom?: number;
 };
 
 // "content", "multiple_choice", "missing_word", "match_pairs", "accordion",

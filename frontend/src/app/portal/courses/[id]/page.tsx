@@ -36,7 +36,13 @@ export default async function PortalCoursePlayerPage({ params }: { params: Promi
     );
 
   return (
-    <div className="max-w-4xl space-y-4">
+    // No max-w cap here (unlike the other portal pages) — CoursePreviewViewer
+    // already caps its own stage at max-w-6xl and centers itself; capping
+    // this ancestor too, at a NARROWER width than the stage's fixed 960px
+    // canvas, is exactly what previously made the canvas overflow this
+    // column and visually bleed into the sidebar. See the fix's commit
+    // message for the full "960 > 896" arithmetic.
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <Link href="/portal/courses" className="text-sm text-muted-foreground hover:text-foreground">

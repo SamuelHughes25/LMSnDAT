@@ -236,7 +236,7 @@ function AccordionPresent({
   }
 
   return (
-    <div className="flex h-full w-full flex-col gap-2 overflow-y-auto px-16 py-12 text-foreground">
+    <div className="flex h-full w-full flex-col justify-center gap-2 overflow-y-auto px-16 py-12 text-foreground">
       {sections.map((section) => {
         const isOpen = openIds.has(section.id);
         return (
@@ -267,7 +267,7 @@ function AccordionPresent({
 // slide types.
 function AccordionStatic({ sections }: { sections: AccordionSection[] }) {
   return (
-    <div className="flex h-full w-full flex-col gap-2 px-16 py-12 text-foreground">
+    <div className="flex h-full w-full flex-col justify-center gap-2 px-16 py-12 text-foreground">
       {sections.length === 0 ? (
         <span className="text-lg text-muted-foreground/50">Click to add sections</span>
       ) : (

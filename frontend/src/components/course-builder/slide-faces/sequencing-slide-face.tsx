@@ -295,17 +295,24 @@ function SequencingPresent({
 
   if (items.length === 0) {
     return (
-      <div className="flex h-full w-full flex-col gap-6 px-16 py-12 text-foreground">
+      <div className="flex h-full w-full flex-col justify-center gap-6 px-16 py-12 text-foreground">
         {instructions && <div className="text-xl font-semibold">{instructions}</div>}
       </div>
     );
   }
 
   return (
-    <div className="flex h-full w-full flex-col gap-6 px-16 py-12 text-foreground">
+    <div className="flex h-full w-full flex-col justify-center gap-6 px-16 py-12 text-foreground">
       {instructions && <div className="text-xl font-semibold">{instructions}</div>}
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      {/* flex flex-col justify-center HERE, not just on the outer wrapper
+          above: this wrapper stretches to fill the full flex-1 height
+          (needed so overflow-y-auto has a bounded height to ever actually
+          scroll within, for a long list), which claims all the leftover
+          space before the outer wrapper's own justify-center ever sees any
+          left to distribute — same "doesn't center with few items"
+          mechanism as match-pairs' grid columns. */}
+      <div className="flex min-h-0 flex-1 flex-col justify-center overflow-y-auto">
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
             <div className="flex flex-col gap-2">
@@ -395,7 +402,7 @@ function SequencingPresentRow({
 // editorial view."
 function SequencingStatic({ instructions, items }: { instructions: string; items: SequencingItem[] }) {
   return (
-    <div className="flex h-full w-full flex-col gap-4 px-16 py-12 text-foreground">
+    <div className="flex h-full w-full flex-col justify-center gap-4 px-16 py-12 text-foreground">
       <div className="text-xl font-semibold">
         {instructions || <span className="text-muted-foreground/50">Click to add instructions</span>}
       </div>

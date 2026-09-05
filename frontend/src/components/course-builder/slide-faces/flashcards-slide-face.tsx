@@ -305,7 +305,15 @@ function FlashcardsPresent({
           </div>
           <div
             className={cn(
-              "absolute inset-0 flex items-center justify-center overflow-hidden rounded-xl border-2 border-primary bg-primary/5 p-6 text-center font-semibold break-words shadow-md",
+              // bg-primary/5, not a fully opaque color: this is a
+              // translucent background (5% alpha), so once flipped, the
+              // decorative stack cards positioned directly behind this one
+              // (see above) show straight through it — confirmed via a
+              // real browser and reported as "you can see the cards behind
+              // it through the back of it." bg-accent is this theme's
+              // solid/opaque near-white tint, still visually distinct from
+              // the front face's plain bg-white.
+              "absolute inset-0 flex items-center justify-center overflow-hidden rounded-xl border-2 border-primary bg-accent p-6 text-center font-semibold break-words shadow-md",
               cardFaceTextSizeClass(card.back),
             )}
             style={{

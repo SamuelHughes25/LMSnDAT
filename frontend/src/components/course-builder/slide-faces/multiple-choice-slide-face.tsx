@@ -284,7 +284,7 @@ function MultipleChoicePresent({
   const showIncorrectFeedback = !!flashIncorrectId && feedbackIncorrect.trim().length > 0;
 
   return (
-    <div className="flex h-full w-full flex-col gap-6 px-16 py-12 text-foreground">
+    <div className="flex h-full w-full flex-col justify-center gap-6 px-16 py-12 text-foreground">
       <div className="text-3xl font-bold">
         {question || <span className="text-muted-foreground/50">Untitled question</span>}
       </div>
@@ -325,7 +325,7 @@ function MultipleChoicePresent({
 // philosophy: a true miniature of the content, not an editorial view.
 function MultipleChoiceStatic({ question, options }: { question: string; options: MultipleChoiceOption[] }) {
   return (
-    <div className="flex h-full w-full flex-col gap-4 px-16 py-12 text-foreground">
+    <div className="flex h-full w-full flex-col justify-center gap-4 px-16 py-12 text-foreground">
       <div className="text-3xl font-bold">
         {question || <span className="text-muted-foreground/50">Click to add question</span>}
       </div>

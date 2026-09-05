@@ -274,18 +274,27 @@ function MatchPairsPresent({
 
   if (pairs.length === 0) {
     return (
-      <div className="flex h-full w-full flex-col gap-6 px-16 py-12 text-foreground">
+      <div className="flex h-full w-full flex-col justify-center gap-6 px-16 py-12 text-foreground">
         {instructions && <div className="text-xl font-semibold">{instructions}</div>}
       </div>
     );
   }
 
   return (
-    <div className="flex h-full w-full flex-col gap-6 px-16 py-12 text-foreground">
+    <div className="flex h-full w-full flex-col justify-center gap-6 px-16 py-12 text-foreground">
       {instructions && <div className="text-xl font-semibold">{instructions}</div>}
 
+      {/* justify-center on each column, not just the outer wrapper above:
+          this grid's cells stretch to the full flex-1 height (CSS Grid's
+          default align-items: stretch), so with few pairs the tiles were
+          still stacking from each column's own top edge, leaving empty
+          space below — the same "doesn't center until you add enough items
+          to fill the space" report, just one level deeper than the other
+          slide types this round, since a flex-1/grid ancestor's leftover
+          space is claimed by stretch/grow before the outer justify-center
+          ever gets anything left to distribute. */}
       <div className="grid flex-1 grid-cols-2 gap-8">
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col justify-center gap-2">
           {keywordOrder.map((id) => (
             <MatchTile
               key={id}
@@ -303,7 +312,7 @@ function MatchPairsPresent({
             />
           ))}
         </div>
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col justify-center gap-2">
           {definitionOrder.map((id) => (
             <MatchTile
               key={id}
@@ -357,7 +366,7 @@ function MatchTile({
 // philosophy already established for content/multiple_choice/missing_word.
 function MatchPairsStatic({ instructions, pairs }: { instructions: string; pairs: MatchPair[] }) {
   return (
-    <div className="flex h-full w-full flex-col gap-4 px-16 py-12 text-foreground">
+    <div className="flex h-full w-full flex-col justify-center gap-4 px-16 py-12 text-foreground">
       <div className="text-xl font-semibold">
         {instructions || <span className="text-muted-foreground/50">Click to add instructions</span>}
       </div>

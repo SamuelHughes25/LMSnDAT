@@ -4,14 +4,16 @@ import { useMemo, useRef, useState } from "react";
 import {
   closestCenter,
   DndContext,
+  DragOverlay,
   PointerSensor,
   useDraggable,
   useDroppable,
   useSensor,
   useSensors,
   type DragEndEvent,
+  type DragStartEvent,
+  type Modifier,
 } from "@dnd-kit/core";
-import { CSS } from "@dnd-kit/utilities";
 import { X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -76,7 +78,14 @@ function shuffle<T>(items: T[]): T[] {
   return result;
 }
 
-export function MissingWordSlideFace({ slide, mode, onConfigChange, onInteraction }: SlideFaceProps) {
+// See the DragOverlay comment in MissingWordPresent for why this exists —
+// cancels out a real, measured drift in dnd-kit's own drag-position math
+// whenever an ancestor renders at a CSS zoom other than 1.
+function makeUnzoomModifier(zoom: number): Modifier {
+  return ({ transform }) => ({ ...transform, x: transform.x / zoom, y: transform.y / zoom });
+}
+
+export function MissingWordSlideFace({ slide, mode, onConfigChange, onInteraction, stageZoom }: SlideFaceProps) {
   const paragraph = slide.config.paragraph ?? "";
   const blanks = slide.config.blanks ?? [];
 
@@ -86,7 +95,13 @@ export function MissingWordSlideFace({ slide, mode, onConfigChange, onInteractio
 
   if (mode === "present") {
     return (
-      <MissingWordPresent slide={slide} paragraph={paragraph} blanks={blanks} onInteraction={onInteraction} />
+      <MissingWordPresent
+        slide={slide}
+        paragraph={paragraph}
+        blanks={blanks}
+        onInteraction={onInteraction}
+        stageZoom={stageZoom}
+      />
     );
   }
 
@@ -227,11 +242,13 @@ function MissingWordPresent({
   paragraph,
   blanks,
   onInteraction,
+  stageZoom,
 }: {
   slide: Slide;
   paragraph: string;
   blanks: MissingWordBlank[];
   onInteraction: SlideFaceProps["onInteraction"];
+  stageZoom: SlideFaceProps["stageZoom"];
 }) {
   const [placement, setPlacement] = useState<Placement>(() =>
     Object.fromEntries(blanks.map((b) => [b.id, null])),
@@ -260,8 +277,12 @@ function MissingWordPresent({
   }
   const [submitted, setSubmitted] = useState(false);
   const [promptMessage, setPromptMessage] = useState<string | null>(null);
+  // Which word is currently being dragged, purely to pick what DragOverlay
+  // shows below — see the comment on DragOverlay's use for why this exists.
+  const [activeId, setActiveId] = useState<string | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const dragOverlayModifiers = useMemo(() => [makeUnzoomModifier(stageZoom ?? 1)], [stageZoom]);
 
   const blanksById = useMemo(() => Object.fromEntries(blanks.map((b) => [b.id, b])), [blanks]);
   const segments = useMemo(() => buildSegments(paragraph, blanks), [paragraph, blanks]);
@@ -269,7 +290,12 @@ function MissingWordPresent({
   const placedWordIds = new Set(Object.values(placement).filter((v): v is string => v != null));
   const poolIds = scrambledIds.filter((id) => !placedWordIds.has(id));
 
+  function handleDragStart(event: DragStartEvent) {
+    setActiveId(String(event.active.id));
+  }
+
   function handleDragEnd(event: DragEndEvent) {
+    setActiveId(null);
     if (submitted) return;
     const wordId = String(event.active.id);
     const overId = event.over ? String(event.over.id) : null;
@@ -322,7 +348,7 @@ function MissingWordPresent({
 
   if (blanks.length === 0) {
     return (
-      <div className="flex h-full w-full flex-col gap-6 px-16 py-12 text-foreground">
+      <div className="flex h-full w-full flex-col justify-center gap-6 px-16 py-12 text-foreground">
         <div className="text-xl leading-loose">{paragraph}</div>
       </div>
     );
@@ -331,8 +357,13 @@ function MissingWordPresent({
   const correctCount = blanks.filter((b) => placement[b.id] === b.id).length;
 
   return (
-    <div className="flex h-full w-full flex-col gap-6 px-16 py-12 text-foreground">
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+    <div className="flex h-full w-full flex-col justify-center gap-6 px-16 py-12 text-foreground">
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+      >
         <div className="text-xl leading-loose">
           {segments.map((seg, i) =>
             seg.type === "text" ? (
@@ -350,6 +381,43 @@ function MissingWordPresent({
         </div>
 
         <WordPool wordIds={poolIds} blanksById={blanksById} submitted={submitted} />
+
+        {/* Renders the dragged chip as a layout-independent clone that
+            follows the cursor via a portal, instead of relying on
+            useDraggable's own CSS transform to move the ORIGINAL node in
+            place. That in-place approach is what caused the reported "goes
+            massive" bug: the same word chip renders at a genuinely
+            different natural size depending on which container currently
+            holds it (unconstrained in the pool's flex-wrap row vs.
+            constrained by a blank's `Xch` minWidth) — dragging it back
+            toward a blank while it's still physically parented inside its
+            CURRENT container made dnd-kit's built-in scale-compensation
+            math (it tries to keep the moving clone visually consistent
+            with the dragged node's re-measured rect) apply a real, visible
+            scaleX/scaleY blow-up. Confirmed via a real browser + reading
+            the computed transform mid-drag: matrix(1.35, 0, 0, 1.27, ...)
+            — a genuine ~35% size increase, not a rendering illusion.
+            DragOverlay sidesteps this entirely: its clone is a fresh,
+            unconstrained element with no ancestor to inherit a conflicting
+            size from, so it always renders at its own natural size.
+
+            `modifiers` compensates for a SEPARATE dnd-kit quirk this
+            slide's canvas exposes on the portal/preview player, where the
+            canvas is rendered at some live CSS `zoom` factor other than 1
+            (course-preview-viewer.tsx scales it to fill the available
+            space — see stageZoom's doc comment in slide-faces/index.ts).
+            Confirmed via a real browser + logging the overlay's own
+            getBoundingClientRect() through a drag: at zoom 1 the overlay
+            tracks the cursor pixel-for-pixel, but at zoom 1.2 every real
+            pointer-move delta of N px moved the overlay by N*1.2 px — not
+            a coincidence, reproduced identically whether the canvas was
+            zoomed via CSS `zoom` or `transform: scale()`. Dividing the
+            overlay's own transform by the same zoom factor exactly cancels
+            that drift back out, regardless of which of dnd-kit's internal
+            calculations is actually responsible for introducing it. */}
+        <DragOverlay dropAnimation={null} modifiers={dragOverlayModifiers}>
+          {activeId ? <WordChipVisual text={blanksById[activeId]?.text ?? ""} /> : null}
+        </DragOverlay>
       </DndContext>
 
       {promptMessage && <div className="text-sm text-red-600">{promptMessage}</div>}
@@ -431,23 +499,44 @@ function WordPool({
   );
 }
 
+// The real, droppable/draggable chip — rendered wherever it currently
+// lives (pool or a blank). No longer applies useDraggable's own `transform`
+// while dragging (that's what produced the "goes massive" bug — see the
+// DragOverlay comment above); instead it just stays put, dimmed, as a
+// placeholder for its own slot while DragOverlay's clone (WordChipVisual
+// below) does the actual following-the-cursor visual.
 function WordChip({ id, text, disabled }: { id: string; text: string; disabled?: boolean }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id, disabled });
-  const style = transform ? { transform: CSS.Transform.toString(transform) } : undefined;
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id, disabled });
 
   return (
     <button
       type="button"
       ref={setNodeRef}
-      style={style}
       disabled={disabled}
       {...listeners}
       {...attributes}
       className={cn(
         "touch-none select-none rounded-full border border-border bg-white px-3 py-1 text-sm shadow-sm",
         !disabled && "cursor-grab active:cursor-grabbing",
-        isDragging && "z-10 opacity-50",
+        isDragging && "opacity-30",
       )}
+    >
+      {text}
+    </button>
+  );
+}
+
+// Presentational-only clone rendered inside DragOverlay — same look as
+// WordChip, but no useDraggable wiring of its own (DragOverlay already
+// positions it to follow the cursor) and no ancestor to inherit a
+// conflicting natural size from, which is the whole point: it always
+// renders at ITS own intrinsic size regardless of which container the real
+// WordChip happens to be sitting in underneath.
+function WordChipVisual({ text }: { text: string }) {
+  return (
+    <button
+      type="button"
+      className="touch-none cursor-grabbing rounded-full border border-border bg-white px-3 py-1 text-sm shadow-md"
     >
       {text}
     </button>
@@ -462,7 +551,7 @@ function MissingWordStatic({ paragraph, blanks }: { paragraph: string; blanks: M
   const segments = buildSegments(paragraph, blanks);
 
   return (
-    <div className="flex h-full w-full flex-col gap-4 px-16 py-12 text-foreground">
+    <div className="flex h-full w-full flex-col justify-center gap-4 px-16 py-12 text-foreground">
       <div className="text-xl leading-loose">
         {paragraph ? (
           segments.map((seg, i) =>
