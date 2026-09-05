@@ -266,7 +266,26 @@ export function PositionableBox({
   }
 
   if (mode !== "edit") {
-    if (!transform) return <>{children}</>;
+    // An untouched (never dragged/resized) box has no transform to render
+    // absolutely-positioned — it's supposed to fall back to plain flex
+    // layout, same as the edit-mode branch below does for its own
+    // untransformed case (`!isPositioned && flexClassName`). Returning the
+    // bare children here (no wrapper at all, as this used to do) discarded
+    // `flexClassName` entirely instead of falling back to it — invisible
+    // for fields like title, whose flexClassName is undefined (nothing to
+    // lose), but a real, confirmed bug for content-slide-face.tsx's body
+    // field, whose flexClassName ("mt-8 min-h-0 flex-1") is load-bearing:
+    // without flex-1, body stopped growing to fill the slide's remaining
+    // height and rendered via whatever fallback sizing its own h-full
+    // className resolved to instead — reproduced via a real browser
+    // (measuring computed styles) landing body's text at exactly 50% of
+    // the slide's height in both the thumbnail and the published preview,
+    // vs. its correct ~22% right below the title in the builder's edit
+    // canvas, which — unlike present/static — always went through the
+    // *other* branch below and so never dropped these classes. Matching
+    // edit mode's own wrapper shape (a plain div carrying flexClassName)
+    // fixes this without touching the transformed-box branch below at all.
+    if (!transform) return <div className={cn("relative", flexClassName)}>{children}</div>;
     // z-10 for the same reason as the edit-mode return below: a
     // transformed box can visually overlap an untransformed sibling still
     // in normal flex flow, and without an explicit stacking order they'd
