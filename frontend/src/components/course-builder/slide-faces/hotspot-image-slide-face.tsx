@@ -106,6 +106,19 @@ function HotspotImageEditor({
     handleImageCommit,
   );
 
+  // Claims focus as soon as this slide's editor mounts with no image yet
+  // (a freshly-created hotspot_image slide, or switching into one from
+  // another slide — this component remounts on slide change via
+  // key={slide.id} in slide-canvas.tsx), so Ctrl+V works immediately
+  // without an extra click first. Same fix, and the same reasoning, as
+  // image-field.tsx's ImageUploadField — see its comment for the full
+  // repro this addresses.
+  useEffect(() => {
+    if (!imageUrl) containerRef.current?.focus();
+    // Deliberately mount-only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const debouncedCommitHotspots = useDebouncedCallback(
     (next: HotspotMarker[]) => onConfigChange?.({ hotspots: next }),
     CHANGE_DEBOUNCE_MS,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ImagePlus, Loader2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -83,6 +83,26 @@ function ImageUploadField({
 }) {
   const { uploading, error, inputRef, handleFileChange, handlePaste } = useImageUpload(courseVersionId, onCommit);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Claims focus the moment an empty box like this one first appears (e.g.
+  // switching the properties panel's layout picker to "Image left"/"Image
+  // right" mounts a fresh instance of this component), so Ctrl+V works
+  // immediately — without this, focus stays on whatever was last clicked
+  // in the properties panel (the layout button itself is a real, natively
+  // focusable <button>), and pasting has nowhere on this box to land.
+  // Reported exactly this way: clicking the layout picker and pasting did
+  // nothing to "the grey box on the page," but clicking that box first and
+  // then pasting worked — confirming focus, not the paste handler itself,
+  // was the gap. Guarded on `!value` so an already-populated box (e.g. one
+  // that already had an image before the layout was switched away and
+  // back) never has focus silently stolen from something else the author
+  // is doing.
+  useEffect(() => {
+    if (!value) containerRef.current?.focus();
+    // Deliberately mount-only — this should claim focus exactly once, when
+    // the box first appears, not every time `value` happens to change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Live size while a resize handle is being dragged — kept purely local so
   // dragging is smooth and fires zero network requests; only the final
   // value (on pointerup) reaches onResize -> onConfigChange -> the real
