@@ -38,6 +38,21 @@ export function SlideBackgroundPanel({
     <div className="space-y-1.5">
       <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Edit</div>
       <div className="text-[11px] font-medium text-muted-foreground/70">Background image</div>
+      {/* Confirmed via a real browser to be a genuine point of confusion:
+          this field and the "Image left"/"Image right" layout's own
+          on-canvas picture box both look like "the place to paste an
+          image" (near-identical "Paste (Ctrl+V) or browse" wording), but
+          they're two independent fields — this one sits behind the whole
+          slide, that one is the layout's own dedicated content image.
+          Reported as "I pasted via the side nav and the box on the page
+          didn't disappear" — the paste itself worked (it set THIS field,
+          confirmed in a real browser), the on-canvas box the user was
+          actually watching just isn't what this field controls. This
+          caption exists to head that off before it happens rather than to
+          fix a broken paste. */}
+      <p className="text-[10px] text-muted-foreground/60">
+        Behind the whole slide — separate from the picture in an Image left/right layout.
+      </p>
 
       <input ref={inputRef} type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
 
