@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { LogoutButton } from "@/components/logout-button";
@@ -15,6 +16,14 @@ const NAV_LINKS = [
 ];
 
 const COLLAPSED_STORAGE_KEY = "portal-sidebar-collapsed";
+
+// Matches exactly the course-player route (/portal/courses/:id`), not the
+// courses list (`/portal/courses`) itself — that's the one page meant to
+// feel like a full-screen presentation rather than a page alongside
+// navigation. A plain string-prefix check would also match the list page
+// (both start with "/portal/courses"), which is why this needs the extra
+// path segment.
+const COURSE_PLAYER_PATH = /^\/portal\/courses\/[^/]+\/?$/;
 
 // Client Component specifically for the collapse toggle's state — the rest
 // of portal/layout.tsx stays a Server Component that fetches the user.
@@ -51,7 +60,35 @@ export function PortalShell({
     }
   }
 
+  // The course player auto-collapses the sidebar (a presentation-mode-style
+  // "give the content the whole screen" request) WITHOUT touching the
+  // persisted `collapsed` preference above — leaving a course shouldn't
+  // leave every other portal page collapsed too, which is what writing to
+  // `collapsed`/localStorage here would do. `expandedOverride` is a plain,
+  // never-persisted "the viewer chose to expand it anyway, just for this
+  // page visit" escape hatch, reset every time the route itself changes
+  // (including navigating from one course to another) so re-entering a
+  // player always starts collapsed again. Reset during render (comparing
+  // against a stored previous pathname) rather than in a useEffect — same
+  // "adjust state during render" pattern this component already uses for
+  // appliedStoredValue above, this project's sanctioned alternative to a
+  // setState-in-an-effect for "reset this state when a prop/route changes."
+  const pathname = usePathname();
+  const isCoursePlayer = COURSE_PLAYER_PATH.test(pathname ?? "");
+  const [prevPathname, setPrevPathname] = useState(pathname);
+  const [expandedOverride, setExpandedOverride] = useState(false);
+  if (pathname !== prevPathname) {
+    setPrevPathname(pathname);
+    setExpandedOverride(false);
+  }
+
+  const effectiveCollapsed = isCoursePlayer ? !expandedOverride : collapsed;
+
   function toggle() {
+    if (isCoursePlayer) {
+      setExpandedOverride((prev) => !prev);
+      return;
+    }
     setCollapsed((prev) => {
       const next = !prev;
       try {
@@ -69,7 +106,7 @@ export function PortalShell({
         <aside
           className={cn(
             "h-full overflow-hidden border-r bg-muted/20 transition-[width] duration-200",
-            collapsed ? "w-0" : "w-56 p-4",
+            effectiveCollapsed ? "w-0" : "w-56 p-4",
           )}
         >
           {/* w-56 fixed, not w-full: collapsing animates THIS inner content's
@@ -95,15 +132,26 @@ export function PortalShell({
 
         {/* The "pop out and in again" tab — always visible regardless of
             collapse state, anchored to the sidebar's own right edge so it
-            moves along with it as it collapses/expands. */}
+            moves along with it as it collapses/expands. Sized well above the
+            old 40x16px pill (confirmed in a real browser to be genuinely
+            hard to spot, especially once collapsed and floating alone in an
+            otherwise-empty strip) and filled solid whenever the sidebar is
+            actually collapsed — that's the one moment this button is the
+            ONLY way back to the nav, so it earns the extra visual weight the
+            plain outline treatment doesn't give it. */}
         <button
           type="button"
           onClick={toggle}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="absolute top-1/2 right-0 z-10 flex h-10 w-4 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm hover:text-foreground"
+          aria-label={effectiveCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={effectiveCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className={cn(
+            "absolute top-1/2 right-0 z-10 flex h-16 w-7 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-full border shadow-md transition-colors",
+            effectiveCollapsed
+              ? "border-primary/40 bg-primary text-primary-foreground hover:bg-primary/90"
+              : "bg-background text-muted-foreground hover:text-foreground",
+          )}
         >
-          {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronLeft className="h-3.5 w-3.5" />}
+          {effectiveCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
         </button>
       </div>
 

@@ -37,25 +37,34 @@ export default async function PortalCoursePlayerPage({ params }: { params: Promi
 
   return (
     // No max-w cap here (unlike the other portal pages) — CoursePreviewViewer
-    // already caps its own stage at max-w-6xl and centers itself; capping
-    // this ancestor too, at a NARROWER width than the stage's fixed 960px
-    // canvas, is exactly what previously made the canvas overflow this
-    // column and visually bleed into the sidebar. See the fix's commit
-    // message for the full "960 > 896" arithmetic.
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <Link href="/portal/courses" className="text-sm text-muted-foreground hover:text-foreground">
-            ← Back to courses
-          </Link>
-          <h1 className="mt-1 text-2xl font-semibold">{course.name}</h1>
-        </div>
+    // already caps its own stage (via maxWidthClassName below) and centers
+    // itself; capping this ancestor too, at a NARROWER width than the
+    // stage's fixed 960px canvas, is exactly what previously made the canvas
+    // overflow this column and visually bleed into the sidebar. See the
+    // fix's commit message for the full "960 > 896" arithmetic. The sidebar
+    // itself also auto-collapses on this route (see portal-shell.tsx's
+    // COURSE_PLAYER_PATH) so this column gets the extra width to grow into
+    // in the first place.
+    <div className="space-y-3">
+      {/* Back link and title share one row (previously stacked, the title
+          on its own line below) purely to reclaim vertical space for this
+          page's much larger, presentation-style player — every pixel here
+          is a pixel the canvas below doesn't get. */}
+      <div className="flex items-center gap-3">
+        <Link
+          href="/portal/courses"
+          className="shrink-0 text-sm text-muted-foreground hover:text-foreground"
+        >
+          ← Back to courses
+        </Link>
+        <span className="text-muted-foreground/40">/</span>
+        <h1 className="truncate text-base font-semibold">{course.name}</h1>
       </div>
 
       {slides.length === 0 ? (
         <p className="text-sm text-muted-foreground">This course doesn&apos;t have any content yet.</p>
       ) : (
-        <CoursePreviewViewer slides={slides} />
+        <CoursePreviewViewer slides={slides} maxWidthClassName="max-w-[1600px]" />
       )}
     </div>
   );

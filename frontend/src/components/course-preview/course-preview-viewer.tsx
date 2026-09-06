@@ -11,6 +11,7 @@ import { SlideSelectionProvider } from "@/components/course-builder/slide-select
 import { Button } from "@/components/ui/button";
 import type { Slide } from "@/lib/course-types";
 import type { SlideInteractionResult } from "@/lib/slide-interaction";
+import { cn } from "@/lib/utils";
 
 export type PreviewSlide = { slide: Slide; lessonTitle: string };
 
@@ -66,7 +67,18 @@ function useStageScale() {
 // so a preview looks identical to the canvas, just non-interactive (except
 // for interactive slide types' own "present" mode behavior — see
 // onInteraction below).
-export function CoursePreviewViewer({ slides }: { slides: PreviewSlide[] }) {
+export function CoursePreviewViewer({
+  slides,
+  maxWidthClassName = "max-w-6xl",
+}: {
+  slides: PreviewSlide[];
+  // Overridable so the portal's course-player page (a deliberately
+  // full-screen, "presentation mode" experience — see portal/courses/[id]/
+  // page.tsx) can let the stage grow far larger than the admin preview
+  // tab's fixed-layout column, without changing that other, unrelated
+  // caller's sizing at all. Defaults to this component's original cap.
+  maxWidthClassName?: string;
+}) {
   const [currentIndex, setCurrentIndex] = useState(0);
 
   // Accumulates each interactive slide's result as the learner answers it,
@@ -144,8 +156,9 @@ export function CoursePreviewViewer({ slides }: { slides: PreviewSlide[] }) {
           <div className="mb-2 text-sm text-muted-foreground">{current.lessonTitle}</div>
 
           {/* The scaling container: sized purely by width (whatever its
-              non-flex block-level parent gives it, up to max-w-6xl), with
-              height LOCKED to that width via aspect-ratio — so there's no
+              non-flex block-level parent gives it, up to maxWidthClassName's
+              cap), with height LOCKED to that width via aspect-ratio — so
+              there's no
               dependency on some ancestor further up passing down an actual
               pixel height through a chain of flex/min-h-0 rules, which
               would be far more fragile to get right across two very
@@ -155,7 +168,7 @@ export function CoursePreviewViewer({ slides }: { slides: PreviewSlide[] }) {
               into the inner canvas's scale factor. */}
           <div
             ref={containerRef}
-            className="w-full max-w-6xl overflow-hidden rounded-lg bg-muted"
+            className={cn("w-full overflow-hidden rounded-lg bg-muted", maxWidthClassName)}
             style={{ aspectRatio: `${CANVAS_W} / ${CANVAS_H}` }}
           >
             <div
