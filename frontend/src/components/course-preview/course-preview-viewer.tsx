@@ -217,12 +217,29 @@ export function CoursePreviewViewer({
           {/* Running tally, not a full end-of-deck summary screen — shows once
               at least one interactive slide has been answered. Later stages
               (Missing Word, Match the Pair) need no changes here: they report
-              through the same onInteraction/results shape. */}
-          {answeredCount > 0 && (
-            <div className="mt-2 shrink-0 text-sm text-muted-foreground">
-              Score so far: {correctCount}/{answeredCount}
-            </div>
-          )}
+              through the same onInteraction/results shape.
+
+              Always rendered (never conditionally mounted) — this row sits
+              below the stage's own flex-1 min-h-0 region, so mounting it
+              only once an answer comes in used to shrink the stage's
+              available height right at that moment, and useStageScale
+              would immediately shrink the canvas to match: reported as the
+              page visibly "zooming out" the instant the last hotspot on a
+              hotspot_image slide got clicked (hotspot_image reports its
+              single completion event on the LAST click, unlike e.g.
+              multiple_choice's first-and-only click, which is why it read
+              as a "last press" bug specifically, though the same jump was
+              always latent for every interactive type). visibility:hidden
+              (not a conditional `&&`) keeps this row's height permanently
+              reserved whether or not there's a score to show, so the
+              stage's available height — and therefore its scale — never
+              changes mid-interaction. */}
+          <div
+            className="mt-2 shrink-0 text-sm text-muted-foreground"
+            style={{ visibility: answeredCount > 0 ? "visible" : "hidden" }}
+          >
+            Score so far: {correctCount}/{answeredCount}
+          </div>
 
           {/* mt-1 + size="xs" (was mt-4 + size="sm") trims this row's own
               footprint by about 20px total — a small, deliberate space
