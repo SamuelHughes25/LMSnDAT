@@ -166,12 +166,24 @@ export function PortalShell({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col">
-        <header className="flex shrink-0 items-center justify-between border-b p-4">
-          <div className="text-sm text-muted-foreground">
-            {displayName} <span className="capitalize">· {role}</span>
-          </div>
-          <LogoutButton />
-        </header>
+        {/* Hidden on the course player specifically — one more "give the
+            content the whole screen" request on top of the sidebar
+            auto-collapse above, and it's not just wasted space here: with
+            no header, `main` (already min-h-0 flex-1, the only remaining
+            item in this column) simply grows to fill the rest of the
+            column on its own, no extra sizing needed. It reappears the
+            moment the route stops matching COURSE_PLAYER_PATH — e.g.
+            clicking the player's own "Back to courses" link — since this
+            is the same isCoursePlayer check the effect above already
+            reacts to on every navigation. */}
+        {!isCoursePlayer && (
+          <header className="flex shrink-0 items-center justify-between border-b p-4">
+            <div className="text-sm text-muted-foreground">
+              {displayName} <span className="capitalize">· {role}</span>
+            </div>
+            <LogoutButton />
+          </header>
+        )}
         <main className="min-h-0 flex-1 overflow-y-auto bg-muted/30 p-6">{children}</main>
       </div>
     </div>

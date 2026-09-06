@@ -224,10 +224,16 @@ export function CoursePreviewViewer({
             </div>
           )}
 
-          <div className="mt-4 flex shrink-0 items-center gap-4">
+          {/* mt-1 + size="xs" (was mt-4 + size="sm") trims this row's own
+              footprint by about 20px total — a small, deliberate space
+              reclaim on top of the stage above already fitting the
+              remaining height, not something useStageScale accounts for
+              on its own (shrinking this row just leaves the stage a
+              little more room to grow into on the next measurement). */}
+          <div className="mt-1 flex shrink-0 items-center gap-4">
             <Button
               variant="outline"
-              size="sm"
+              size="xs"
               disabled={clampedIndex === 0}
               onClick={() => setCurrentIndex((i) => Math.max(0, i - 1))}
             >
@@ -239,7 +245,7 @@ export function CoursePreviewViewer({
             </span>
             <Button
               variant="outline"
-              size="sm"
+              size="xs"
               disabled={clampedIndex === slides.length - 1}
               onClick={() => setCurrentIndex((i) => Math.min(slides.length - 1, i + 1))}
             >
