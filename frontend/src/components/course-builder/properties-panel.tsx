@@ -185,6 +185,10 @@ function SlideProperties({
     setPendingLayout(layout);
   }
 
+  const isImageLayout =
+    slide.slide_type === "content" &&
+    (slide.config.layout === "image-left" || slide.config.layout === "image-right");
+
   return (
     <div className="space-y-4 p-4">
       <div>
@@ -240,23 +244,24 @@ function SlideProperties({
           ContentSlideLayout for why this lives here instead of being a
           layout option.
 
-          A previous version of this fix HID this section entirely on
-          "image-left"/"image-right", reasoning that those layouts already
-          have their own on-canvas picture box and a second "paste an
-          image" control was just confusing. That broke a real, wanted
-          capability instead: a slide can legitimately want BOTH a
-          background behind everything AND its own dedicated picture (e.g.
-          a subtle background texture behind an image-left layout) —
-          reported directly as "you can only input one image at a time...
-          the paste dropbox disappears" the moment a layout's own picture
-          was in use. Restored unconditionally; SlideBackgroundPanel's own
-          caption ("Behind the whole slide — separate from...") is the
-          fix for the original mix-up now, not removing the control. */}
-      <SlideBackgroundPanel
-        imageUrl={slide.config.background_image_url}
-        courseVersionId={courseVersionId}
-        onConfigChange={onConfigChange}
-      />
+          Hidden specifically for "image-left"/"image-right", the two
+          layouts that already have their OWN dedicated on-canvas picture
+          box: a caption here explaining the two fields are different
+          (an earlier attempt at this fix) wasn't enough — confirmed by a
+          real user hitting this exact mix-up again after it shipped, so
+          the actual fix is removing the second, redundant "paste an
+          image" control in the one situation where its near-identical
+          wording collides with a different, more obviously-the-one-you-
+          want box sitting right there in the canvas. Every other layout
+          has no on-canvas picture of its own, so this stays the only way
+          to add an image there. */}
+      {!isImageLayout && (
+        <SlideBackgroundPanel
+          imageUrl={slide.config.background_image_url}
+          courseVersionId={courseVersionId}
+          onConfigChange={onConfigChange}
+        />
+      )}
 
       <Button variant="outline" className="w-full text-destructive hover:text-destructive" onClick={onDelete}>
         <Trash2 className="mr-1.5 h-4 w-4" />
