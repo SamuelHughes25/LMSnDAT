@@ -241,16 +241,14 @@ export function CoursePreviewViewer({
             Score so far: {correctCount}/{answeredCount}
           </div>
 
-          {/* mt-0 + size="xs" (was mt-4 + size="sm", then mt-1 — trimmed
-              further after the page still felt cramped for room) keeps
-              this row's own footprint as small as it reasonably can be
-              without shrinking the buttons below "xs" (the smallest size
-              this app's Button component defines) — a small, deliberate
-              space reclaim on top of the stage above already fitting the
-              remaining height, not something useStageScale accounts for
-              on its own (shrinking this row just leaves the stage a
-              little more room to grow into on the next measurement). */}
-          <div className="mt-0 flex shrink-0 items-center gap-4">
+          {/* size="xs" (was "sm") keeps this row's own footprint small
+              without shrinking the buttons below the smallest size this
+              app's Button component defines. py-2 (replacing the earlier
+              plain mt-* margin) gives the row a real band of its own
+              vertical breathing room, with items-center centering the
+              buttons within that band instead of them sitting flush
+              against the very bottom of the page. */}
+          <div className="flex shrink-0 items-center gap-4 py-2">
             <Button
               variant="outline"
               size="xs"

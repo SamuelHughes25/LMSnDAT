@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { CoursePreviewViewer, type PreviewSlide } from "@/components/course-preview/course-preview-viewer";
+import { FullscreenToggle } from "@/components/course-preview/fullscreen-toggle";
 import { DjangoApiError, djangoFetch } from "@/lib/django";
 import type { Course, CourseVersion } from "@/lib/course-types";
 import type { Paginated } from "@/lib/types";
@@ -59,16 +60,24 @@ export default async function PortalCoursePlayerPage({ params }: { params: Promi
           is a pixel the canvas below doesn't get. gap-1 (was gap-3, and
           main's own padding around this whole page shrinks too — see
           portal-shell.tsx) for the same reason, trimmed further after the
-          page still felt cramped for room at gap-3. */}
-      <div className="flex shrink-0 items-center gap-3">
+          page still felt cramped for room at gap-3. py-2 (re-added after
+          trimming everything else down) gives this row its own small band
+          of vertical breathing room instead of sitting flush against the
+          very top of the page — items-center then genuinely centers the
+          link/title within that band rather than just within a
+          zero-height row. h1 is flex-1 (not just truncate on its own) so
+          it absorbs the row's remaining width, pushing FullscreenToggle to
+          the row's far right regardless of how long the course name is. */}
+      <div className="flex shrink-0 items-center gap-3 py-2">
         <Link
           href="/portal/courses"
           className="shrink-0 text-sm text-muted-foreground hover:text-foreground"
         >
           ← Back to courses
         </Link>
-        <span className="text-muted-foreground/40">/</span>
-        <h1 className="truncate text-base font-semibold">{course.name}</h1>
+        <span className="shrink-0 text-muted-foreground/40">/</span>
+        <h1 className="min-w-0 flex-1 truncate text-base font-semibold">{course.name}</h1>
+        <FullscreenToggle />
       </div>
 
       {slides.length === 0 ? (
