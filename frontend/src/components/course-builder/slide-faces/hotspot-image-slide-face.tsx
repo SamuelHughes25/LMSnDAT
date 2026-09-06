@@ -553,9 +553,6 @@ function HotspotImagePresent({
           );
         })}
       </div>
-      <div className="mt-2 text-sm font-medium text-muted-foreground">
-        {foundIds.size} of {hotspots.length} found
-      </div>
     </div>
   );
 }
