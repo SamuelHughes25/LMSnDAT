@@ -172,7 +172,7 @@ export function CoursePreviewViewer({
             one, so it's the one that absorbs whatever room is actually
             left after those two fixed-height rows. */}
         <div className="flex h-full w-full flex-col items-center">
-          <div className="mb-2 shrink-0 text-sm text-muted-foreground">{current.lessonTitle}</div>
+          <div className="mb-1 shrink-0 text-sm text-muted-foreground">{current.lessonTitle}</div>
 
           {/* The bounded region the stage fits itself into on BOTH axes —
               min-h-0 is required for a flex-1 item to be allowed to shrink
@@ -235,19 +235,22 @@ export function CoursePreviewViewer({
               stage's available height — and therefore its scale — never
               changes mid-interaction. */}
           <div
-            className="mt-2 shrink-0 text-sm text-muted-foreground"
+            className="mt-1 shrink-0 text-sm text-muted-foreground"
             style={{ visibility: answeredCount > 0 ? "visible" : "hidden" }}
           >
             Score so far: {correctCount}/{answeredCount}
           </div>
 
-          {/* mt-1 + size="xs" (was mt-4 + size="sm") trims this row's own
-              footprint by about 20px total — a small, deliberate space
-              reclaim on top of the stage above already fitting the
+          {/* mt-0 + size="xs" (was mt-4 + size="sm", then mt-1 — trimmed
+              further after the page still felt cramped for room) keeps
+              this row's own footprint as small as it reasonably can be
+              without shrinking the buttons below "xs" (the smallest size
+              this app's Button component defines) — a small, deliberate
+              space reclaim on top of the stage above already fitting the
               remaining height, not something useStageScale accounts for
               on its own (shrinking this row just leaves the stage a
               little more room to grow into on the next measurement). */}
-          <div className="mt-1 flex shrink-0 items-center gap-4">
+          <div className="mt-0 flex shrink-0 items-center gap-4">
             <Button
               variant="outline"
               size="xs"

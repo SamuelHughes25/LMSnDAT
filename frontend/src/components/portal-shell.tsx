@@ -184,7 +184,14 @@ export function PortalShell({
             <LogoutButton />
           </header>
         )}
-        <main className="min-h-0 flex-1 overflow-y-auto bg-muted/30 p-6">{children}</main>
+        {/* Padding shrinks to p-2 on the course player specifically — the
+            same "every pixel here is a pixel the canvas doesn't get"
+            reasoning as the header/title row inside the player page
+            itself. Every other portal page keeps the original p-6
+            breathing room; only the player is meant to feel edge-to-edge. */}
+        <main className={cn("min-h-0 flex-1 overflow-y-auto bg-muted/30", isCoursePlayer ? "p-2" : "p-6")}>
+          {children}
+        </main>
       </div>
     </div>
   );

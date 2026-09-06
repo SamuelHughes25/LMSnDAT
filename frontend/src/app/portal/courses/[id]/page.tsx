@@ -52,11 +52,14 @@ export default async function PortalCoursePlayerPage({ params }: { params: Promi
     // instead of the canvas dictating its own height from width alone and
     // pushing the Previous/Next controls below the fold — confirmed in a
     // real browser to require a page scroll before this fix.
-    <div className="flex h-full flex-col gap-3">
+    <div className="flex h-full flex-col gap-1">
       {/* Back link and title share one row (previously stacked, the title
           on its own line below) purely to reclaim vertical space for this
           page's much larger, presentation-style player — every pixel here
-          is a pixel the canvas below doesn't get. */}
+          is a pixel the canvas below doesn't get. gap-1 (was gap-3, and
+          main's own padding around this whole page shrinks too — see
+          portal-shell.tsx) for the same reason, trimmed further after the
+          page still felt cramped for room at gap-3. */}
       <div className="flex shrink-0 items-center gap-3">
         <Link
           href="/portal/courses"
