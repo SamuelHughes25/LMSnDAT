@@ -532,8 +532,23 @@ function HotspotImagePresent({
               className="absolute z-20 w-56 rounded-lg border border-border bg-white p-3 shadow-lg"
               style={{ left: `${hotspot.xPct}%`, top: `${hotspot.yPct}%`, transform: "translate(-50%, 14px)" }}
             >
-              <div className="font-semibold">{hotspot.label || "—"}</div>
-              {hotspot.description && <div className="mt-1 text-sm text-muted-foreground">{hotspot.description}</div>}
+              {/* break-words (overflow-wrap: break-word): the card's width
+                  is fixed (w-56) but its height was already auto — a plain
+                  block box with no explicit height grows to fit its
+                  content's wrapped line count on its own. The actual bug
+                  was purely horizontal: a label/description with no
+                  natural break point (one long unbroken word, e.g. a long
+                  identifier or URL) has nowhere to wrap under the default
+                  overflow-wrap, so it just ran past the card's own right
+                  edge instead — confirmed in a real browser (388px of
+                  content inside a 223px box). break-words forces even an
+                  unbroken run of characters to wrap at the box's own edge,
+                  which is what actually keeps text "contained," not
+                  anything about height. */}
+              <div className="font-semibold break-words">{hotspot.label || "—"}</div>
+              {hotspot.description && (
+                <div className="mt-1 text-sm break-words text-muted-foreground">{hotspot.description}</div>
+              )}
             </div>
           );
         })}
