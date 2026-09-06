@@ -4,7 +4,8 @@ import { ImagePlus, Loader2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { SlideConfig } from "@/lib/course-types";
-import { useImageUpload } from "./slide-faces/image-shared";
+import { CANVAS_H, CANVAS_W } from "./slide-canvas";
+import { computeContainedSizePct, loadNaturalSize, useImageUpload } from "./slide-faces/image-shared";
 
 // The "Edit" section of the properties panel — settings that apply to
 // *any* slide, regardless of slide_type or (for content slides) layout.
@@ -30,8 +31,36 @@ export function SlideBackgroundPanel({
   courseVersionId: string | undefined;
   onConfigChange: (config: Partial<SlideConfig>) => void;
 }) {
-  const { uploading, error, inputRef, handleFileChange, handlePaste } = useImageUpload(courseVersionId, (value) =>
-    onConfigChange({ background_image_url: value }),
+  // Sizes a fresh background upload to its own aspect ratio (fit within
+  // the fixed 960x540 canvas, same "contain" math image-field.tsx's own
+  // upload path uses) instead of leaving it at the default 100%x100% —
+  // full-canvas — box every background starts at until resized, which
+  // object-fit: fill then stretches to match, distorting anything that
+  // isn't already a 16:9 photo. No DOM measurement needed here (unlike
+  // image-field.tsx): the background's container is always the whole
+  // canvas, a known constant, not a flex-allocated box that varies by
+  // layout.
+  async function handleUploadedUrl(url: string | null) {
+    if (!url) {
+      onConfigChange({ background_image_url: null });
+      return;
+    }
+    const naturalSize = await loadNaturalSize(url);
+    if (naturalSize) {
+      const sized = computeContainedSizePct(naturalSize.width, naturalSize.height, CANVAS_W, CANVAS_H);
+      onConfigChange({
+        background_image_url: url,
+        background_image_width_pct: sized.widthPct,
+        background_image_height_pct: sized.heightPct,
+      });
+      return;
+    }
+    onConfigChange({ background_image_url: url });
+  }
+
+  const { uploading, error, inputRef, handleFileChange, handlePaste } = useImageUpload(
+    courseVersionId,
+    handleUploadedUrl,
   );
 
   return (

@@ -8,7 +8,9 @@ import { cn } from "@/lib/utils";
 import {
   DEFAULT_SIZE_PCT,
   ResizeHandles,
+  computeContainedSizePct,
   imageBoxStyle,
+  loadNaturalSize,
   useImageUpload,
 } from "./image-shared";
 import type { SlideFaceProps } from "./index";
@@ -81,8 +83,39 @@ function ImageUploadField({
   onResize: (widthPct: number, heightPct: number) => void;
   className?: string;
 }) {
-  const { uploading, error, inputRef, handleFileChange, handlePaste } = useImageUpload(courseVersionId, onCommit);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Wraps onCommit so a fresh upload also sizes the box to the image's own
+  // proportions, instead of leaving it at whatever widthPct/heightPct was
+  // already in effect (DEFAULT_SIZE_PCT — 100%x100% — for a brand-new,
+  // never-resized box) — reported as pasted images coming in stretched to
+  // fill the box rather than shaped like the actual photo. Measures the
+  // container's CURRENT rect (its full flex-allocated space for a fresh
+  // upload; whatever footprint an existing image already occupies for a
+  // Replace) before the image swaps in, so the new box fits within
+  // whatever space was actually available rather than some other fixed
+  // reference. Falls back to leaving size untouched if either measurement
+  // comes back empty (e.g. the image failed to load) — a fresh upload
+  // then keeps today's DEFAULT_SIZE_PCT behavior rather than sizing to
+  // nothing.
+  async function handleUploadedUrl(url: string | null) {
+    if (!url) {
+      onCommit(null);
+      return;
+    }
+    const rect = containerRef.current?.getBoundingClientRect();
+    const naturalSize = await loadNaturalSize(url);
+    if (rect && naturalSize && rect.width > 0 && rect.height > 0) {
+      const sized = computeContainedSizePct(naturalSize.width, naturalSize.height, rect.width, rect.height);
+      onResize(sized.widthPct, sized.heightPct);
+    }
+    onCommit(url);
+  }
+
+  const { uploading, error, inputRef, handleFileChange, handlePaste } = useImageUpload(
+    courseVersionId,
+    handleUploadedUrl,
+  );
 
   // Claims focus the moment an empty box like this one first appears (e.g.
   // switching the properties panel's layout picker to "Image left"/"Image

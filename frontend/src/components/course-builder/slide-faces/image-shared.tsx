@@ -34,6 +34,54 @@ export function clampPositionPct(v: number): number {
   return Math.min(100, Math.max(0, v));
 }
 
+// Computes a widthPct/heightPct pair that reproduces an image's own
+// natural aspect ratio, scaled to fit entirely within a container of the
+// given pixel dimensions without exceeding either axis — the same "fit
+// without cropping" math CSS `object-fit: contain` does for an image
+// inside an already-sized box, just applied to size the BOX itself.
+// Used once, right when an image is uploaded/pasted, so a fresh image
+// starts at its own natural shape instead of a stretched 100%x100%
+// square (every image box here defaults to DEFAULT_SIZE_PCT on both axes
+// until explicitly resized, and every <img> uses object-fit: fill, which
+// stretches to whatever shape the box is — correct once a box has a
+// deliberate shape, but wrong as the STARTING shape). Manual resizing via
+// ResizeHandles can still distort the box afterward if the author drags
+// it that way — that's an existing, separate, wanted feature (see this
+// file's own HANDLES/ResizeHandles comment); this only fixes what a
+// brand-new upload looks like before any resize has happened.
+export function computeContainedSizePct(
+  naturalWidth: number,
+  naturalHeight: number,
+  containerWidthPx: number,
+  containerHeightPx: number,
+): { widthPct: number; heightPct: number } {
+  if (!naturalWidth || !naturalHeight || !containerWidthPx || !containerHeightPx) {
+    return { widthPct: DEFAULT_SIZE_PCT, heightPct: DEFAULT_SIZE_PCT };
+  }
+  const containerRatio = containerWidthPx / containerHeightPx;
+  const imageRatio = naturalWidth / naturalHeight;
+  if (imageRatio > containerRatio) {
+    // Relatively wider than the container: fill the width, shrink the height.
+    return { widthPct: DEFAULT_SIZE_PCT, heightPct: clampSizePct((containerRatio / imageRatio) * DEFAULT_SIZE_PCT) };
+  }
+  // Relatively taller than (or equal to) the container: fill the height, shrink the width.
+  return { widthPct: clampSizePct((imageRatio / containerRatio) * DEFAULT_SIZE_PCT), heightPct: DEFAULT_SIZE_PCT };
+}
+
+// Loads `url` just far enough to read its natural pixel dimensions —
+// resolves null if the image fails to load (a corrupt file, or a
+// network hiccup fetching the just-uploaded asset back) rather than
+// rejecting, since callers treat "couldn't measure it" as "fall back to
+// the default size," not a hard error worth surfacing to the author.
+export function loadNaturalSize(url: string): Promise<{ width: number; height: number } | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
 // The picture's box is centered on (xPct, yPct) via `top/left: X%` +
 // `translate(-50%, -50%)` — a CSS anchor, not something computed in JS — so
 // changing width/height can never move the center point: the box grows or
