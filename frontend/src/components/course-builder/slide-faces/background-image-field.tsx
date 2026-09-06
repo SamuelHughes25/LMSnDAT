@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Move } from "lucide-react";
 
+import type { ExtraImage } from "@/lib/course-types";
 import { useSlideSelection } from "../slide-selection-context";
 import {
   DEFAULT_POSITION_PCT,
@@ -95,7 +96,7 @@ export function SlideBackgroundLayer({
   return (
     <BackgroundImageEditLayer
       value={value}
-      slideId={slideId}
+      selectionId={`${slideId}:${BACKGROUND_IMAGE_SELECTION_SUFFIX}`}
       xPct={x}
       yPct={y}
       widthPct={w}
@@ -104,6 +105,71 @@ export function SlideBackgroundLayer({
       containerRef={containerRef}
       overlayRef={overlayRef}
     />
+  );
+}
+
+// A slide's ADDITIONAL free-floating images (config.extra_images) beyond
+// the one above — same rendering, same drag/resize behavior, just mapped
+// over a list instead of a single value. A sibling export rather than a
+// mode flag on SlideBackgroundLayer: that component's whole signature is
+// built around exactly one image's flat props, and bolting a list onto it
+// would mean every caller branching on "is this the single background or
+// the list" internally — cleaner for each call site to invoke both
+// layers side by side (see slide-canvas.tsx/slide-thumbnail.tsx/
+// course-preview-viewer.tsx) than to merge them into one do-everything
+// component.
+export function ExtraImagesLayer({
+  images,
+  mode,
+  slideId,
+  onTransform,
+  containerRef,
+  overlayRef,
+}: {
+  images: ExtraImage[];
+  mode: "edit" | "static" | "present";
+  slideId?: string;
+  // Which image changed is identified by its own `id`, not an index — see
+  // ExtraImage's own comment in course-types.ts for why.
+  onTransform?: (id: string, t: { xPct: number; yPct: number; widthPct: number; heightPct: number }) => void;
+  containerRef?: React.RefObject<HTMLElement | null>;
+  overlayRef?: React.RefObject<HTMLElement | null>;
+}) {
+  if (images.length === 0) return null;
+
+  if (mode !== "edit" || !onTransform || !containerRef || !overlayRef || !slideId) {
+    return (
+      <>
+        {images.map((image) => (
+          <BackgroundImagePixels
+            key={image.id}
+            value={image.url}
+            xPct={image.xPct}
+            yPct={image.yPct}
+            widthPct={image.widthPct}
+            heightPct={image.heightPct}
+          />
+        ))}
+      </>
+    );
+  }
+  return (
+    <>
+      {images.map((image) => (
+        <BackgroundImageEditLayer
+          key={image.id}
+          value={image.url}
+          selectionId={`${slideId}:extra-image:${image.id}`}
+          xPct={image.xPct}
+          yPct={image.yPct}
+          widthPct={image.widthPct}
+          heightPct={image.heightPct}
+          onTransform={(t) => onTransform(image.id, t)}
+          containerRef={containerRef}
+          overlayRef={overlayRef}
+        />
+      ))}
+    </>
   );
 }
 
@@ -132,7 +198,7 @@ function BackgroundImagePixels({
 
 function BackgroundImageEditLayer({
   value,
-  slideId,
+  selectionId,
   xPct,
   yPct,
   widthPct,
@@ -142,7 +208,12 @@ function BackgroundImageEditLayer({
   overlayRef,
 }: {
   value: string;
-  slideId: string;
+  // Identifies this specific image in the shared slide-selection-context —
+  // the single background image and each extra image all pass their own
+  // unique id here (see SlideBackgroundLayer/ExtraImagesLayer above), so
+  // this component itself doesn't need to know or care which kind of
+  // image it's rendering controls for.
+  selectionId: string;
   xPct: number;
   yPct: number;
   widthPct: number;
@@ -201,7 +272,6 @@ function BackgroundImageEditLayer({
   // its own. Sharing one slot means selecting the image here automatically
   // clears any other box's own isSelected, and vice versa, without either
   // side needing to know the other exists.
-  const selectionId = `${slideId}:${BACKGROUND_IMAGE_SELECTION_SUFFIX}`;
   const { selectedId, select, deselect } = useSlideSelection();
   const isSelected = selectedId === selectionId;
   const frameRef = useRef<HTMLDivElement>(null);

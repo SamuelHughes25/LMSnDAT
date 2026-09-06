@@ -258,6 +258,7 @@ function SlideProperties({
       {!isImageLayout && (
         <SlideBackgroundPanel
           imageUrl={slide.config.background_image_url}
+          extraImages={slide.config.extra_images ?? []}
           courseVersionId={courseVersionId}
           onConfigChange={onConfigChange}
         />

@@ -232,6 +232,41 @@ class SlideSerializer(serializers.ModelSerializer):
                             {'config': 'each hotspot must have a "label" string.'}
                         )
 
+        # Cross-cutting, not slide_type-gated — same as background_image_url
+        # and its *_pct siblings (see course-types.ts's own comment on why
+        # this is a separate field rather than folding background_image_url
+        # into it as "item 0"), so this validates unconditionally rather
+        # than inside the if/elif chain above. Every other list-of-objects
+        # config in this method (accordion's sections, hotspot's hotspots,
+        # etc.) gets structural validation even under the same lenient
+        # progressive-authoring rules, so this follows suit rather than
+        # leaving a brand-new list field completely unchecked.
+        extra_images = config.get('extra_images')
+        if extra_images is not None and not isinstance(extra_images, list):
+            raise serializers.ValidationError({'config': '"extra_images" must be a list.'})
+        if extra_images:
+            if len(extra_images) > 8:
+                raise serializers.ValidationError(
+                    {'config': 'a slide allows at most 8 extra images.'}
+                )
+            for image in extra_images:
+                if not isinstance(image, dict):
+                    raise serializers.ValidationError({'config': 'each extra image must be an object.'})
+                if not isinstance(image.get('id'), str) or not image.get('id'):
+                    raise serializers.ValidationError(
+                        {'config': 'each extra image must have a non-empty "id" string.'}
+                    )
+                if not isinstance(image.get('url'), str) or not image.get('url'):
+                    raise serializers.ValidationError(
+                        {'config': 'each extra image must have a non-empty "url" string.'}
+                    )
+                for field in ('xPct', 'yPct', 'widthPct', 'heightPct'):
+                    value = image.get(field)
+                    if not isinstance(value, (int, float)) or isinstance(value, bool):
+                        raise serializers.ValidationError(
+                            {'config': f'each extra image must have a numeric "{field}".'}
+                        )
+
         return attrs
 
 

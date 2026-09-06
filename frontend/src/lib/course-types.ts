@@ -192,6 +192,14 @@ export type BoxTransform = {
   heightPct: number;
 };
 
+// One of a slide's "extra images" (config.extra_images) — a free-floating,
+// draggable/resizable image beyond the single background_image_url, same
+// BoxTransform shape the background image and box_transforms already use.
+export type ExtraImage = BoxTransform & {
+  id: string;
+  url: string;
+};
+
 // Type-specific slide content. The "content" and "multiple_choice"
 // slide_types' shapes are modeled concretely so far; the index signature
 // keeps this open for the other slide_types' config shapes (blanks, pairs,
@@ -260,6 +268,22 @@ export type SlideConfig = {
   background_image_y_pct?: number;
   background_image_width_pct?: number;
   background_image_height_pct?: number;
+  // Additional free-floating images beyond the one above — same shape,
+  // same drag/resize behavior, just N of them instead of exactly one.
+  // Kept as a SEPARATE array rather than folding background_image_url
+  // into it as "item 0": this app is treated as production software with
+  // real authored content already using background_image_url (see
+  // docs/PROJECT_LOG.md's "internal Mitti-replacement" framing) —
+  // migrating existing slides' data into a new shape for a purely
+  // additive feature (going from exactly one image to "one or more") is
+  // a real risk for zero benefit, when leaving the original field alone
+  // and adding a second one for the *extra* images does the same job.
+  // Each entry needs its own stable `id` (not just an array index) for
+  // the same reason every other list-of-objects config in this app has
+  // one (match_pairs' pairs, hotspot_image's hotspots, etc.): a
+  // selection id and a React key both need something that survives
+  // reordering/removal of OTHER entries, which an index doesn't.
+  extra_images?: ExtraImage[];
   // Per-field free-position override for this slide's own text boxes
   // (title/subtitle/body/body2) — see slide-faces/positionable-box.tsx.
   // Deliberately independent of background_image_*: a text box being

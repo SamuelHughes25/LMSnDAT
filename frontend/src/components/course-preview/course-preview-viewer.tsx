@@ -6,7 +6,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { ActiveEditorProvider } from "@/components/course-builder/active-editor-context";
 import { CANVAS_H, CANVAS_W } from "@/components/course-builder/slide-canvas";
 import { SLIDE_TYPE_FACES } from "@/components/course-builder/slide-faces";
-import { SlideBackgroundLayer } from "@/components/course-builder/slide-faces/background-image-field";
+import { ExtraImagesLayer, SlideBackgroundLayer } from "@/components/course-builder/slide-faces/background-image-field";
 import { SlideSelectionProvider } from "@/components/course-builder/slide-selection-context";
 import { Button } from "@/components/ui/button";
 import type { Slide } from "@/lib/course-types";
@@ -170,6 +170,7 @@ export function CoursePreviewViewer({ slides }: { slides: PreviewSlide[] }) {
                 widthPct={current.slide.config.background_image_width_pct}
                 heightPct={current.slide.config.background_image_height_pct}
               />
+              <ExtraImagesLayer images={current.slide.config.extra_images ?? []} mode="present" />
               <div className="relative z-10 h-full w-full">
                 <Face key={current.slide.id} slide={current.slide} mode="present" onInteraction={handleInteraction} />
               </div>

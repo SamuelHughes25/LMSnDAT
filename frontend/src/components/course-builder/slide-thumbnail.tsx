@@ -8,7 +8,7 @@ import type { Slide } from "@/lib/course-types";
 import { cn } from "@/lib/utils";
 import { CANVAS_H, CANVAS_W } from "./slide-canvas";
 import { SLIDE_TYPE_FACES } from "./slide-faces";
-import { SlideBackgroundLayer } from "./slide-faces/background-image-field";
+import { ExtraImagesLayer, SlideBackgroundLayer } from "./slide-faces/background-image-field";
 
 // Fixed pixel size, exactly 16:9 (matches CANVAS_W/CANVAS_H's ratio).
 const THUMB_W = 160;
@@ -85,6 +85,7 @@ export function SlideThumbnail({
               widthPct={slide.config.background_image_width_pct}
               heightPct={slide.config.background_image_height_pct}
             />
+            <ExtraImagesLayer images={slide.config.extra_images ?? []} mode="static" />
             <div className="relative z-10 h-full w-full">
               <Face slide={slide} mode="static" />
             </div>

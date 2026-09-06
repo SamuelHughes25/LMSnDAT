@@ -3,7 +3,7 @@
 import { useRef } from "react";
 
 import type { Slide, SlideConfig } from "@/lib/course-types";
-import { SlideBackgroundLayer } from "./slide-faces/background-image-field";
+import { ExtraImagesLayer, SlideBackgroundLayer } from "./slide-faces/background-image-field";
 import { SLIDE_TYPE_FACES } from "./slide-faces";
 
 // Fixed 16:9 canvas size in pixels. Exported so slide-thumbnail.tsx can
@@ -75,6 +75,20 @@ export function SlideCanvas({
                   background_image_y_pct: yPct,
                   background_image_width_pct: widthPct,
                   background_image_height_pct: heightPct,
+                })
+              }
+              containerRef={slideRef}
+              overlayRef={overlayRef}
+            />
+            <ExtraImagesLayer
+              images={slide.config.extra_images ?? []}
+              mode="edit"
+              slideId={slide.id}
+              onTransform={(id, t) =>
+                onConfigChange({
+                  extra_images: (slide.config.extra_images ?? []).map((img) =>
+                    img.id === id ? { ...img, ...t } : img,
+                  ),
                 })
               }
               containerRef={slideRef}
