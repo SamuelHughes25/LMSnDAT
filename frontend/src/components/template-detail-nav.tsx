@@ -17,6 +17,7 @@ export function TemplateDetailNav({ templateId }: { templateId: string }) {
     { href: base, label: "Overview" },
     { href: `${base}/preview`, label: "Preview" },
     { href: `${base}/members`, label: "Members" },
+    { href: `${base}/roles`, label: "Roles" },
     { href: `${base}/settings`, label: "Settings" },
     { href: `${base}/activity`, label: "Activity" },
     { href: `${base}/analytics`, label: "Analytics" },

@@ -10,6 +10,8 @@ const NAV_LINKS = [
   { href: "/", label: "Dashboard" },
   { href: "/templates", label: "Templates" },
   { href: "/courses", label: "Courses" },
+  { href: "/users", label: "Users" },
+  { href: "/roles", label: "Roles" },
 ];
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
