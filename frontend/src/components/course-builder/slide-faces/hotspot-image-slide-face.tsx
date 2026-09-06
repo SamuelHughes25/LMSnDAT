@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ImagePlus, Loader2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -451,6 +451,29 @@ function HotspotImagePresent({
   const [openId, setOpenId] = useState<string | null>(null);
   const [reported, setReported] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const imageContainerRef = useRef<HTMLDivElement>(null);
+
+  // A pin near the bottom of the image had its popup (which opens BELOW
+  // the pin by default) pushed past the bottom of the visible slide —
+  // reported directly as "we cannot see them when popped up." Measured
+  // rather than guessed from yPct: the card's height varies with however
+  // much label/description text it holds (see the break-words fix above),
+  // so a fixed percentage threshold couldn't reliably predict overflow for
+  // every card. useLayoutEffect (not useEffect) re-measures synchronously
+  // after the DOM commits but before the browser paints, so flipping up
+  // never produces a visible "pops in below, then jumps above" flash —
+  // whatever this decides is what actually gets painted. Re-runs on every
+  // openId change (including opening a different pin while flipUp is
+  // already true from a previous one), always starting from a fresh
+  // measurement rather than trusting the previous pin's answer.
+  const [flipUp, setFlipUp] = useState(false);
+  useLayoutEffect(() => {
+    if (!openId) return;
+    const panel = panelRef.current;
+    const container = imageContainerRef.current;
+    if (!panel || !container) return;
+    setFlipUp(panel.getBoundingClientRect().bottom > container.getBoundingClientRect().bottom);
+  }, [openId]);
 
   // In an actual presentation, clicking a pin again (or a different pin)
   // isn't the only realistic way someone tries to dismiss a popup — they
@@ -509,7 +532,7 @@ function HotspotImagePresent({
 
   return (
     <div className="flex h-full w-full flex-col px-16 py-12 text-foreground">
-      <div className="relative min-h-0 flex-1 rounded-md">
+      <div ref={imageContainerRef} className="relative min-h-0 flex-1 rounded-md">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={imageUrl} alt="" className="h-full w-full rounded-md object-contain" />
         {hotspots.map((hotspot, index) => (
@@ -530,7 +553,16 @@ function HotspotImagePresent({
               key={hotspot.id}
               ref={panelRef}
               className="absolute z-20 w-56 rounded-lg border border-border bg-white p-3 shadow-lg"
-              style={{ left: `${hotspot.xPct}%`, top: `${hotspot.yPct}%`, transform: "translate(-50%, 14px)" }}
+              style={{
+                left: `${hotspot.xPct}%`,
+                top: `${hotspot.yPct}%`,
+                // Flipped: the card's BOTTOM edge sits 14px above the pin
+                // instead of its top sitting 14px below — same 14px gap,
+                // mirrored, so a pin near the bottom of the image gets a
+                // popup that opens upward into the room that's actually
+                // there instead of downward into room that isn't.
+                transform: flipUp ? "translate(-50%, calc(-100% - 14px))" : "translate(-50%, 14px)",
+              }}
             >
               {/* break-words (overflow-wrap: break-word): the card's width
                   is fixed (w-56) but its height was already auto — a plain
