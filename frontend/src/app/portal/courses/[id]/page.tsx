@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { CoursePreviewViewer, type PreviewSlide } from "@/components/course-preview/course-preview-viewer";
-import { FullscreenToggle } from "@/components/course-preview/fullscreen-toggle";
+import { FullscreenToggle } from "@/components/fullscreen-toggle";
 import { DjangoApiError, djangoFetch } from "@/lib/django";
 import type { Course, CourseVersion } from "@/lib/course-types";
 import type { Paginated } from "@/lib/types";

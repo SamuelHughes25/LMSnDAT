@@ -189,7 +189,7 @@ export function CoursePreviewViewer({
             >
               <div className="flex h-full w-full items-center justify-center">
                 <div
-                  className="relative overflow-hidden rounded-sm bg-white shadow-lg"
+                  className="slide-surface relative overflow-hidden rounded-sm bg-white shadow-lg"
                   style={{ width: CANVAS_W, height: CANVAS_H, zoom: scale }}
                 >
                   <SlideBackgroundLayer

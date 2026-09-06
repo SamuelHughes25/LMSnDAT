@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { FullscreenToggle } from "@/components/fullscreen-toggle";
 import { LogoutButton } from "@/components/logout-button";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { getCurrentUser } from "@/lib/dal";
 
 const NAV_LINKS = [
@@ -51,7 +53,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
           <div className="text-sm text-muted-foreground">
             {user.username} <span className="capitalize">· {user.role}</span>
           </div>
-          <LogoutButton />
+          <div className="flex items-center gap-2">
+            <FullscreenToggle />
+            <ThemeToggle />
+            <LogoutButton />
+          </div>
         </header>
         <main className="min-h-0 flex-1 overflow-y-auto bg-muted/30 p-6">{children}</main>
       </div>

@@ -117,6 +117,39 @@
   --sidebar-ring: oklch(0.556 0 0);
 }
 
+/* A slide's own rendered surface (the fixed-size, always-white "page" box
+   in slide-canvas.tsx/slide-thumbnail.tsx/course-preview-viewer.tsx) must
+   stay light regardless of the app's own dark/light chrome theme — it's
+   authored/presented content meant to look the same printed page either
+   way, not part of the app's UI. Every slide face's text uses the same
+   semantic classes as the rest of the app (text-foreground, bg-muted,
+   border-border, etc. — see e.g. content-slide-face.tsx), which is
+   exactly the problem once .dark is active anywhere above this: those
+   variables would otherwise flip to their dark values (near-white text)
+   and render illegibly on the slide's own bg-white background. Re-declares
+   the exact :root values here so nothing inside a `.slide-surface`
+   ever reacts to an ancestor `.dark` class, however deep it's nested. */
+.slide-surface {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

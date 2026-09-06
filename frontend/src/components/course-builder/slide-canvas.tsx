@@ -57,7 +57,10 @@ export function SlideCanvas({
               since this div is sized/positioned identically to its parent
               (absolute inset-0 inside a div with no padding/border of its
               own) — measuring against either gives the same numbers. */}
-          <div ref={slideRef} className="absolute inset-0 overflow-hidden rounded-sm bg-white shadow-lg">
+          <div
+            ref={slideRef}
+            className="slide-surface absolute inset-0 overflow-hidden rounded-sm bg-white shadow-lg"
+          >
             {/* Renders nothing at all if no background image is set — see
                 background-image-field.tsx. z-0 pixels; the Face below sits
                 at z-10, above them. */}

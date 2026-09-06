@@ -5,7 +5,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
+import { FullscreenToggle } from "@/components/fullscreen-toggle";
 import { LogoutButton } from "@/components/logout-button";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { useIsClient } from "@/lib/use-is-client";
 import { cn } from "@/lib/utils";
 
@@ -181,7 +183,11 @@ export function PortalShell({
             <div className="text-sm text-muted-foreground">
               {displayName} <span className="capitalize">· {role}</span>
             </div>
-            <LogoutButton />
+            <div className="flex items-center gap-2">
+              <FullscreenToggle />
+              <ThemeToggle />
+              <LogoutButton />
+            </div>
           </header>
         )}
         {/* Padding shrinks to p-2 on the course player specifically — the

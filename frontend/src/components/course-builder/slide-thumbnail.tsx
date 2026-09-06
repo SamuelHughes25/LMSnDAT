@@ -62,7 +62,10 @@ export function SlideThumbnail({
         {/* Fixed-size, overflow-hidden viewport. The face renders at full
             canvas pixel size inside and is scaled down via CSS transform —
             a true miniature, not a separate simplified thumbnail renderer. */}
-        <div style={{ width: THUMB_W, height: THUMB_H, overflow: "hidden", position: "relative" }} className="rounded bg-white">
+        <div
+          style={{ width: THUMB_W, height: THUMB_H, overflow: "hidden", position: "relative" }}
+          className="slide-surface rounded bg-white"
+        >
           <div
             style={{
               width: CANVAS_W,

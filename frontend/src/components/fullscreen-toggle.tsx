@@ -9,12 +9,17 @@ import { Button } from "@/components/ui/button";
 // this component's own container — that's the part of "give the page more
 // room" no amount of internal padding/margin trimming could ever reach,
 // since it hides the browser's own chrome (address bar, tabs) too. Once
-// fullscreen, CoursePreviewViewer's existing useStageScale picks up the
-// extra height on its next ResizeObserver tick and grows the canvas to
-// match on its own — no extra plumbing needed here beyond the toggle
-// itself and tracking whether we're currently fullscreen (for the
-// icon/label, and so a browser-native Escape-to-exit is reflected too,
-// not just clicks on this button).
+// fullscreen, CoursePreviewViewer's existing useStageScale (for the course
+// player specifically) picks up the extra height on its next
+// ResizeObserver tick and grows the canvas to match on its own — no extra
+// plumbing needed here beyond the toggle itself and tracking whether we're
+// currently fullscreen (for the icon/label, and so a browser-native
+// Escape-to-exit is reflected too, not just clicks on this button).
+//
+// Generic — not course-preview-specific despite where it was first added
+// — so it's reused as-is in every app header (portal-shell.tsx,
+// (dashboard)/layout.tsx) next to the Log out button, not just the course
+// player's own header row.
 export function FullscreenToggle() {
   const [isFullscreen, setIsFullscreen] = useState(false);
 
