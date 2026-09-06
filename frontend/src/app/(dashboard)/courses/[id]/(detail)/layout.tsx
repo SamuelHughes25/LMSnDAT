@@ -28,23 +28,38 @@ export default async function CourseDetailLayout({
   }
 
   return (
-    <div>
+    // h-full flex column (not the previous plain block div): gives the
+    // content row below a genuine, bounded remaining height to hand to
+    // `self-stretch` — most of the four tabs sharing this layout
+    // (settings/members/activity/analytics) never needed that, they're
+    // fine with their own natural height and `main`'s own overflow-y-auto
+    // scrolling if they ever run long, same as before. The preview tab is
+    // the one that needs a real ceiling to fit its canvas under instead of
+    // pushing its own Next/Previous controls off-screen — see
+    // course-preview-viewer.tsx's useStageScale.
+    <div className="flex h-full flex-col">
       <Link
         href="/courses"
-        className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        className="mb-3 inline-flex shrink-0 items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
       >
         <ArrowLeft className="h-3.5 w-3.5" />
         Back to courses
       </Link>
 
-      <div className="mb-6">
+      <div className="mb-6 shrink-0">
         <h1 className="text-2xl font-semibold">{course.name}</h1>
         {course.description && <p className="mt-1 text-muted-foreground">{course.description}</p>}
       </div>
 
-      <div className="flex items-start gap-6">
+      <div className="flex min-h-0 flex-1 items-start gap-6">
         <CourseDetailNav courseId={id} />
-        <div className="min-w-0 flex-1">{children}</div>
+        {/* self-stretch (not items-start's default for this one child):
+            gives {children} the row's full available height so a
+            height-fitting tab (preview) has something real to measure,
+            while CourseDetailNav next to it stays at the row's top,
+            unaffected — align-self overrides the row's own items-start
+            for just this one item. */}
+        <div className="min-h-0 min-w-0 flex-1 self-stretch">{children}</div>
       </div>
     </div>
   );

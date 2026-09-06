@@ -17,17 +17,24 @@ export type PreviewSlide = { slide: Slide; lessonTitle: string };
 
 // Scales the fixed 960x540 canvas (CANVAS_W/CANVAS_H — the same coordinate
 // system the builder itself uses, so every slide face's percentage-based
-// positioning renders identically here) up or down to fill however much
-// width its container actually has, same technique slide-thumbnail.tsx
-// already uses to shrink a canvas DOWN to a 160px thumbnail — just measured
-// live via ResizeObserver instead of a fixed constant, since here the
-// available space varies (a wide admin preview pane vs. the much larger
-// portal course-player column). A pure CSS width/aspect-ratio resize
-// wouldn't work for this: font sizes inside a slide are literal pixel
-// values (the toolbar's 1-34px font-size picker), which don't scale with a
-// container's width on their own — only actually resizing the whole
-// 960x540 box scales those px values along with everything else, the same
-// way zooming a real slide deck would.
+// positioning renders identically here) up or down to fit entirely within
+// however much space its container actually has — on BOTH axes, whichever
+// is tighter, the same "object-fit: contain" idea CSS applies to an image
+// inside a box, just applied to the whole interactive canvas. Measured live
+// via ResizeObserver (reading the container's real rendered width AND
+// height) rather than a fixed constant, since the available space varies
+// (a modest admin preview pane vs. the much larger, full-screen portal
+// course-player column) — and rather than deriving height from width via a
+// fixed aspect-ratio (this component's original approach), which let the
+// canvas grow arbitrarily tall on a wide-but-short container and push its
+// own Previous/Next controls below the fold: confirmed via a real browser
+// that the portal player needed a page scroll just to reach the Next
+// button before this fix. A pure CSS width/aspect-ratio resize wouldn't
+// work for the scaling itself either: font sizes inside a slide are
+// literal pixel values (the toolbar's 1-34px font-size picker), which
+// don't scale with a container's width on their own — only actually
+// resizing the whole 960x540 box scales those px values along with
+// everything else, the same way zooming a real slide deck would.
 //
 // Applied via the CSS `zoom` property below, deliberately NOT
 // `transform: scale()` (slide-thumbnail.tsx's own technique) — confirmed
@@ -52,8 +59,12 @@ function useStageScale() {
     const el = containerRef.current;
     if (!el) return;
     const observer = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect.width;
-      if (width) setScale(width / CANVAS_W);
+      const rect = entries[0]?.contentRect;
+      if (!rect || !rect.width || !rect.height) return;
+      // Whichever axis is tighter wins — this is what actually guarantees
+      // the canvas never exceeds its container on either dimension, rather
+      // than just the one this hook used to check.
+      setScale(Math.min(rect.width / CANVAS_W, rect.height / CANVAS_H));
     });
     observer.observe(el);
     return () => observer.disconnect();
@@ -152,40 +163,53 @@ export function CoursePreviewViewer({
     // consistency — the two providers don't interact.
     <ActiveEditorProvider>
       <SlideSelectionProvider>
-        <div className="flex w-full flex-col items-center">
-          <div className="mb-2 text-sm text-muted-foreground">{current.lessonTitle}</div>
+        {/* h-full flex column: the caller (either the admin preview tab's
+            self-stretch content slot, or the portal player's min-h-0
+            flex-1 wrapper) is expected to hand this a genuinely bounded
+            height — see those callers' own comments. lessonTitle and the
+            Previous/Slide/Next row below are shrink-0 (their own natural
+            height); the stage region between them is the only flexible
+            one, so it's the one that absorbs whatever room is actually
+            left after those two fixed-height rows. */}
+        <div className="flex h-full w-full flex-col items-center">
+          <div className="mb-2 shrink-0 text-sm text-muted-foreground">{current.lessonTitle}</div>
 
-          {/* The scaling container: sized purely by width (whatever its
-              non-flex block-level parent gives it, up to maxWidthClassName's
-              cap), with height LOCKED to that width via aspect-ratio — so
-              there's no
-              dependency on some ancestor further up passing down an actual
-              pixel height through a chain of flex/min-h-0 rules, which
-              would be far more fragile to get right across two very
-              differently-shaped pages (the admin preview column vs. the
-              portal's course-player page). ResizeObserver in useStageScale
-              reads this container's actual rendered width and turns it
-              into the inner canvas's scale factor. */}
-          <div
-            ref={containerRef}
-            className={cn("w-full overflow-hidden rounded-lg bg-muted", maxWidthClassName)}
-            style={{ aspectRatio: `${CANVAS_W} / ${CANVAS_H}` }}
-          >
+          {/* The bounded region the stage fits itself into on BOTH axes —
+              min-h-0 is required for a flex-1 item to be allowed to shrink
+              below its content's intrinsic size at all (the default
+              min-height:auto would otherwise let the 960x540 canvas keep
+              this row exactly as tall as it wants, defeating the whole
+              point). useStageScale's ResizeObserver reads THIS div's real
+              rendered width and height and turns whichever is tighter into
+              the inner canvas's zoom factor. */}
+          <div className="flex min-h-0 w-full flex-1 items-center justify-center">
             <div
-              className="relative overflow-hidden rounded-sm bg-white shadow-lg"
-              style={{ width: CANVAS_W, height: CANVAS_H, zoom: scale }}
+              ref={containerRef}
+              className={cn("h-full w-full overflow-hidden rounded-lg bg-muted", maxWidthClassName)}
             >
-              <SlideBackgroundLayer
-                value={current.slide.config.background_image_url}
-                mode="present"
-                xPct={current.slide.config.background_image_x_pct}
-                yPct={current.slide.config.background_image_y_pct}
-                widthPct={current.slide.config.background_image_width_pct}
-                heightPct={current.slide.config.background_image_height_pct}
-              />
-              <ExtraImagesLayer images={current.slide.config.extra_images ?? []} mode="present" />
-              <div className="relative z-10 h-full w-full">
-                <Face key={current.slide.id} slide={current.slide} mode="present" onInteraction={handleInteraction} />
+              <div className="flex h-full w-full items-center justify-center">
+                <div
+                  className="relative overflow-hidden rounded-sm bg-white shadow-lg"
+                  style={{ width: CANVAS_W, height: CANVAS_H, zoom: scale }}
+                >
+                  <SlideBackgroundLayer
+                    value={current.slide.config.background_image_url}
+                    mode="present"
+                    xPct={current.slide.config.background_image_x_pct}
+                    yPct={current.slide.config.background_image_y_pct}
+                    widthPct={current.slide.config.background_image_width_pct}
+                    heightPct={current.slide.config.background_image_height_pct}
+                  />
+                  <ExtraImagesLayer images={current.slide.config.extra_images ?? []} mode="present" />
+                  <div className="relative z-10 h-full w-full">
+                    <Face
+                      key={current.slide.id}
+                      slide={current.slide}
+                      mode="present"
+                      onInteraction={handleInteraction}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -195,12 +219,12 @@ export function CoursePreviewViewer({
               (Missing Word, Match the Pair) need no changes here: they report
               through the same onInteraction/results shape. */}
           {answeredCount > 0 && (
-            <div className="mt-2 text-sm text-muted-foreground">
+            <div className="mt-2 shrink-0 text-sm text-muted-foreground">
               Score so far: {correctCount}/{answeredCount}
             </div>
           )}
 
-          <div className="mt-4 flex items-center gap-4">
+          <div className="mt-4 flex shrink-0 items-center gap-4">
             <Button
               variant="outline"
               size="sm"

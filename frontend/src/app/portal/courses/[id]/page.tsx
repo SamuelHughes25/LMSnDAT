@@ -45,12 +45,19 @@ export default async function PortalCoursePlayerPage({ params }: { params: Promi
     // itself also auto-collapses on this route (see portal-shell.tsx's
     // COURSE_PLAYER_PATH) so this column gets the extra width to grow into
     // in the first place.
-    <div className="space-y-3">
+    //
+    // h-full flex column (not the previous plain space-y-3 block): gives
+    // the viewer below a genuine, bounded remaining height (total height
+    // minus this header row's own natural height) to fit itself into,
+    // instead of the canvas dictating its own height from width alone and
+    // pushing the Previous/Next controls below the fold — confirmed in a
+    // real browser to require a page scroll before this fix.
+    <div className="flex h-full flex-col gap-3">
       {/* Back link and title share one row (previously stacked, the title
           on its own line below) purely to reclaim vertical space for this
           page's much larger, presentation-style player — every pixel here
           is a pixel the canvas below doesn't get. */}
-      <div className="flex items-center gap-3">
+      <div className="flex shrink-0 items-center gap-3">
         <Link
           href="/portal/courses"
           className="shrink-0 text-sm text-muted-foreground hover:text-foreground"
@@ -64,7 +71,9 @@ export default async function PortalCoursePlayerPage({ params }: { params: Promi
       {slides.length === 0 ? (
         <p className="text-sm text-muted-foreground">This course doesn&apos;t have any content yet.</p>
       ) : (
-        <CoursePreviewViewer slides={slides} maxWidthClassName="max-w-[1600px]" />
+        <div className="min-h-0 flex-1">
+          <CoursePreviewViewer slides={slides} maxWidthClassName="max-w-[1600px]" />
+        </div>
       )}
     </div>
   );

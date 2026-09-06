@@ -101,7 +101,17 @@ export function PortalShell({
   }
 
   return (
-    <div className="flex min-h-screen">
+    // h-screen + overflow-hidden (not the previous min-h-screen, which let
+    // the whole document grow past the viewport and scroll as one unit,
+    // taking the sidebar/header along with it) pins the app's own chrome to
+    // exactly the viewport's height — only `main` below scrolls internally
+    // when a page's content genuinely doesn't fit, and the course player
+    // page can now measure a real, bounded height to fit itself into
+    // instead of overflowing past the bottom of the screen. See
+    // course-preview-viewer.tsx's useStageScale for the other half of that
+    // fix (confirmed via a real browser: the player's Next button used to
+    // render below the fold, needing a page scroll to reach).
+    <div className="flex h-screen overflow-hidden">
       <div className="relative shrink-0">
         <aside
           className={cn(
@@ -155,14 +165,14 @@ export function PortalShell({
         </button>
       </div>
 
-      <div className="flex flex-1 flex-col">
-        <header className="flex items-center justify-between border-b p-4">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <header className="flex shrink-0 items-center justify-between border-b p-4">
           <div className="text-sm text-muted-foreground">
             {displayName} <span className="capitalize">· {role}</span>
           </div>
           <LogoutButton />
         </header>
-        <main className="flex-1 bg-muted/30 p-6">{children}</main>
+        <main className="min-h-0 flex-1 overflow-y-auto bg-muted/30 p-6">{children}</main>
       </div>
     </div>
   );
