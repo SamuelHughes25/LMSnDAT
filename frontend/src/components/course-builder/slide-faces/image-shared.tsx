@@ -188,14 +188,15 @@ export const HANDLES: { dir: HandleDir; style: React.CSSProperties; cursor: stri
   { dir: "w", style: { top: "50%", left: -5, transform: "translateY(-50%)" }, cursor: "ew-resize" },
 ];
 
-// Eight PowerPoint/Keynote-style handles — corners stretch both axes at
-// once (independently, not locked to the original aspect ratio: "stretched
-// and change shape" was the ask, so this deliberately allows distortion),
-// edge midpoints stretch one axis only. Every handle only ever changes
-// widthPct/heightPct; the box's centering (imageBoxStyle) is what keeps the
-// middle fixed, so there's nothing else for this component to get right —
-// true whether the center is a fixed 50/50 or wherever the author dragged
-// it to.
+// Eight PowerPoint/Keynote-style handles — corners scale both axes
+// together, preserving whatever aspect ratio the box already had (so a
+// photo dragged from a corner keeps its proportions instead of warping);
+// edge midpoints still stretch one axis only, independent of the other,
+// for whoever deliberately wants a distorted/cropped shape. Every handle
+// only ever changes widthPct/heightPct; the box's centering (imageBoxStyle)
+// is what keeps the middle fixed, so there's nothing else for this
+// component to get right — true whether the center is a fixed 50/50 or
+// wherever the author dragged it to.
 export function ResizeHandles({
   containerRef,
   widthPct,
@@ -226,6 +227,8 @@ export function ResizeHandles({
     let currentW = startW;
     let currentH = startH;
 
+    const isCorner = dir.length === 2;
+
     function onMove(moveEvent: PointerEvent) {
       const dx = moveEvent.clientX - startX;
       const dy = moveEvent.clientY - startY;
@@ -238,6 +241,35 @@ export function ResizeHandles({
       if (dir.includes("w")) w = startW - ((2 * dx) / rect.width) * 100;
       if (dir.includes("s")) h = startH + ((2 * dy) / rect.height) * 100;
       if (dir.includes("n")) h = startH - ((2 * dy) / rect.height) * 100;
+
+      if (isCorner) {
+        // Uniform scale about the box's own current aspect ratio (not the
+        // image's natural one — this stays correct even after a prior
+        // distorting edge-handle resize) rather than growing width and
+        // height independently: pick whichever axis moved further from its
+        // own start, in relative terms, as the "driving" one and apply
+        // that same scale factor to both, so a corner drag keeps the
+        // box's shape instead of warping it. Edge handles above are
+        // untouched — they still stretch a single axis on purpose.
+        //
+        // The scale itself — not w/h independently — is what gets clamped
+        // to keep both axes inside [MIN_SIZE_PCT, MAX_SIZE_PCT]: clamping
+        // each axis separately (as the non-corner path above does) would
+        // let one axis hit its floor/ceiling first and distort the ratio
+        // right at that boundary; a small drag near either limit could
+        // even send the OTHER (still-far-from-any-limit) axis's raw value
+        // negative before clamping, which independent per-axis clamping
+        // would silently floor to MIN_SIZE_PCT instead of catching.
+        const relW = (w - startW) / startW;
+        const relH = (h - startH) / startH;
+        const rawScale = 1 + (Math.abs(relW) > Math.abs(relH) ? relW : relH);
+        const minScale = Math.max(MIN_SIZE_PCT / startW, MIN_SIZE_PCT / startH);
+        const maxScale = Math.min(MAX_SIZE_PCT / startW, MAX_SIZE_PCT / startH);
+        const scale = Math.min(maxScale, Math.max(minScale, rawScale));
+        w = startW * scale;
+        h = startH * scale;
+      }
+
       currentW = clampSizePct(w);
       currentH = clampSizePct(h);
       onLiveResize(currentW, currentH);

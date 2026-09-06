@@ -152,7 +152,14 @@ function ImageUploadField({
       tabIndex={0}
       onPaste={handlePaste}
       className={cn(
-        "group relative z-10 flex h-full w-full items-center justify-center rounded-md bg-muted outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+        "group relative z-10 flex h-full w-full items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+        // The muted placeholder fill only belongs to the empty "paste an
+        // image here" state — once an image is set, this box should show
+        // nothing behind it. Previously always-on, so shrinking a set
+        // image via its resize handles revealed a grey rectangle exactly
+        // the box's own fixed footprint behind the now-smaller picture,
+        // reported as "the grey box in the background" staying visible.
+        !value && "bg-muted",
         className,
       )}
     >
@@ -268,7 +275,11 @@ function ImageStatic({
     return <div className={cn("h-full w-full rounded-md bg-muted", className)} />;
   }
   return (
-    <div className={cn("relative h-full w-full overflow-visible rounded-md bg-muted", className)}>
+    // No bg-muted here once an image is set — same fix as ImageUploadField
+    // above: a resized-smaller image would otherwise show the placeholder
+    // grey filling the rest of this box's fixed footprint, in the
+    // published preview and thumbnails too, not just the builder.
+    <div className={cn("relative h-full w-full overflow-visible rounded-md", className)}>
       <div className="overflow-hidden rounded-md" style={imageBoxStyle(50, 50, widthPct, heightPct)}>
         {/* See the note on ImageUploadField above for why a plain <img> is used. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
