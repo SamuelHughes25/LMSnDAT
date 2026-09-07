@@ -4,21 +4,27 @@ import { ClipboardList } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { djangoFetch } from "@/lib/django";
+import { getVisibleTemplateIds } from "@/lib/role-access";
 import type { Paginated, Template, TemplateVersion } from "@/lib/types";
 
-// Mirrors portal/courses/page.tsx exactly: every operative sees every
-// template (no assignment-by-job-role yet), but only ones with a published
-// version are fillable — an in-progress draft shows as a disabled card
-// instead of being hidden or linked.
+// Mirrors portal/courses/page.tsx exactly: a template only shows here if
+// it's in the assigned role's `templates` list (see role-access.ts) — a
+// member with no role sees none, not every template that exists. Only
+// ones with a published version are fillable — an in-progress draft shows
+// as a disabled card instead of being hidden or linked.
 export default async function PortalTemplatesPage() {
-  const [templates, versions] = await Promise.all([
+  const [templates, versions, visibleIds] = await Promise.all([
     djangoFetch<Paginated<Template>>("/templates/"),
     djangoFetch<Paginated<TemplateVersion>>("/template-versions/"),
+    getVisibleTemplateIds(),
   ]);
 
   const publishedTemplateIds = new Set(
     versions.results.filter((v) => v.status === "published").map((v) => v.template),
   );
+
+  const visibleTemplates =
+    visibleIds === null ? templates.results : templates.results.filter((template) => visibleIds.has(template.id));
 
   return (
     <div className="max-w-4xl space-y-4">
@@ -28,7 +34,7 @@ export default async function PortalTemplatesPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {templates.results.map((template) => {
+        {visibleTemplates.map((template) => {
           const isFillable = publishedTemplateIds.has(template.id);
           const card = (
             <Card className={isFillable ? "h-full transition-colors hover:bg-muted/40" : "h-full opacity-60"}>
@@ -57,8 +63,12 @@ export default async function PortalTemplatesPage() {
             <div key={template.id}>{card}</div>
           );
         })}
-        {templates.results.length === 0 && (
-          <p className="text-sm text-muted-foreground">No templates have been created yet.</p>
+        {visibleTemplates.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            {templates.results.length === 0
+              ? "No templates have been created yet."
+              : "No templates have been assigned to your role yet."}
+          </p>
         )}
       </div>
     </div>

@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import { TemplatePreviewViewer } from "@/components/template-preview/template-preview-viewer";
 import { DjangoApiError, djangoFetch } from "@/lib/django";
+import { getVisibleTemplateIds } from "@/lib/role-access";
 import type { Paginated, Template, TemplateVersion } from "@/lib/types";
 
 // The operative-facing "fill it out" page — mirrors portal/courses/[id]/
@@ -19,6 +20,11 @@ export default async function PortalTemplateFillPage({ params }: { params: Promi
     if (err instanceof DjangoApiError && err.status === 404) notFound();
     throw err;
   }
+
+  // Gates direct URL access, not just the list page's own filtering — see
+  // the identical check/comment in portal/courses/[id]/page.tsx.
+  const visibleIds = await getVisibleTemplateIds();
+  if (visibleIds !== null && !visibleIds.has(id)) notFound();
 
   const versions = await djangoFetch<Paginated<TemplateVersion>>(`/template-versions/?template=${id}`);
   const version = versions.results.find((v) => v.status === "published");

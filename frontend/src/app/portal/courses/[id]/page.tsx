@@ -5,6 +5,7 @@ import { CoursePreviewViewer, type PreviewSlide } from "@/components/course-prev
 import { FullscreenToggle } from "@/components/fullscreen-toggle";
 import { DjangoApiError, djangoFetch } from "@/lib/django";
 import type { Course, CourseVersion } from "@/lib/course-types";
+import { getVisibleCourseIds } from "@/lib/role-access";
 import type { Paginated } from "@/lib/types";
 
 // The operative-facing "play" page — unlike the admin preview page (which
@@ -22,6 +23,13 @@ export default async function PortalCoursePlayerPage({ params }: { params: Promi
     if (err instanceof DjangoApiError && err.status === 404) notFound();
     throw err;
   }
+
+  // Gates direct URL access, not just the list page's own filtering — a
+  // member could otherwise bookmark or guess a course id that was never
+  // assigned to their role and play it anyway. Same "unassigned == not
+  // found" treatment as a genuinely missing course.
+  const visibleIds = await getVisibleCourseIds();
+  if (visibleIds !== null && !visibleIds.has(id)) notFound();
 
   const versions = await djangoFetch<Paginated<CourseVersion>>(`/course-versions/?course=${id}`);
   const version = versions.results.find((v) => v.status === "published");

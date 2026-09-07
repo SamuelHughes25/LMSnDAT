@@ -5,23 +5,34 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Course, CourseVersion } from "@/lib/course-types";
 import { djangoFetch } from "@/lib/django";
+import { getVisibleCourseIds } from "@/lib/role-access";
 import type { Paginated } from "@/lib/types";
 
-// Every operative currently sees every course that exists — there's no
-// assignment-by-job-role yet (that's a later phase). A course only becomes
-// playable once it has a published version though: an in-progress draft
-// isn't real content for an operative to see, so unpublished courses still
-// show up (so nothing is silently hidden) but as a disabled, clearly-labeled
-// card instead of a link.
+// A course only shows here if it's in the assigned role's `courses` list
+// (see role-access.ts) — reported directly as a real gap: a member with no
+// role at all was still seeing every course that existed, including ones
+// never assigned to them. `visibleIds === null` means the viewer is an
+// admin/manager (role-scoping doesn't apply to them) or the check is
+// otherwise bypassed; a member with no role gets an empty Set, not null,
+// so they correctly see nothing rather than everything.
+//
+// A course only becomes playable once it has a published version: an
+// in-progress draft isn't real content for an operative to see, so an
+// unpublished-but-visible course still shows up (so nothing is silently
+// hidden) but as a disabled, clearly-labeled card instead of a link.
 export default async function PortalCoursesPage() {
-  const [courses, versions] = await Promise.all([
+  const [courses, versions, visibleIds] = await Promise.all([
     djangoFetch<Paginated<Course>>("/courses/"),
     djangoFetch<Paginated<CourseVersion>>("/course-versions/"),
+    getVisibleCourseIds(),
   ]);
 
   const publishedCourseIds = new Set(
     versions.results.filter((v) => v.status === "published").map((v) => v.course),
   );
+
+  const visibleCourses =
+    visibleIds === null ? courses.results : courses.results.filter((course) => visibleIds.has(course.id));
 
   return (
     <div className="max-w-4xl space-y-4">
@@ -31,7 +42,7 @@ export default async function PortalCoursesPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {courses.results.map((course) => {
+        {visibleCourses.map((course) => {
           const isPlayable = publishedCourseIds.has(course.id);
           const card = (
             <Card className={isPlayable ? "h-full transition-colors hover:bg-muted/40" : "h-full opacity-60"}>
@@ -60,8 +71,12 @@ export default async function PortalCoursesPage() {
             <div key={course.id}>{card}</div>
           );
         })}
-        {courses.results.length === 0 && (
-          <p className="text-sm text-muted-foreground">No courses have been created yet.</p>
+        {visibleCourses.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            {courses.results.length === 0
+              ? "No courses have been created yet."
+              : "No courses have been assigned to your role yet."}
+          </p>
         )}
       </div>
     </div>
