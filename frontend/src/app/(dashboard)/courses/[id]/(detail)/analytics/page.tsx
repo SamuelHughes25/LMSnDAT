@@ -64,6 +64,16 @@ export default async function CourseAnalyticsPage({ params }: { params: Promise<
     : null;
   const passRate = graded.length ? (graded.filter((a) => a.passed).length / graded.length) * 100 : null;
 
+  // How hard/easy this course actually is, in one number: on average, how
+  // many pass-or-fail attempts does it take one person to get a verdict?
+  // Deliberately over GRADED attempts only (a real pass/fail outcome, not
+  // just "started" or "completed with no assessment to grade against") —
+  // a raw total-attempts count conflates "lots of people took this once"
+  // with "a few people struggled through many retakes," which says
+  // nothing about difficulty; this isolates the retake signal instead.
+  const uniqueGradedUserIds = new Set(graded.map((a) => a.user));
+  const averageAttemptsPerPerson = uniqueGradedUserIds.size ? graded.length / uniqueGradedUserIds.size : null;
+
   const summaries: UserSummary[] = uniqueUserIds.map((userId) => {
     const userAttempts = allAttempts.filter((a) => a.user === userId);
     const userScored = userAttempts.filter((a) => a.score !== null);
@@ -86,10 +96,12 @@ export default async function CourseAnalyticsPage({ params }: { params: Promise<
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">Total attempts</CardTitle>
+            <CardTitle className="text-sm text-muted-foreground">Avg. attempts per person</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-semibold">{allAttempts.length}</div>
+            <div className="text-2xl font-semibold">
+              {averageAttemptsPerPerson === null ? "—" : averageAttemptsPerPerson.toFixed(1)}
+            </div>
           </CardContent>
         </Card>
         <Card>
