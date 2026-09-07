@@ -44,6 +44,23 @@ export type SlideFaceProps = {
   // upload anything, so slide-thumbnail.tsx and course-preview-viewer.tsx
   // never need to pass it.
   courseVersionId?: string;
+  // Only meaningful in "present" mode, and only read by the three types
+  // with a real "submit an answer, it's either right or wrong" concept —
+  // multiple-choice-slide-face.tsx, missing-word-slide-face.tsx, and
+  // sequencing-slide-face.tsx. Reported directly as a real gap: all three
+  // let a learner retry indefinitely (multiple_choice silently resets a
+  // wrong pick after a flash; missing_word/sequencing offer an explicit
+  // "Try again" after Submit) — fine, even desirable, for free-form
+  // interactive teaching content, but it means a course marked as an
+  // assessment could never actually be failed, since the learner just
+  // keeps guessing until they land on the right answer. When true, each of
+  // those three types makes the learner's first submitted answer
+  // permanent (wrong or right) instead of allowing another try — see each
+  // component's own present-mode comment for the specific mechanism.
+  // match_pairs/accordion/flashcards/hotspot_image ignore this entirely:
+  // they're completion-tracking content with no "wrong answer" concept at
+  // all (see slide-interaction.ts), so "assessment" doesn't change them.
+  isAssessment?: boolean;
 };
 
 // "content", "multiple_choice", "missing_word", "match_pairs", "accordion",

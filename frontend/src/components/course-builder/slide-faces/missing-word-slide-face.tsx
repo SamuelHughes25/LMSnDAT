@@ -77,7 +77,7 @@ function shuffle<T>(items: T[]): T[] {
   return result;
 }
 
-export function MissingWordSlideFace({ slide, mode, onConfigChange, onInteraction }: SlideFaceProps) {
+export function MissingWordSlideFace({ slide, mode, onConfigChange, onInteraction, isAssessment }: SlideFaceProps) {
   const paragraph = slide.config.paragraph ?? "";
   const blanks = slide.config.blanks ?? [];
 
@@ -87,7 +87,13 @@ export function MissingWordSlideFace({ slide, mode, onConfigChange, onInteractio
 
   if (mode === "present") {
     return (
-      <MissingWordPresent slide={slide} paragraph={paragraph} blanks={blanks} onInteraction={onInteraction} />
+      <MissingWordPresent
+        slide={slide}
+        paragraph={paragraph}
+        blanks={blanks}
+        onInteraction={onInteraction}
+        isAssessment={!!isAssessment}
+      />
     );
   }
 
@@ -228,11 +234,13 @@ function MissingWordPresent({
   paragraph,
   blanks,
   onInteraction,
+  isAssessment,
 }: {
   slide: Slide;
   paragraph: string;
   blanks: MissingWordBlank[];
   onInteraction: SlideFaceProps["onInteraction"];
+  isAssessment: boolean;
 }) {
   const [placement, setPlacement] = useState<Placement>(() =>
     Object.fromEntries(blanks.map((b) => [b.id, null])),
@@ -385,9 +393,16 @@ function MissingWordPresent({
           <div className="text-sm font-medium text-muted-foreground">
             {correctCount} of {blanks.length} correct
           </div>
-          <Button type="button" variant="outline" onClick={handleTryAgain}>
-            Try again
-          </Button>
+          {/* Hidden in assessment mode — the first Submit is the final,
+              graded answer there, same reasoning as multiple-choice-slide-
+              face.tsx's locked wrong pick: an assessment that let a
+              learner keep retrying until they got it right could never
+              actually be failed. */}
+          {!isAssessment && (
+            <Button type="button" variant="outline" onClick={handleTryAgain}>
+              Try again
+            </Button>
+          )}
         </div>
       )}
     </div>

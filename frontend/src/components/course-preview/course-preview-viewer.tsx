@@ -297,6 +297,7 @@ export function CoursePreviewViewer({
                       slide={current.slide}
                       mode="present"
                       onInteraction={handleInteraction}
+                      isAssessment={attemptTracking?.isAssessment}
                     />
                   </div>
                 </div>

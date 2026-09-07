@@ -33,7 +33,7 @@ function makeOptionId(n: number) {
 const FIELD_CLASSES =
   "w-full border-none bg-transparent p-0 text-foreground outline-none placeholder:text-muted-foreground/50 focus:rounded focus:outline-none focus:ring-1 focus:ring-primary/40";
 
-export function MultipleChoiceSlideFace({ slide, mode, onConfigChange, onInteraction }: SlideFaceProps) {
+export function MultipleChoiceSlideFace({ slide, mode, onConfigChange, onInteraction, isAssessment }: SlideFaceProps) {
   const question = slide.config.question ?? "";
   const options = slide.config.options ?? [];
   const feedbackIncorrect = slide.config.feedback_incorrect ?? "";
@@ -57,6 +57,7 @@ export function MultipleChoiceSlideFace({ slide, mode, onConfigChange, onInterac
         options={options}
         feedbackIncorrect={feedbackIncorrect}
         onInteraction={onInteraction}
+        isAssessment={!!isAssessment}
       />
     );
   }
@@ -233,28 +234,39 @@ function MultipleChoicePresent({
   options,
   feedbackIncorrect,
   onInteraction,
+  isAssessment,
 }: {
   slide: Slide;
   question: string;
   options: MultipleChoiceOption[];
   feedbackIncorrect: string;
   onInteraction: SlideFaceProps["onInteraction"];
+  isAssessment: boolean;
 }) {
-  // Set once the CORRECT option is picked — permanent, unlike
-  // flashIncorrectId below.
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The permanent, final pick — right OR wrong. Outside assessment mode
+  // this is only ever set for a correct pick (a wrong one goes through
+  // flashIncorrectId below instead and never lands here); in assessment
+  // mode a wrong pick is locked in here too, since the whole point of an
+  // assessment is that the first submitted answer is the one that counts
+  // — reported directly: multiple choice previously let a learner just
+  // keep guessing forever, silently resetting every wrong pick, so a
+  // "scored" assessment built from this type could never actually be
+  // failed.
+  const [lockedId, setLockedId] = useState<string | null>(null);
   // Briefly holds a WRONG option's id so it can flash red before both the
-  // flash and the selection itself reset — cleared by a timeout.
+  // flash and the selection itself reset — non-assessment mode only; see
+  // handleSelect.
   const [flashIncorrectId, setFlashIncorrectId] = useState<string | null>(null);
   // Purely for the final report's `detail` payload, not for scoring (see
   // the comment above) — a ref, not state: it doesn't drive any render, it
-  // only needs to be read once, at the moment the correct option finally
-  // gets picked.
+  // only needs to be read once, at the moment an answer locks in.
   const incorrectAttemptsRef = useRef(0);
 
   // Clears the red flash (and the selection with it) ~1.4s after a wrong
   // pick, giving the learner enough time to read the wrong-answer
   // explanation (if one is set) before the options become clickable again.
+  // Never runs in assessment mode — a wrong pick there goes straight to
+  // lockedId instead of flashIncorrectId, so there's nothing to clear.
   useEffect(() => {
     if (!flashIncorrectId) return;
     const timer = setTimeout(() => {
@@ -264,9 +276,9 @@ function MultipleChoicePresent({
   }, [flashIncorrectId]);
 
   function handleSelect(option: MultipleChoiceOption) {
-    if (selectedId || flashIncorrectId) return;
+    if (lockedId || flashIncorrectId) return;
     if (option.is_correct) {
-      setSelectedId(option.id);
+      setLockedId(option.id);
       onInteraction?.({
         slideId: slide.id,
         slideType: slide.slide_type,
@@ -275,13 +287,30 @@ function MultipleChoicePresent({
         answeredAt: new Date().toISOString(),
         detail: { selectedOptionId: option.id, incorrectAttempts: incorrectAttemptsRef.current },
       });
-    } else {
-      incorrectAttemptsRef.current += 1;
-      setFlashIncorrectId(option.id);
+      return;
     }
+    incorrectAttemptsRef.current += 1;
+    if (isAssessment) {
+      // Permanent — this IS the submitted answer, and it's wrong.
+      setLockedId(option.id);
+      onInteraction?.({
+        slideId: slide.id,
+        slideType: slide.slide_type,
+        isCorrect: false,
+        score: 0,
+        answeredAt: new Date().toISOString(),
+        detail: { selectedOptionId: option.id, incorrectAttempts: incorrectAttemptsRef.current },
+      });
+      return;
+    }
+    // Non-assessment: flash red, then reset — free-form practice, no
+    // permanent record of the wrong pick, no report sent at all.
+    setFlashIncorrectId(option.id);
   }
 
-  const showIncorrectFeedback = !!flashIncorrectId && feedbackIncorrect.trim().length > 0;
+  const lockedOption = lockedId ? options.find((o) => o.id === lockedId) : undefined;
+  const isLockedWrong = !!lockedOption && !lockedOption.is_correct;
+  const showIncorrectFeedback = (!!flashIncorrectId || isLockedWrong) && feedbackIncorrect.trim().length > 0;
 
   return (
     <div className="flex h-full w-full flex-col justify-center gap-6 px-16 py-12 text-foreground">
@@ -292,14 +321,20 @@ function MultipleChoicePresent({
       <div className="flex flex-1 flex-col justify-center gap-3">
         {options.map((option) => {
           const revealState =
-            selectedId === option.id ? "correct" : flashIncorrectId === option.id ? "incorrect" : "neutral";
+            lockedId === option.id
+              ? option.is_correct
+                ? "correct"
+                : "incorrect"
+              : flashIncorrectId === option.id
+                ? "incorrect"
+                : "neutral";
 
           return (
             <button
               key={option.id}
               type="button"
               onClick={() => handleSelect(option)}
-              disabled={!!selectedId || !!flashIncorrectId}
+              disabled={!!lockedId || !!flashIncorrectId}
               className={cn(
                 "rounded-lg border-2 px-4 py-3 text-left text-lg transition-colors disabled:cursor-default",
                 revealState === "correct" && "border-green-600 bg-green-50 text-green-900",

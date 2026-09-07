@@ -53,7 +53,7 @@ function shuffleDiffering<T>(items: T[]): T[] {
   return result;
 }
 
-export function SequencingSlideFace({ slide, mode, onConfigChange, onInteraction }: SlideFaceProps) {
+export function SequencingSlideFace({ slide, mode, onConfigChange, onInteraction, isAssessment }: SlideFaceProps) {
   const instructions = slide.config.instructions ?? "";
   const items = slide.config.sequence_items ?? [];
 
@@ -63,7 +63,13 @@ export function SequencingSlideFace({ slide, mode, onConfigChange, onInteraction
 
   if (mode === "present") {
     return (
-      <SequencingPresent slide={slide} instructions={instructions} items={items} onInteraction={onInteraction} />
+      <SequencingPresent
+        slide={slide}
+        instructions={instructions}
+        items={items}
+        onInteraction={onInteraction}
+        isAssessment={!!isAssessment}
+      />
     );
   }
 
@@ -226,11 +232,13 @@ function SequencingPresent({
   instructions,
   items,
   onInteraction,
+  isAssessment,
 }: {
   slide: Slide;
   instructions: string;
   items: SequencingItem[];
   onInteraction: SlideFaceProps["onInteraction"];
+  isAssessment: boolean;
 }) {
   // NOT shuffled in the useState lazy initializer directly — confirmed via
   // a real browser that doing so throws a hydration mismatch ("Hydration
@@ -339,9 +347,15 @@ function SequencingPresent({
           <div className="text-sm font-medium text-muted-foreground">
             {Math.round(score * items.length)} of {items.length} in the correct position
           </div>
-          <Button type="button" variant="outline" onClick={handleTryAgain}>
-            Try again
-          </Button>
+          {/* Hidden in assessment mode — see missing-word-slide-face.tsx's
+              identical comment: the first Submit is the final, graded
+              answer there, so a learner can't just reshuffle and resubmit
+              until they land on the right order. */}
+          {!isAssessment && (
+            <Button type="button" variant="outline" onClick={handleTryAgain}>
+              Try again
+            </Button>
+          )}
         </div>
       )}
     </div>
