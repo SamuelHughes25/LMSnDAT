@@ -92,7 +92,15 @@ export default async function PortalCoursePlayerPage({ params }: { params: Promi
         <p className="text-sm text-muted-foreground">This course doesn&apos;t have any content yet.</p>
       ) : (
         <div className="min-h-0 flex-1">
-          <CoursePreviewViewer slides={slides} maxWidthClassName="max-w-[1600px]" />
+          <CoursePreviewViewer
+            slides={slides}
+            maxWidthClassName="max-w-[1600px]"
+            attemptTracking={{
+              courseVersionId: version.id,
+              isAssessment: course.is_assessment,
+              passingScore: course.passing_score,
+            }}
+          />
         </div>
       )}
     </div>

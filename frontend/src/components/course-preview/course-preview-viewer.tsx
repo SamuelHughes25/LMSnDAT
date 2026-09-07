@@ -3,17 +3,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
+import { completeCourseAttempt, startCourseAttempt, submitSlideResult } from "@/app/actions/attempts";
 import { ActiveEditorProvider } from "@/components/course-builder/active-editor-context";
 import { CANVAS_H, CANVAS_W } from "@/components/course-builder/slide-canvas";
 import { SLIDE_TYPE_FACES } from "@/components/course-builder/slide-faces";
 import { ExtraImagesLayer, SlideBackgroundLayer } from "@/components/course-builder/slide-faces/background-image-field";
 import { SlideSelectionProvider } from "@/components/course-builder/slide-selection-context";
 import { Button } from "@/components/ui/button";
+import type { CourseAttempt } from "@/lib/attempt-types";
 import type { Slide } from "@/lib/course-types";
 import type { SlideInteractionResult } from "@/lib/slide-interaction";
 import { cn } from "@/lib/utils";
 
 export type PreviewSlide = { slide: Slide; lessonTitle: string };
+
+// Passed only by the portal's real course-player page (portal/courses/[id]/
+// page.tsx) — the admin's own Preview tab never passes this, so previewing
+// a course as its author never creates a real attempt record. When
+// present, this component starts a real CourseAttempt on mount, submits
+// each slide's raw answer `detail` (never a claimed isCorrect/score — see
+// submitSlideResult's own comment) as the learner progresses, and turns
+// the last slide's disabled "Next" into a real "Finish" that completes the
+// attempt and shows the server's own graded score.
+export type AttemptTracking = {
+  courseVersionId: string;
+  isAssessment: boolean;
+  passingScore: number | null;
+};
 
 // Scales the fixed 960x540 canvas (CANVAS_W/CANVAS_H — the same coordinate
 // system the builder itself uses, so every slide face's percentage-based
@@ -81,6 +97,7 @@ function useStageScale() {
 export function CoursePreviewViewer({
   slides,
   maxWidthClassName = "max-w-6xl",
+  attemptTracking,
 }: {
   slides: PreviewSlide[];
   // Overridable so the portal's course-player page (a deliberately
@@ -89,23 +106,96 @@ export function CoursePreviewViewer({
   // tab's fixed-layout column, without changing that other, unrelated
   // caller's sizing at all. Defaults to this component's original cap.
   maxWidthClassName?: string;
+  attemptTracking?: AttemptTracking;
 }) {
   const [currentIndex, setCurrentIndex] = useState(0);
 
   // Accumulates each interactive slide's result as the learner answers it,
-  // keyed by slide id (re-answering the same slide on a later visit — not
-  // possible yet, since present-mode components are single-attempt, but a
-  // future "try again" could exist — replaces rather than duplicates).
-  // Local-only state, no backend call, no persistence — this is deliberately
-  // the entire scope of "tracking" this pass; see
-  // frontend/src/lib/slide-interaction.ts and docs/PROJECT_LOG.md for the
-  // scope decision. A real learner-facing player, backed by a real
-  // learner/assignment model, is what would actually persist these.
+  // keyed by slide id (re-answering the same slide replaces, never
+  // duplicates). This local tally is a client-side, instant-feedback
+  // convenience ONLY — it drives the live "Score so far" line below, never
+  // anything that actually counts toward a pass/fail. When attemptTracking
+  // is set, handleInteraction ALSO submits the raw `detail` to the server
+  // (see submitSlideResult) — the server's own independent grading is what
+  // actually accumulates into the attempt's real, persisted score.
   const [results, setResults] = useState<Record<string, SlideInteractionResult>>({});
 
-  const handleInteraction = useCallback((result: SlideInteractionResult) => {
-    setResults((prev) => ({ ...prev, [result.slideId]: result }));
+  // Mirrors `attemptId` without handleInteraction needing to depend on it
+  // (which would otherwise change identity on every attempt-start) — read
+  // at call time via `.current`, always the latest value.
+  const attemptIdRef = useRef<string | null>(null);
+  const [attemptId, setAttemptId] = useState<string | null>(null);
+  const [completedAttempt, setCompletedAttempt] = useState<CourseAttempt | null>(null);
+  const [finishing, setFinishing] = useState(false);
+  useEffect(() => {
+    attemptIdRef.current = attemptId;
+  }, [attemptId]);
+
+  const isTrackingAttempt = Boolean(attemptTracking);
+
+  // Fires the actual "start an attempt" call — a pure async action with no
+  // synchronous state resets of its own, so it's safe to call directly
+  // from the mount effect below (the resulting setAttemptId happens inside
+  // the .then() callback, not synchronously during the effect body, which
+  // is the sanctioned "subscribe to an external system" shape rather than
+  // the synchronous-setState-in-an-effect anti-pattern).
+  const startAttempt = useCallback(() => {
+    if (!attemptTracking) return;
+    startCourseAttempt(attemptTracking.courseVersionId)
+      .then((attempt) => setAttemptId(attempt.id))
+      .catch(() => {
+        // Best-effort: if starting the attempt fails (network hiccup), the
+        // learner can still browse the deck — handleInteraction below
+        // simply has nothing to submit to until attemptId is set, and
+        // Finish is disabled without one (see the render below).
+      });
+  }, [attemptTracking]);
+
+  useEffect(() => {
+    startAttempt();
+    // Mount-only — startAttempt itself is stable per attemptTracking
+    // identity, and re-running this on every render would restart the
+    // attempt endlessly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // "Retake": a real user event (a button click), so synchronously
+  // resetting local state here — unlike in the mount effect above — is
+  // completely ordinary, not the pattern the lint rule warns about.
+  function handleRetake() {
+    setCompletedAttempt(null);
+    setResults({});
+    setCurrentIndex(0);
+    setAttemptId(null);
+    startAttempt();
+  }
+
+  const handleInteraction = useCallback(
+    (result: SlideInteractionResult) => {
+      setResults((prev) => ({ ...prev, [result.slideId]: result }));
+      if (isTrackingAttempt && attemptIdRef.current) {
+        // Best-effort/non-blocking — a network hiccup shouldn't freeze the
+        // learner's flow through the deck. The client's own isCorrect/score
+        // never leave the browser; only the raw `detail` does.
+        submitSlideResult(attemptIdRef.current, result.slideId, result.detail).catch(() => {});
+      }
+    },
+    [isTrackingAttempt],
+  );
+
+  async function handleFinish() {
+    if (!attemptId) return;
+    setFinishing(true);
+    try {
+      const attempt = await completeCourseAttempt(attemptId);
+      setCompletedAttempt(attempt);
+    } catch {
+      // Best-effort: leave the learner on the last slide rather than
+      // pretending completion succeeded — they can just click Finish again.
+    } finally {
+      setFinishing(false);
+    }
+  }
 
   const answeredCount = Object.keys(results).length;
   const correctCount = useMemo(
@@ -248,29 +338,57 @@ export function CoursePreviewViewer({
               vertical breathing room, with items-center centering the
               buttons within that band instead of them sitting flush
               against the very bottom of the page. */}
-          <div className="flex shrink-0 items-center gap-4 py-2">
-            <Button
-              variant="outline"
-              size="xs"
-              disabled={clampedIndex === 0}
-              onClick={() => setCurrentIndex((i) => Math.max(0, i - 1))}
-            >
-              <ChevronLeft className="mr-1 h-4 w-4" />
-              Previous
-            </Button>
-            <span className="text-sm text-muted-foreground">
-              Slide {clampedIndex + 1} of {slides.length}
-            </span>
-            <Button
-              variant="outline"
-              size="xs"
-              disabled={clampedIndex === slides.length - 1}
-              onClick={() => setCurrentIndex((i) => Math.min(slides.length - 1, i + 1))}
-            >
-              Next
-              <ChevronRight className="ml-1 h-4 w-4" />
-            </Button>
-          </div>
+          {completedAttempt ? (
+            // The "moment of truth" — replaces the Previous/Next row once
+            // Finish has been clicked and the SERVER (not this component's
+            // own local `results` tally) has returned a graded score.
+            <div className="flex shrink-0 items-center gap-4 py-2">
+              <span className="text-sm font-medium">
+                {completedAttempt.score !== null ? `You scored ${completedAttempt.score}%` : "Course completed"}
+                {attemptTracking?.isAssessment && completedAttempt.passed !== null && (
+                  <span className={completedAttempt.passed ? "text-primary" : "text-destructive"}>
+                    {" — "}
+                    {completedAttempt.passed
+                      ? "Passed"
+                      : `Not passed (minimum ${attemptTracking.passingScore}% required)`}
+                  </span>
+                )}
+              </span>
+              <Button variant="outline" size="xs" onClick={handleRetake}>
+                Retake
+              </Button>
+            </div>
+          ) : (
+            <div className="flex shrink-0 items-center gap-4 py-2">
+              <Button
+                variant="outline"
+                size="xs"
+                disabled={clampedIndex === 0}
+                onClick={() => setCurrentIndex((i) => Math.max(0, i - 1))}
+              >
+                <ChevronLeft className="mr-1 h-4 w-4" />
+                Previous
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                Slide {clampedIndex + 1} of {slides.length}
+              </span>
+              {isTrackingAttempt && clampedIndex === slides.length - 1 ? (
+                <Button size="xs" onClick={handleFinish} disabled={finishing || !attemptId}>
+                  {finishing ? "Finishing…" : "Finish"}
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  disabled={clampedIndex === slides.length - 1}
+                  onClick={() => setCurrentIndex((i) => Math.min(slides.length - 1, i + 1))}
+                >
+                  Next
+                  <ChevronRight className="ml-1 h-4 w-4" />
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       </SlideSelectionProvider>
     </ActiveEditorProvider>

@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 
+import { CourseAssessmentSettings } from "@/components/course-assessment-settings";
 import { DeleteCourseButton } from "@/components/delete-course-button";
 import type { Course } from "@/lib/course-types";
 import { DjangoApiError, djangoFetch } from "@/lib/django";
@@ -21,12 +22,7 @@ export default async function CourseSettingsPage({ params }: { params: Promise<{
 
   return (
     <div className="max-w-2xl space-y-6">
-      <div className="rounded-lg border-2 border-border bg-card p-4 shadow-sm">
-        <div className="font-medium">More settings</div>
-        <p className="mt-1 text-sm text-muted-foreground">
-          More settings — like slide transitions and archiving — are coming here soon.
-        </p>
-      </div>
+      <CourseAssessmentSettings course={course} />
 
       <div className="rounded-lg border-2 border-destructive/30 bg-card p-4 shadow-sm">
         <div className="font-medium text-destructive">Danger zone</div>

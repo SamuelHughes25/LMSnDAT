@@ -4,8 +4,10 @@ import tempfile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 
-from apps.accounts.models import User
+from apps.accounts.models import Team, User
 from apps.core.test_utils import APIAuthTestCase
+from apps.courses.grading import grade_slide
+from apps.courses.models import Course, CourseAttempt, CourseVersion, Lesson, Slide, SlideResult
 
 MEDIA_ROOT = tempfile.mkdtemp()
 
@@ -329,3 +331,239 @@ class CourseBuilderFlowTests(APIAuthTestCase):
             f'/api/v1/course-versions/{version_id}/', {'transition_style': 'slide'}, format='json'
         )
         self.assertEqual(resp.status_code, 400, resp.content)
+
+
+class GradingTests(APIAuthTestCase):
+    """Unit-level coverage of grade_slide() itself, plus one API-level test
+    proving the results endpoint can't be tricked into recording a false
+    pass by a direct/tampered request — the actual anti-cheat property
+    this whole feature exists for."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(username='grading_admin', password='pw', role=User.Role.ADMIN)
+        course = Course.objects.create(name='Grading Course', created_by=self.admin)
+        self.version = CourseVersion.objects.create(
+            course=course, version_number=1, status=CourseVersion.Status.PUBLISHED, created_by=self.admin
+        )
+        self.lesson = Lesson.objects.create(course_version=self.version, title='L1', order=0)
+
+    def make_slide(self, slide_type, config):
+        return Slide.objects.create(lesson=self.lesson, slide_type=slide_type, order=0, config=config)
+
+    def test_multiple_choice(self):
+        slide = self.make_slide('multiple_choice', {
+            'options': [
+                {'id': 'a', 'text': 'A', 'is_correct': True},
+                {'id': 'b', 'text': 'B', 'is_correct': False},
+            ],
+        })
+        self.assertEqual(grade_slide(slide, {'selectedOptionId': 'a'}), (True, 1.0))
+        self.assertEqual(grade_slide(slide, {'selectedOptionId': 'b'}), (False, 0.0))
+        self.assertEqual(grade_slide(slide, {'selectedOptionId': 'does-not-exist'}), (False, 0.0))
+        self.assertEqual(grade_slide(slide, {}), (False, 0.0))
+
+    def test_missing_word_fraction_score(self):
+        slide = self.make_slide('missing_word', {
+            'paragraph': 'The sky is blue.',
+            'blanks': [
+                {'id': 'b1', 'start': 4, 'end': 7, 'text': 'sky'},
+                {'id': 'b2', 'start': 11, 'end': 15, 'text': 'blue'},
+            ],
+        })
+        self.assertEqual(grade_slide(slide, {'placements': {'b1': 'b1', 'b2': 'b2'}}), (True, 1.0))
+        self.assertEqual(grade_slide(slide, {'placements': {'b1': 'b1', 'b2': 'wrong'}}), (False, 0.5))
+        self.assertEqual(grade_slide(slide, {'placements': {}}), (False, 0.0))
+
+    def test_sequencing_requires_exact_permutation(self):
+        slide = self.make_slide('sequencing', {
+            'sequence_items': [
+                {'id': '1', 'text': 'first'}, {'id': '2', 'text': 'second'}, {'id': '3', 'text': 'third'},
+            ],
+        })
+        self.assertEqual(grade_slide(slide, {'finalOrder': ['1', '2', '3']}), (True, 1.0))
+        is_correct, score = grade_slide(slide, {'finalOrder': ['1', '3', '2']})
+        self.assertFalse(is_correct)
+        self.assertAlmostEqual(score, 1 / 3)
+        # Malformed — missing/duplicate/unknown id — rejected outright
+        # rather than partially graded.
+        self.assertEqual(grade_slide(slide, {'finalOrder': ['1', '2']}), (False, 0.0))
+        self.assertEqual(grade_slide(slide, {'finalOrder': ['1', '1', '2']}), (False, 0.0))
+        self.assertEqual(grade_slide(slide, {'finalOrder': ['1', '2', 'nope']}), (False, 0.0))
+
+    def test_completion_types(self):
+        pairs_slide = self.make_slide('match_pairs', {'pairs': [{'id': 'p1', 'keyword': 'k', 'definition': 'd'}]})
+        self.assertEqual(grade_slide(pairs_slide, {'matchedPairIds': ['p1']}), (True, 1.0))
+        self.assertEqual(grade_slide(pairs_slide, {'matchedPairIds': []}), (False, 0.0))
+
+        accordion_slide = self.make_slide('accordion', {'sections': [{'id': 's1', 'title': 't', 'body': 'b'}]})
+        self.assertEqual(grade_slide(accordion_slide, {'sectionsOpened': ['s1']}), (True, 1.0))
+        self.assertEqual(grade_slide(accordion_slide, {'sectionsOpened': []}), (False, 0.0))
+
+        hotspot_slide = self.make_slide(
+            'hotspot_image', {'hotspots': [{'id': 'h1', 'xPct': 10, 'yPct': 10, 'label': 'l'}]}
+        )
+        self.assertEqual(grade_slide(hotspot_slide, {'foundHotspotIds': ['h1']}), (True, 1.0))
+        self.assertEqual(grade_slide(hotspot_slide, {'foundHotspotIds': []}), (False, 0.0))
+
+    def test_flashcards_count_threshold(self):
+        slide = self.make_slide('flashcards', {
+            'cards': [{'id': 'c1', 'front': 'f', 'back': 'b'}, {'id': 'c2', 'front': 'f2', 'back': 'b2'}],
+        })
+        self.assertEqual(grade_slide(slide, {'cardsViewed': 2}), (True, 1.0))
+        self.assertEqual(grade_slide(slide, {'cardsViewed': 1}), (False, 0.0))
+        # bool is an int subclass in Python — guard against True being treated as 1.
+        self.assertEqual(grade_slide(slide, {'cardsViewed': True}), (False, 0.0))
+
+    def test_tampered_api_submission_cannot_force_a_pass(self):
+        slide = self.make_slide('multiple_choice', {
+            'options': [
+                {'id': 'right', 'text': 'R', 'is_correct': True},
+                {'id': 'wrong', 'text': 'W', 'is_correct': False},
+            ],
+        })
+        client = self.auth('grading_admin', 'pw')
+        resp = client.post('/api/v1/course-attempts/', {'course_version': str(self.version.id)}, format='json')
+        self.assertEqual(resp.status_code, 201, resp.content)
+        attempt_id = resp.data['id']
+
+        resp = client.post(
+            f'/api/v1/course-attempts/{attempt_id}/results/',
+            {'results': [{'slide': str(slide.id), 'detail': {'selectedOptionId': 'wrong'}}]},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertFalse(resp.data[0]['is_correct'])
+        self.assertEqual(resp.data[0]['score'], 0.0)
+        self.assertFalse(SlideResult.objects.get(attempt_id=attempt_id, slide=slide).is_correct)
+
+
+class CourseAttemptTests(APIAuthTestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(username='attempt_admin', password='pw', role=User.Role.ADMIN)
+        self.team = Team.objects.create(name='Attempt Team')
+        self.manager = User.objects.create_user(
+            username='attempt_manager', password='pw', role=User.Role.MANAGER, team=self.team
+        )
+        self.member = User.objects.create_user(
+            username='attempt_member', password='pw', role=User.Role.MEMBER, team=self.team
+        )
+        self.other_member = User.objects.create_user(
+            username='attempt_other', password='pw', role=User.Role.MEMBER
+        )
+
+        self.assessment_course = Course.objects.create(
+            name='Assessment Course', created_by=self.admin, is_assessment=True, passing_score=70,
+        )
+        self.plain_course = Course.objects.create(name='Plain Course', created_by=self.admin)
+
+        self.assessment_version = CourseVersion.objects.create(
+            course=self.assessment_course, version_number=1, status=CourseVersion.Status.PUBLISHED,
+            created_by=self.admin,
+        )
+        self.plain_version = CourseVersion.objects.create(
+            course=self.plain_course, version_number=1, status=CourseVersion.Status.PUBLISHED,
+            created_by=self.admin,
+        )
+        lesson = Lesson.objects.create(course_version=self.assessment_version, title='L1', order=0)
+        self.mc_slide = Slide.objects.create(
+            lesson=lesson, slide_type='multiple_choice', order=0,
+            config={
+                'options': [
+                    {'id': 'a', 'text': 'A', 'is_correct': True}, {'id': 'b', 'text': 'B', 'is_correct': False},
+                ],
+            },
+        )
+
+    def test_member_only_sees_own_attempts(self):
+        CourseAttempt.objects.create(course_version=self.assessment_version, user=self.member)
+        CourseAttempt.objects.create(course_version=self.assessment_version, user=self.other_member)
+
+        member_client = self.auth('attempt_member', 'pw')
+        resp = member_client.get('/api/v1/course-attempts/')
+        self.assertEqual(len(resp.data['results']), 1)
+
+        manager_client = self.auth('attempt_manager', 'pw')
+        resp = manager_client.get('/api/v1/course-attempts/')
+        self.assertEqual(len(resp.data['results']), 1)
+
+        admin_client = self.auth('attempt_admin', 'pw')
+        resp = admin_client.get('/api/v1/course-attempts/')
+        self.assertEqual(len(resp.data['results']), 2)
+
+    def test_results_upsert_replaces_not_duplicates(self):
+        member_client = self.auth('attempt_member', 'pw')
+        resp = member_client.post(
+            '/api/v1/course-attempts/', {'course_version': str(self.assessment_version.id)}, format='json'
+        )
+        attempt_id = resp.data['id']
+
+        for _ in range(2):
+            resp = member_client.post(
+                f'/api/v1/course-attempts/{attempt_id}/results/',
+                {'results': [{'slide': str(self.mc_slide.id), 'detail': {'selectedOptionId': 'a'}}]},
+                format='json',
+            )
+            self.assertEqual(resp.status_code, 200, resp.content)
+
+        self.assertEqual(SlideResult.objects.filter(attempt_id=attempt_id).count(), 1)
+
+    def test_complete_computes_score_and_passed_for_assessment(self):
+        member_client = self.auth('attempt_member', 'pw')
+        resp = member_client.post(
+            '/api/v1/course-attempts/', {'course_version': str(self.assessment_version.id)}, format='json'
+        )
+        attempt_id = resp.data['id']
+        member_client.post(
+            f'/api/v1/course-attempts/{attempt_id}/results/',
+            {'results': [{'slide': str(self.mc_slide.id), 'detail': {'selectedOptionId': 'a'}}]},
+            format='json',
+        )
+        resp = member_client.post(f'/api/v1/course-attempts/{attempt_id}/complete/', format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.data['score'], 100)
+        self.assertTrue(resp.data['passed'])
+        self.assertEqual(resp.data['status'], 'completed')
+
+    def test_complete_with_no_results_leaves_score_and_passed_null(self):
+        member_client = self.auth('attempt_member', 'pw')
+        resp = member_client.post(
+            '/api/v1/course-attempts/', {'course_version': str(self.assessment_version.id)}, format='json'
+        )
+        attempt_id = resp.data['id']
+        resp = member_client.post(f'/api/v1/course-attempts/{attempt_id}/complete/', format='json')
+        self.assertIsNone(resp.data['score'])
+        self.assertIsNone(resp.data['passed'])
+
+    def test_non_assessment_course_never_sets_passed(self):
+        lesson2 = Lesson.objects.create(course_version=self.plain_version, title='L2', order=0)
+        slide2 = Slide.objects.create(
+            lesson=lesson2, slide_type='multiple_choice', order=0,
+            config={
+                'options': [
+                    {'id': 'a', 'text': 'A', 'is_correct': True}, {'id': 'b', 'text': 'B', 'is_correct': False},
+                ],
+            },
+        )
+        member_client = self.auth('attempt_member', 'pw')
+        resp = member_client.post(
+            '/api/v1/course-attempts/', {'course_version': str(self.plain_version.id)}, format='json'
+        )
+        attempt_id = resp.data['id']
+        member_client.post(
+            f'/api/v1/course-attempts/{attempt_id}/results/',
+            {'results': [{'slide': str(slide2.id), 'detail': {'selectedOptionId': 'a'}}]},
+            format='json',
+        )
+        resp = member_client.post(f'/api/v1/course-attempts/{attempt_id}/complete/', format='json')
+        self.assertEqual(resp.data['score'], 100)
+        self.assertIsNone(resp.data['passed'])
+
+    def test_cannot_submit_results_to_another_users_attempt(self):
+        other_attempt = CourseAttempt.objects.create(course_version=self.assessment_version, user=self.other_member)
+        member_client = self.auth('attempt_member', 'pw')
+        resp = member_client.post(
+            f'/api/v1/course-attempts/{other_attempt.id}/results/',
+            {'results': [{'slide': str(self.mc_slide.id), 'detail': {'selectedOptionId': 'a'}}]},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 404)

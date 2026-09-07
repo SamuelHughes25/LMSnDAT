@@ -1,12 +1,17 @@
+from django.db import transaction
+from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.accounts.models import User
 from apps.core.permissions import IsAdminOrReadOnly
 from . import services
-from .models import Course, CourseAsset, CourseVersion, Lesson, Slide
+from .models import Course, CourseAsset, CourseAttempt, CourseVersion, Lesson, Slide, SlideResult
 from .serializers import (
-    CourseAssetSerializer, CourseSerializer, CourseVersionSerializer, LessonSerializer, SlideSerializer,
+    CourseAssetSerializer, CourseAttemptSerializer, CourseSerializer, CourseVersionSerializer,
+    LessonSerializer, SlideResultBulkUpsertSerializer, SlideResultSerializer, SlideSerializer,
 )
 
 
@@ -84,3 +89,66 @@ class CourseAssetViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(uploaded_by=self.request.user)
+
+
+class CourseAttemptViewSet(viewsets.ModelViewSet):
+    queryset = CourseAttempt.objects.select_related('course_version__course', 'user').prefetch_related(
+        'slide_results'
+    )
+    serializer_class = CourseAttemptSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        if user.role == User.Role.ADMIN:
+            pass
+        elif user.role == User.Role.MANAGER:
+            qs = qs.filter(user__team=user.team)
+        else:
+            qs = qs.filter(user=user)
+
+        course_id = self.request.query_params.get('course')
+        if course_id:
+            qs = qs.filter(course_version__course_id=course_id)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def results(self, request, pk=None):
+        attempt = self.get_object()
+        serializer = SlideResultBulkUpsertSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        saved = []
+        with transaction.atomic():
+            for item in serializer.validated_data['results']:
+                result, _ = SlideResult.objects.update_or_create(
+                    attempt=attempt,
+                    slide_id=item['slide'],
+                    defaults={'detail': item.get('detail')},
+                )
+                saved.append(result)
+
+        return Response(SlideResultSerializer(saved, many=True).data)
+
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        attempt = self.get_object()
+        scores = list(attempt.slide_results.values_list('score', flat=True))
+        score = round(sum(scores) / len(scores) * 100) if scores else None
+
+        course = attempt.course_version.course
+        passed = None
+        if course.is_assessment and course.passing_score is not None and score is not None:
+            passed = score >= course.passing_score
+
+        attempt.status = CourseAttempt.Status.COMPLETED
+        attempt.completed_at = timezone.now()
+        attempt.score = score
+        attempt.passed = passed
+        attempt.save(update_fields=['status', 'completed_at', 'score', 'passed'])
+
+        return Response(CourseAttemptSerializer(attempt).data)

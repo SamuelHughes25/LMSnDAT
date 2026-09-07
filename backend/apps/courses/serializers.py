@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from .constants import SlideType
-from .models import Course, CourseAsset, CourseVersion, Lesson, Slide
+from .models import Course, CourseAsset, CourseAttempt, CourseVersion, Lesson, Slide, SlideResult
 
 
 class SlideSerializer(serializers.ModelSerializer):
@@ -319,5 +319,43 @@ class CourseVersionSerializer(serializers.ModelSerializer):
 class CourseSerializer(serializers.ModelSerializer):
     class Meta:
         model = Course
-        fields = ['id', 'name', 'description', 'created_by', 'is_archived', 'created_at', 'updated_at']
+        fields = [
+            'id', 'name', 'description', 'created_by', 'is_archived',
+            'is_assessment', 'passing_score', 'created_at', 'updated_at',
+        ]
         read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
+
+    def validate(self, attrs):
+        passing_score = attrs.get('passing_score', getattr(self.instance, 'passing_score', None))
+        if passing_score is not None and not (0 <= passing_score <= 100):
+            raise serializers.ValidationError({'passing_score': 'Must be between 0 and 100.'})
+        return attrs
+
+
+class SlideResultSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SlideResult
+        fields = ['id', 'attempt', 'slide', 'detail', 'is_correct', 'score']
+        read_only_fields = ['id', 'attempt', 'is_correct', 'score']
+
+
+# Bulk-upsert input shape for CourseAttemptViewSet.results — deliberately
+# has NO is_correct/score field at all, so there is nothing for a client
+# to send there even if it tried. See grading.py/SlideResult.save() for
+# where those are actually computed.
+class SlideResultUpsertSerializer(serializers.Serializer):
+    slide = serializers.UUIDField()
+    detail = serializers.JSONField(required=False, allow_null=True)
+
+
+class SlideResultBulkUpsertSerializer(serializers.Serializer):
+    results = SlideResultUpsertSerializer(many=True)
+
+
+class CourseAttemptSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CourseAttempt
+        fields = [
+            'id', 'course_version', 'user', 'status', 'started_at', 'completed_at', 'score', 'passed',
+        ]
+        read_only_fields = ['id', 'user', 'status', 'started_at', 'completed_at', 'score', 'passed']

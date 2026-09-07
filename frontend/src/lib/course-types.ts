@@ -406,6 +406,14 @@ export type Course = {
   description: string;
   created_by: number;
   is_archived: boolean;
+  // Marks this course as a scored assessment rather than free-form
+  // training content. passing_score (0-100) is only meaningful when this
+  // is true — see backend/apps/courses/models.py's Course model and
+  // grading.py for how a CourseAttempt's score/passed are derived from
+  // these. Server-authoritative: never computed or trusted from anything
+  // the operative's browser sends.
+  is_assessment: boolean;
+  passing_score: number | null;
   created_at: string;
   updated_at: string;
 };

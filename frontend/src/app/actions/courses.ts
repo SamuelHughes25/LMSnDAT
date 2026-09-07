@@ -38,6 +38,19 @@ export async function deleteCourse(courseId: string): Promise<void> {
   revalidatePath("/courses");
 }
 
+export async function updateCourseAssessmentSettings(
+  courseId: string,
+  isAssessment: boolean,
+  passingScore: number | null,
+): Promise<Course> {
+  const course = await djangoFetch<Course>(`/courses/${courseId}/`, {
+    method: "PATCH",
+    body: JSON.stringify({ is_assessment: isAssessment, passing_score: passingScore }),
+  });
+  revalidatePath(`/courses/${courseId}/settings`);
+  return course;
+}
+
 // --- Lessons ---
 // No revalidatePath below: the builder page keeps its own client-side state
 // (needed for drag-and-drop) and syncs it directly from each action's
