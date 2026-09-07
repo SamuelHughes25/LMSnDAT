@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Course } from "@/lib/course-types";
 import { getCurrentUser } from "@/lib/dal";
 import { djangoFetch } from "@/lib/django";
+import { getVisibleCourseIds, getVisibleTemplateIds } from "@/lib/role-access";
 import type { Paginated, Template } from "@/lib/types";
 
 // A welcome/home screen for operatives — real numbers where the data
@@ -14,11 +15,27 @@ import type { Paginated, Template } from "@/lib/types";
 // syncing) before they can show anything real. Same "coming soon" honesty
 // convention as the admin side's Activity/Analytics tabs.
 export default async function PortalHomePage() {
-  const [user, courses, templates] = await Promise.all([
+  const [user, courses, templates, visibleCourseIds, visibleTemplateIds] = await Promise.all([
     getCurrentUser(),
     djangoFetch<Paginated<Course>>("/courses/"),
     djangoFetch<Paginated<Template>>("/templates/"),
+    getVisibleCourseIds(),
+    getVisibleTemplateIds(),
   ]);
+
+  // Same role-scoping as portal/courses/page.tsx and portal/templates/
+  // page.tsx (see role-access.ts) — this card's count previously came
+  // straight from the unfiltered API response, so a member with no role
+  // (or a role missing some content) still saw the TOTAL course/template
+  // count here even though the list pages themselves already hid the
+  // unassigned ones — reported directly as "the dashboard still says they
+  // have a course to view" for a member who couldn't actually see any.
+  const courseCount =
+    visibleCourseIds === null ? courses.count : courses.results.filter((c) => visibleCourseIds.has(c.id)).length;
+  const templateCount =
+    visibleTemplateIds === null
+      ? templates.count
+      : templates.results.filter((t) => visibleTemplateIds.has(t.id)).length;
 
   const firstName = user.first_name || user.username;
 
@@ -39,7 +56,7 @@ export default async function PortalHomePage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-semibold">{courses.count}</div>
+              <div className="text-2xl font-semibold">{courseCount}</div>
               <p className="text-sm text-muted-foreground">available to take</p>
             </CardContent>
           </Card>
@@ -54,7 +71,7 @@ export default async function PortalHomePage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-semibold">{templates.count}</div>
+              <div className="text-2xl font-semibold">{templateCount}</div>
               <p className="text-sm text-muted-foreground">audits to fill out</p>
             </CardContent>
           </Card>
