@@ -1,0 +1,13 @@
+# Same reasoning as frontend/.dockerignore — without this, `COPY . .` in
+# Dockerfile sends every local dev artifact (a multi-hundred-MB virtualenv
+# included) into the build context and image for no reason.
+.linuxvenv
+.venv
+venv
+__pycache__
+*.pyc
+staticfiles
+media
+.git
+*.md
+.env*

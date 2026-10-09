@@ -1,0 +1,38 @@
+# Production image for the `frontend` service in docker-compose.prod.yml
+# only — the dev Dockerfile (plain `next dev`) is untouched and still what
+# docker-compose.yml uses locally. Three stages so the final image carries
+# only what `output: standalone` (next.config.ts) actually needs at
+# runtime — no devDependencies, no full node_modules, no source TypeScript.
+
+FROM node:22-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+
+FROM node:22-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN npm run build
+
+FROM node:22-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+# server.js defaults to binding localhost-only otherwise — unreachable from
+# the Caddy container across the Docker network, same class of fix as the
+# dev Dockerfile's own `next dev -H 0.0.0.0`. See next.config.ts's
+# `output: "standalone"` comment / node_modules/next/dist/docs's own
+# "Good to know" on these two env vars.
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
+
+# Standalone's own minimal server.js does NOT copy public/ or .next/static
+# on its own (by design — meant for a CDN to serve those) — manually copying
+# them in is the documented step for anyone not using one, which this
+# single-Droplet deploy isn't.
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
+
+EXPOSE 3000
+CMD ["node", "server.js"]

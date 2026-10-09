@@ -1,0 +1,11 @@
+{$DOMAIN} {
+	# Everything the public internet reaches goes to the Next.js BFF —
+	# Django is never reverse-proxied here at all, matching the "only
+	# Next.js is public-facing" decision in docs/PROJECT_LOG.md. Caddy
+	# handles HTTPS automatically (Let's Encrypt, auto-renewed) for any
+	# real domain with zero config beyond the domain itself — see
+	# docker-compose.prod.yml's `caddy` service for where $DOMAIN comes
+	# from. If DOMAIN is literally "localhost" (local smoke-testing),
+	# Caddy serves plain HTTP instead of attempting a cert it can't get.
+	reverse_proxy frontend:3000
+}

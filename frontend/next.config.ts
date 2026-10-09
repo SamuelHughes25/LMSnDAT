@@ -1,6 +1,13 @@
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs/config";
 
 const nextConfig: NextConfig = {
+  // Traces each page's actual dependencies and emits a self-contained
+  // .next/standalone/server.js + a pruned node_modules — Dockerfile.prod's
+  // whole point (a production image that doesn't need `npm ci` with full
+  // devDependencies baked in). No effect on `next dev` (dev's own
+  // Dockerfile is untouched, still plain `next dev`), only on `next build`.
+  output: "standalone",
   experimental: {
     serverActions: {
       // Next.js Server Actions cap request bodies at 1MB by default —
@@ -28,4 +35,16 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// Wraps the config to upload source maps to Sentry at build time (readable
+// stack traces instead of minified ones) — org/project/authToken are all
+// optional here deliberately: with none of them set (every environment
+// today, including this sandbox), the build plugin just skips the upload
+// step rather than failing the build — confirmed directly by building
+// with no SENTRY_AUTH_TOKEN set, not assumed. silent avoids its log noise
+// outside CI.
+export default withSentryConfig(nextConfig, {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  silent: !process.env.CI,
+});

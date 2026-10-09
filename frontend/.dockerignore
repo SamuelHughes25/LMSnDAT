@@ -1,0 +1,17 @@
+# Without this, `COPY . .` in Dockerfile.prod's builder stage copies the
+# HOST's own node_modules (2.9GB, confirmed via a real build — "Sending
+# build context to Docker daemon 2.9GB") right on top of the one `npm ci`
+# just installed inside the container. That's wasteful on its own, but the
+# real bug it caused: this repo's own node_modules/.bin/next has no execute
+# bit (-rw-rw-r--, confirmed) since every local command in this project
+# invokes `node node_modules/next/dist/bin/next` directly rather than the
+# `next` shell wrapper — once copied into the image, `npm run build`'s
+# `next build` (which DOES exec that wrapper) failed with a flat
+# "Permission denied". Same class of bug the dev Dockerfile/compose never
+# hit, only because dev compose bind-mounts the real source directory over
+# the image afterward anyway, silently masking it.
+node_modules
+.next
+.git
+*.md
+.env*

@@ -1,0 +1,110 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-lms}
+      POSTGRES_USER: ${POSTGRES_USER:-lms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a real POSTGRES_PASSWORD in .env for production — must match DATABASE_URL's own password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # No `ports:` — dev compose publishes 5432 to the host so `manage.py`
+    # can run outside Docker; in production that would expose Postgres
+    # directly to the public internet for no reason (only `web`/
+    # `celery-*` ever need it, over the internal Compose network).
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lms}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # No `ports:` — same reasoning as `db` above.
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./backend
+    # No `command:` override (unlike dev's `runserver`) and no source
+    # volume mount — this runs the image's own baked-in code via
+    # docker-entrypoint.sh (migrate, collectstatic, gunicorn). No `ports:`
+    # either — only `caddy` is reachable from outside the Droplet; `web`
+    # is only ever called by `frontend`, over the internal network, by its
+    # Compose service name (see .env's DJANGO_API_URL on the `frontend`
+    # service below).
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz/')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  celery-worker:
+    build:
+      context: ./backend
+    command: celery -A config worker -l info
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  celery-beat:
+    build:
+      context: ./backend
+    command: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    # Same internal-only reasoning as `web` — Caddy is the only public
+    # entry point (see the `caddy` service below). DJANGO_API_URL points
+    # at `web`'s Compose service name, resolved over the internal Docker
+    # network DNS, same as dev.
+    environment:
+      - DJANGO_API_URL=http://web:8000/api/v1
+      - NEXT_PUBLIC_SENTRY_DSN=${NEXT_PUBLIC_SENTRY_DSN:-}
+    depends_on:
+      - web
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=${DOMAIN:?Set DOMAIN in .env — the real domain Caddy requests an HTTPS cert for}
+    depends_on:
+      - frontend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

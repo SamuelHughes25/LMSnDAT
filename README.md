@@ -33,6 +33,41 @@ docker compose exec web python manage.py createsuperuser
 docker compose exec web python manage.py test
 ```
 
+## Production deploy
+
+A single DigitalOcean Droplet running the whole stack via Docker Compose,
+Caddy as the public reverse proxy with automatic HTTPS, Spaces for file
+storage — see `lms-project-brief.md` for the full plan and reasoning.
+
+**One-time setup on a fresh Droplet:**
+
+```bash
+git clone <your-private-repo-url> lms && cd lms
+cp .env.example .env
+# Edit .env: DJANGO_SECRET_KEY (generate a real one), DOMAIN, POSTGRES_PASSWORD
+# (+ matching DATABASE_URL password), DJANGO_SETTINGS_MODULE=config.settings.production,
+# DEBUG=False, STORAGE_BACKEND=s3 + real SPACES_* credentials, SENTRY_DSN (optional).
+./deploy.sh
+docker compose -f docker-compose.prod.yml exec web python manage.py createsuperuser
+```
+
+**Every deploy after that**, from the Droplet:
+
+```bash
+./deploy.sh
+```
+
+`deploy.sh` pulls the latest code, rebuilds and restarts every container, and
+runs migrations. Unlike `docker-compose.yml` (dev — runs `next dev`/
+`runserver`, bind-mounts source for hot reload, publishes every service's
+port to the host), `docker-compose.prod.yml` builds real production images
+(gunicorn + collectstatic behind whitenoise for Django,
+`next build`'s standalone output for Next.js), and only Caddy is reachable
+from outside the Droplet at all — Postgres, Redis, Django, and Next.js all
+stay on the internal Docker network. See `Caddyfile` for the reverse proxy
+config and `docs/PROJECT_LOG.md` for why Django itself never needs to be
+public-facing.
+
 ## Project layout
 
 ```
