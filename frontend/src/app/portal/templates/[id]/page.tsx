@@ -26,7 +26,8 @@ export default async function PortalTemplateFillPage({ params }: { params: Promi
   const visibleIds = await getVisibleTemplateIds();
   if (visibleIds !== null && !visibleIds.has(id)) notFound();
 
-  const versions = await djangoFetch<Paginated<TemplateVersion>>(`/template-versions/?template=${id}`);
+  // page_size=200 — see courses/[id]/builder/page.tsx's identical fetch.
+  const versions = await djangoFetch<Paginated<TemplateVersion>>(`/template-versions/?template=${id}&page_size=200`);
   const version = versions.results.find((v) => v.status === "published");
 
   if (!version) notFound();

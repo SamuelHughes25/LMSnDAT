@@ -7,8 +7,10 @@ import { TextStyle } from "@tiptap/extension-text-style";
 import Placeholder from "@tiptap/extension-placeholder";
 import DOMPurify from "dompurify";
 
-import type { BoxTransform, ContentSlideLayout } from "@/lib/course-types";
+import type { BoxTransform, ContentSlideLayout, PositionableField } from "@/lib/course-types";
+import { FontFamily } from "@/lib/tiptap-font-family";
 import { FontSize } from "@/lib/tiptap-font-size";
+import { TextAlign } from "@/lib/tiptap-text-align";
 import { Color } from "@/lib/tiptap-text-color";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { useIsClient } from "@/lib/use-is-client";
@@ -65,8 +67,6 @@ const FILL_BOX = "h-full w-full";
 // cascade wins, and ProseMirror's happens to. !important sidesteps that
 // race instead of depending on stylesheet load order.
 const SINGLE_LINE_TYPOGRAPHY = "overflow-hidden text-ellipsis !whitespace-nowrap";
-
-type PositionableField = "title" | "subtitle" | "body" | "body2";
 
 export function ContentSlideFace({
   slide,
@@ -165,7 +165,12 @@ export function ContentSlideFace({
   const titleNode = positioned(
     "title",
     undefined,
-    <EditableTitle value={slide.title} mode={mode} onCommit={(title) => onTitleChange?.(title)} />,
+    <EditableTitle
+      fieldId={`${slide.id}:title`}
+      value={slide.title}
+      mode={mode}
+      onCommit={(title) => onTitleChange?.(title)}
+    />,
   );
 
   // The four title-page layouts (cover/section-divider slides, no body
@@ -196,6 +201,7 @@ export function ContentSlideFace({
           "subtitle",
           undefined,
           <EditableSubtitle
+            fieldId={`${slide.id}:subtitle`}
             value={slide.config.subtitle}
             mode={mode}
             onCommit={(subtitle) => onConfigChange?.({ subtitle })}
@@ -274,6 +280,7 @@ export function ContentSlideFace({
     );
     const textNode = (
       <EditableBody
+        fieldId={`${slide.id}:body`}
         value={slide.config.body}
         mode={mode}
         onCommit={(body) => onConfigChange?.({ body })}
@@ -325,12 +332,18 @@ export function ContentSlideFace({
         {positioned(
           "body",
           undefined,
-          <EditableBody value={slide.config.body} mode={mode} onCommit={(body) => onConfigChange?.({ body })} />,
+          <EditableBody
+            fieldId={`${slide.id}:body`}
+            value={slide.config.body}
+            mode={mode}
+            onCommit={(body) => onConfigChange?.({ body })}
+          />,
         )}
         {positioned(
           "body2",
           undefined,
           <EditableBody
+            fieldId={`${slide.id}:body2`}
             value={slide.config.body2}
             mode={mode}
             onCommit={(body2) => onConfigChange?.({ body2 })}
@@ -341,7 +354,12 @@ export function ContentSlideFace({
       positioned(
         "body",
         "mt-8 min-h-0 flex-1",
-        <EditableBody value={slide.config.body} mode={mode} onCommit={(body) => onConfigChange?.({ body })} />,
+        <EditableBody
+          fieldId={`${slide.id}:body`}
+          value={slide.config.body}
+          mode={mode}
+          onCommit={(body) => onConfigChange?.({ body })}
+        />,
       )
     );
 
@@ -365,18 +383,20 @@ export function ContentSlideFace({
 // slide type has nothing to interact with, so presentation mode behaves
 // exactly like a static (thumbnail) render.
 function EditableBody({
+  fieldId,
   value,
   mode,
   onCommit,
   className,
 }: {
+  fieldId: string;
   value: string | undefined;
   mode: SlideFaceProps["mode"];
   onCommit: (value: string) => void;
   className?: string;
 }) {
   if (mode === "edit") {
-    return <RichTextBody value={value} onCommit={onCommit} className={cn(FILL_BOX, className)} />;
+    return <RichTextBody fieldId={fieldId} value={value} onCommit={onCommit} className={cn(FILL_BOX, className)} />;
   }
   return (
     <StaticField value={value} placeholder="Click to add text" className={cn(BODY_TYPOGRAPHY, FILL_BOX, className)} />
@@ -389,16 +409,18 @@ function EditableBody({
 // and placeholder copy — a shared component would just be an if/else wearing
 // a trenchcoat.
 function EditableTitle({
+  fieldId,
   value,
   mode,
   onCommit,
 }: {
+  fieldId: string;
   value: string;
   mode: SlideFaceProps["mode"];
   onCommit: (value: string) => void;
 }) {
   if (mode === "edit") {
-    return <RichTextTitle value={value} onCommit={onCommit} className={FILL_BOX} />;
+    return <RichTextTitle fieldId={fieldId} value={value} onCommit={onCommit} className={FILL_BOX} />;
   }
   return (
     <StaticField
@@ -412,16 +434,18 @@ function EditableTitle({
 // Same dispatch shape again, for the "title-subtitle" layout's subtitle
 // field — used only by that one layout (see ContentSlideFace above).
 function EditableSubtitle({
+  fieldId,
   value,
   mode,
   onCommit,
 }: {
+  fieldId: string;
   value: string | undefined;
   mode: SlideFaceProps["mode"];
   onCommit: (value: string) => void;
 }) {
   if (mode === "edit") {
-    return <RichTextSubtitle value={value} onCommit={onCommit} className={FILL_BOX} />;
+    return <RichTextSubtitle fieldId={fieldId} value={value} onCommit={onCommit} className={FILL_BOX} />;
   }
   return (
     <StaticField
@@ -513,15 +537,17 @@ function StaticField({
 // fight, and it cannot recur here because React no longer has an opinion
 // about this element's children after the initial mount.
 function RichTextBody({
+  fieldId,
   value,
   onCommit,
   className,
 }: {
+  fieldId: string;
   value: string | undefined;
   onCommit: (value: string) => void;
   className?: string;
 }) {
-  const { setActiveEditor, toolbarRef, toolbarInteractingRef } = useActiveEditorContext();
+  const { focusEditor, blurEditor, panelRef, panelInteractingRef } = useActiveEditorContext();
   const debouncedCommit = useDebouncedCallback(onCommit, CHANGE_DEBOUNCE_MS);
 
   const editor = useEditor({
@@ -549,6 +575,8 @@ function RichTextBody({
       }),
       TextStyle,
       FontSize,
+      FontFamily,
+      TextAlign,
       Color,
       Placeholder.configure({ placeholder: "Click to add text" }),
     ],
@@ -575,38 +603,36 @@ function RichTextBody({
       debouncedCommit(editor.getHTML());
     },
     onFocus: ({ editor }) => {
-      setActiveEditor(editor);
+      focusEditor(fieldId, editor);
     },
-    // Functional-updater form — see active-editor-context.tsx for why this
-    // is the part that makes focus/blur races between the two-column
-    // layout's two editors safe rather than a source of flaky bugs.
+    // See active-editor-context.tsx's blurEditor for why this is safe against
+    // focus/blur races between the two-column layout's two editors.
     //
-    // Guarded two ways, because clicking a toolbar control blurs this editor
-    // too, and without a guard that would clear `activeEditor` — which
-    // unmounts `SlideTextToolbar`, including the control the user was
-    // mid-click on:
+    // Guarded two ways, because clicking a properties-panel control blurs
+    // this editor too, and without a guard that would clear `activeEditor`
+    // right as the user tries to use it:
     //  1. `relatedTarget` (the element about to receive focus) inside the
-    //     toolbar's own DOM node — covers plain buttons (Bold/Italic/etc.),
+    //     panel's own DOM node — covers plain buttons (Bold/Italic/etc.),
     //     which stay focus-neutral thanks to their onMouseDown preventDefault,
     //     so relatedTarget here is really just a belt-and-suspenders check.
-    //  2. `toolbarInteractingRef` — covers the font-size Select, which
-    //     doesn't just focus its trigger: Base UI opens it straight to a
-    //     listbox *item*, focusing that item directly, and that item is
-    //     rendered in a portal outside the toolbar's DOM subtree entirely —
-    //     confirmed by instrumenting this handler and inspecting the actual
-    //     relatedTarget during a real open, not assumed. A DOM-containment
-    //     check can't see into a portal it doesn't know the location of, so
-    //     the Select instead sets this ref directly (see slide-text-toolbar.tsx)
+    //  2. `panelInteractingRef` — covers the font-size Select, which doesn't
+    //     just focus its trigger: Base UI opens it straight to a listbox
+    //     *item*, focusing that item directly, and that item is rendered in
+    //     a portal outside the panel's DOM subtree entirely — confirmed by
+    //     instrumenting this handler and inspecting the actual relatedTarget
+    //     during a real open, not assumed. A DOM-containment check can't see
+    //     into a portal it doesn't know the location of, so any such control
+    //     instead sets this ref directly (see text-object-properties.tsx)
     //     whenever it's opening/open, sidestepping the portal question
     //     entirely in favor of explicit "we're mid-interaction" state.
     onBlur: ({ editor, event }) => {
-      const toolbarEl = toolbarRef.current;
+      const panelEl = panelRef.current;
       const nextFocus = event.relatedTarget;
-      const focusMovedIntoToolbar = !!(toolbarEl && nextFocus instanceof Node && toolbarEl.contains(nextFocus));
-      if (focusMovedIntoToolbar || toolbarInteractingRef.current) {
+      const focusMovedIntoPanel = !!(panelEl && nextFocus instanceof Node && panelEl.contains(nextFocus));
+      if (focusMovedIntoPanel || panelInteractingRef.current) {
         return;
       }
-      setActiveEditor((current) => (current === editor ? null : current));
+      blurEditor(fieldId, editor);
     },
   });
 
@@ -654,17 +680,19 @@ function RichTextBody({
 // bulletList/orderedList while leaving listItem enabled, or vice versa) for
 // a case that wasn't requested.
 function useSingleLineSlideEditor({
+  fieldId,
   value,
   onCommit,
   typographyClass,
   placeholder,
 }: {
+  fieldId: string;
   value: string;
   onCommit: (value: string) => void;
   typographyClass: string;
   placeholder: string;
 }) {
-  const { setActiveEditor, toolbarRef, toolbarInteractingRef } = useActiveEditorContext();
+  const { focusEditor, blurEditor, panelRef, panelInteractingRef } = useActiveEditorContext();
   const debouncedCommit = useDebouncedCallback(onCommit, CHANGE_DEBOUNCE_MS);
 
   return useEditor({
@@ -687,6 +715,8 @@ function useSingleLineSlideEditor({
       }),
       TextStyle,
       FontSize,
+      FontFamily,
+      TextAlign,
       Color,
       Placeholder.configure({ placeholder }),
     ],
@@ -715,30 +745,33 @@ function useSingleLineSlideEditor({
       debouncedCommit(editor.getHTML());
     },
     onFocus: ({ editor }) => {
-      setActiveEditor(editor);
+      focusEditor(fieldId, editor);
     },
     onBlur: ({ editor, event }) => {
-      const toolbarEl = toolbarRef.current;
+      const panelEl = panelRef.current;
       const nextFocus = event.relatedTarget;
-      const focusMovedIntoToolbar = !!(toolbarEl && nextFocus instanceof Node && toolbarEl.contains(nextFocus));
-      if (focusMovedIntoToolbar || toolbarInteractingRef.current) {
+      const focusMovedIntoPanel = !!(panelEl && nextFocus instanceof Node && panelEl.contains(nextFocus));
+      if (focusMovedIntoPanel || panelInteractingRef.current) {
         return;
       }
-      setActiveEditor((current) => (current === editor ? null : current));
+      blurEditor(fieldId, editor);
     },
   });
 }
 
 function RichTextTitle({
+  fieldId,
   value,
   onCommit,
   className,
 }: {
+  fieldId: string;
   value: string;
   onCommit: (value: string) => void;
   className?: string;
 }) {
   const editor = useSingleLineSlideEditor({
+    fieldId,
     value,
     onCommit,
     typographyClass: cn(SINGLE_LINE_TYPOGRAPHY, "text-4xl font-bold"),
@@ -753,15 +786,18 @@ function RichTextTitle({
 // copy, so it reads as secondary text (a byline/name/date) rather than a
 // second title.
 function RichTextSubtitle({
+  fieldId,
   value,
   onCommit,
   className,
 }: {
+  fieldId: string;
   value: string | undefined;
   onCommit: (value: string) => void;
   className?: string;
 }) {
   const editor = useSingleLineSlideEditor({
+    fieldId,
     value: value ?? "",
     onCommit,
     typographyClass: cn(SINGLE_LINE_TYPOGRAPHY, "text-xl text-muted-foreground"),

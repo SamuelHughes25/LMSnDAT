@@ -1,146 +1,97 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
-import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
+import { createContext, useContext, useMemo, useRef, useState } from "react";
+import type { ReactNode, RefObject } from "react";
 import type { Editor } from "@tiptap/react";
 
 // Up to two EditableBody/TipTap instances can be mounted at once (the
 // two-column content layout renders `body` and `body2` as fully independent
-// editors — see content-slide-face.tsx). The formatting toolbar needs to
-// know which one (if either) currently has focus, so it applies commands to
-// the right document. This context is that single source of truth, provided
-// once at the top of the builder (course-builder.tsx) so both the toolbar
-// and every EditableBody instance can reach it without prop-drilling through
-// the slide-face component tree.
+// editors — see content-slide-face.tsx). The properties panel needs to know
+// which one (if either) currently has focus AND which field/box owns it, so
+// it can apply commands to the right document and — critically — refuse to
+// act on a stale editor left over from a box the user is no longer looking
+// at (see activeEditorId below). Provided once at the top of the builder
+// (course-builder.tsx) so both the panel and every EditableBody instance can
+// reach it without prop-drilling through the slide-face component tree.
+//
+// Previously also tracked `hasSelection`/`selectionRect`, which existed
+// solely to let a floating toolbar (slide-text-toolbar.tsx, since removed)
+// pop up near a text highlight and know whether to render at all. The
+// properties panel doesn't float near anything — it's a fixed region that
+// shows an object's controls whenever that object is SELECTED (see
+// slide-selection-context.tsx), independent of whether any text is
+// currently highlighted — so that machinery is gone, not just renamed.
 type ActiveEditorContextValue = {
   activeEditor: Editor | null;
-  // Typed as the raw `useState` dispatch (not just `(e: Editor | null) =>
-  // void`) so callers can use the functional-updater form. That's not just
-  // a nicety — it's what makes the blur handler race-safe (see the comment
-  // on `setActiveEditor` in the provider below).
-  setActiveEditor: Dispatch<SetStateAction<Editor | null>>;
-  // Whether the active editor's current selection is non-empty — the signal
-  // the toolbar uses to decide whether to render at all ("pop up when text
-  // is highlighted"). Scoped to the ActiveEditorProvider (not local state
-  // inside the toolbar) so course-builder.tsx can react to it too, e.g. to
-  // conditionally mount the toolbar row itself rather than only toggling its
-  // internal contents.
-  hasSelection: boolean;
-  // The current selection's on-screen bounding box (native Selection API,
-  // not TipTap's coordsAtPos — simpler, and already correct by the time
-  // `selectionUpdate` fires, since that only fires after ProseMirror has
-  // synced its selection to the DOM). `null` whenever there's no active
-  // editor, no selection, or the browser's Selection API couldn't produce
-  // a usable rect (see the guarded computation in the provider below).
-  // SlideTextToolbar uses this to float itself near the selection
-  // (`position: fixed`) instead of at a fixed spot on the page.
-  selectionRect: DOMRect | null;
-  // The toolbar's own root DOM node, so an editor's onBlur handler can tell
-  // "focus moved into the toolbar itself" (e.g. clicking a plain button)
-  // apart from "focus moved somewhere else entirely" — see the comment on
-  // RichTextBody's onBlur in content-slide-face.tsx.
-  toolbarRef: RefObject<HTMLDivElement | null>;
-  // Explicit "a toolbar control that manages its own focus is currently
-  // open/interacting" flag — set by the font-size Select (see
-  // slide-text-toolbar.tsx). Exists because that control's popover content
-  // renders in a portal outside toolbarRef's DOM subtree, so plain DOM
+  // Which box owns `activeEditor` — namespaced the same way
+  // slide-selection-context.tsx's `selectedId` is (`${slideId}:${field}`).
+  // The properties panel compares this against the currently SELECTED
+  // object's own id before trusting `activeEditor` for a formatting command:
+  // a box can be selected (via slide-selection-context) without its editor
+  // ever having taken focus — e.g. selected by grabbing its move band rather
+  // than clicking into its text — in which case `activeEditor` may be null,
+  // or may still point at whatever OTHER box was last actually focused.
+  // Without this check, a formatting command issued from the panel could
+  // silently apply to the wrong box's text.
+  activeEditorId: string | null;
+  // Registers `editor` as active under `id`, called on that editor's own
+  // onFocus. A plain setter (not exposed as raw dispatch) since focus and
+  // blur are the only two ways this ever changes, and pairing them under
+  // one function keeps `activeEditor`/`activeEditorId` from ever updating
+  // independently of each other.
+  focusEditor: (id: string, editor: Editor) => void;
+  // Clears the active editor, but ONLY if `editor` is still the one
+  // currently registered — the same functional-updater race-safety this
+  // context has always used (see the comment on `blurEditor`'s
+  // implementation below), now just wrapped in a named function instead of
+  // exposing the raw dispatch for callers to get right themselves.
+  blurEditor: (id: string, editor: Editor) => void;
+  // The properties panel's own root DOM node, so an editor's onBlur handler
+  // (and slide-selection-context's own deselect-on-blur/deselect-on-outside-
+  // click checks) can tell "focus moved into the panel itself" (e.g.
+  // clicking a plain button, or a numeric position input) apart from "focus
+  // moved somewhere else entirely."
+  panelRef: RefObject<HTMLDivElement | null>;
+  // Explicit "a panel control that manages its own focus is currently
+  // open/interacting" flag — set by any portal-rendered control in the
+  // panel (a Select's listbox, a DropdownMenu's items). Exists because such
+  // content renders in a portal outside panelRef's DOM subtree, so plain DOM
   // containment can't detect it; a ref (not state) because it only needs to
-  // be read synchronously inside an editor's onBlur handler, never to drive
-  // a render itself.
-  toolbarInteractingRef: RefObject<boolean>;
+  // be read synchronously inside a blur/outside-click handler, never to
+  // drive a render itself.
+  panelInteractingRef: RefObject<boolean>;
 };
 
 const ActiveEditorContext = createContext<ActiveEditorContextValue | null>(null);
 
 export function ActiveEditorProvider({ children }: { children: ReactNode }) {
-  const [activeEditor, setActiveEditor] = useState<Editor | null>(null);
-  const [hasSelection, setHasSelection] = useState(false);
-  const [selectionRect, setSelectionRect] = useState<DOMRect | null>(null);
-  const toolbarRef = useRef<HTMLDivElement | null>(null);
-  const toolbarInteractingRef = useRef(false);
+  const [active, setActive] = useState<{ id: string; editor: Editor } | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const panelInteractingRef = useRef(false);
 
-  // Subscribes to the active editor's selection, re-subscribing every time
-  // `activeEditor` changes. Because this effect's cleanup always detaches
-  // the *previous* editor's listener before a new one is attached (or
-  // before deciding there is no active editor at all), `hasSelection` can
-  // never end up reflecting a stale/blurred editor's selection state — there
-  // is only ever one subscription alive, tracking whichever editor is
-  // current. When there's no active editor, the effect intentionally does
-  // nothing (no listener to attach) rather than resetting `hasSelection`
-  // itself — that reset is instead *derived* below (`activeEditor !==
-  // null && hasSelection`), since "no active editor" trivially implies "no
-  // visible selection" without needing an effect to say so. Same reasoning
-  // applies to `selectionRect`.
-  useEffect(() => {
-    if (!activeEditor) return;
-    const updateSelection = () => {
-      const empty = activeEditor.state.selection.empty;
-      setHasSelection(!empty);
-      if (empty) {
-        setSelectionRect(null);
-        return;
-      }
-      // Native Selection API, not TipTap's coordsAtPos — simpler, and the
-      // native selection is already correct here since selectionUpdate
-      // fires after ProseMirror has synced its selection to the DOM.
-      // getRangeAt(0) throws if rangeCount is 0 even when `sel` itself is
-      // non-null, so that's checked explicitly; the try/catch is
-      // belt-and-suspenders for any other browser-specific edge case.
-      try {
-        const domSelection = window.getSelection();
-        if (!domSelection || domSelection.rangeCount === 0) {
-          setSelectionRect(null);
-          return;
-        }
-        const rect = domSelection.getRangeAt(0).getBoundingClientRect();
-        // A zero-size rect (e.g. a selection that collapses onto an empty
-        // inline node) isn't useful to anchor the toolbar to.
-        setSelectionRect(rect.width > 0 || rect.height > 0 ? rect : null);
-      } catch {
-        setSelectionRect(null);
-      }
-    };
-    updateSelection();
-    activeEditor.on("selectionUpdate", updateSelection);
-    return () => {
-      activeEditor.off("selectionUpdate", updateSelection);
-    };
-  }, [activeEditor]);
-
-  const value = useMemo(
+  const value = useMemo<ActiveEditorContextValue>(
     () => ({
-      activeEditor,
-      setActiveEditor,
-      hasSelection: activeEditor !== null && hasSelection,
-      selectionRect: activeEditor !== null ? selectionRect : null,
-      toolbarRef,
-      toolbarInteractingRef,
+      activeEditor: active?.editor ?? null,
+      activeEditorId: active?.id ?? null,
+      focusEditor: (id, editor) => setActive({ id, editor }),
+      // Functional-updater form — see the type's own comment on `blurEditor`
+      // for why: if focus moves from editor A straight to editor B, the
+      // browser fires A's blur before B's focus, so A's blur handler must
+      // never unconditionally clear the context — only if IT is still the
+      // one registered. Reading `current` fresh at apply-time (rather than
+      // whatever this closure captured) is what makes that safe regardless
+      // of ordering.
+      blurEditor: (id, editor) =>
+        setActive((current) => (current?.editor === editor ? null : current)),
+      panelRef,
+      panelInteractingRef,
     }),
-    [activeEditor, hasSelection, selectionRect],
+    [active],
   );
 
   return <ActiveEditorContext.Provider value={value}>{children}</ActiveEditorContext.Provider>;
 }
 
-// Each EditableBody instance calls this on focus/blur (via TipTap's
-// onFocus/onBlur editor options) to register/unregister itself.
-//
-// The blur side is the part worth tracing through carefully (this is the
-// highest-risk piece of this change): when focus moves from editor A
-// straight to editor B — e.g. clicking from the left column into the right
-// column in the two-column layout — the browser fires A's blur before B's
-// focus. If A's blur handler unconditionally cleared the context
-// (`setActiveEditor(null)`), that's still technically fine *if* blur always
-// strictly precedes focus... but relying on that ordering is exactly the
-// kind of assumption that quietly breaks later (a future toolbar-mousedown
-// path, a browser quirk, React batching two updates together). So instead,
-// every EditableBody calls `setActiveEditor` with the *functional* updater
-// form: `setActiveEditor((current) => (current === thisEditor ? null :
-// current))`. React guarantees a functional updater always runs against the
-// true latest state at the moment it's applied — never a value captured in
-// a stale closure — so even if B's focus handler somehow ran first and set
-// the context to B, A's later blur-clear sees `current === B !== A` and
-// leaves it alone. There's no ordering assumption left to break.
 export function useActiveEditorContext() {
   const ctx = useContext(ActiveEditorContext);
   if (!ctx) {

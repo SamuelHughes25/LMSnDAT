@@ -16,7 +16,14 @@ export default async function CourseBuilderPage({ params }: { params: Promise<{ 
     throw err;
   }
 
-  const versions = await djangoFetch<Paginated<CourseVersion>>(`/course-versions/?course=${id}`);
+  // page_size=200: the default (25 — see DefaultPagination) would silently
+  // drop this course's OLDEST versions past the 25th once it's been
+  // through enough create-draft/publish cycles, which for most courses
+  // never matters since the draft being looked for below is always recent
+  // — but it's cheap enough to just not have that ceiling at all, same
+  // convention as every other "fetch everything for this one course" list
+  // in this app.
+  const versions = await djangoFetch<Paginated<CourseVersion>>(`/course-versions/?course=${id}&page_size=200`);
   const draft = versions.results.find((v) => v.status === "draft");
 
   if (!draft) {

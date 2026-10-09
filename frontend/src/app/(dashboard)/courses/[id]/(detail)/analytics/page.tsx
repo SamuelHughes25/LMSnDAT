@@ -1,15 +1,8 @@
-import { Badge } from "@/components/ui/badge";
+import { CourseAnalyticsTable, type UserSummary } from "@/components/course-analytics-table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import type { AccountUser } from "@/lib/accounts-types";
-import type { CourseAttempt } from "@/lib/attempt-types";
+import type { CourseAttempt, CourseDeadlineExtension } from "@/lib/attempt-types";
+import type { Course } from "@/lib/course-types";
 import { djangoFetch } from "@/lib/django";
 import type { Paginated } from "@/lib/types";
 
@@ -30,18 +23,6 @@ function StatBar({ label, percent }: { label: string; percent: number }) {
   );
 }
 
-// Grouped-by-user summary row, aggregated here (in the server component)
-// from the raw attempt list — no dedicated backend aggregation endpoint;
-// at internal-tool scale a plain reduce over up to 200 fetched rows is
-// simpler and avoids a second API shape to maintain.
-type UserSummary = {
-  userId: number;
-  attemptCount: number;
-  bestScore: number | null;
-  passed: boolean | null;
-  lastAttemptAt: string;
-};
-
 // Course existence/404 is already handled by the (detail) layout, which
 // fetches the course itself — this page only needs the attempts list.
 export default async function CourseAnalyticsPage({ params }: { params: Promise<{ id: string }> }) {
@@ -49,7 +30,10 @@ export default async function CourseAnalyticsPage({ params }: { params: Promise<
 
   // page_size=200 (DRF's configured max — see backend/apps/core/pagination.py)
   // rather than building pagination UI, fine at this app's scale.
-  const attempts = await djangoFetch<Paginated<CourseAttempt>>(`/course-attempts/?course=${id}&page_size=200`);
+  const [course, attempts] = await Promise.all([
+    djangoFetch<Course>(`/courses/${id}/`),
+    djangoFetch<Paginated<CourseAttempt>>(`/course-attempts/?course=${id}&page_size=200`),
+  ]);
   const allAttempts = attempts.results;
   const completed = allAttempts.filter((a) => a.status === "completed");
   const scored = completed.filter((a) => a.score !== null);
@@ -57,7 +41,6 @@ export default async function CourseAnalyticsPage({ params }: { params: Promise<
 
   const uniqueUserIds = Array.from(new Set(allAttempts.map((a) => a.user)));
   const users = await Promise.all(uniqueUserIds.map((userId) => djangoFetch<AccountUser>(`/users/${userId}/`)));
-  const userById = new Map(users.map((u) => [u.id, u]));
 
   const averageScore = scored.length
     ? scored.reduce((sum, a) => sum + (a.score ?? 0), 0) / scored.length
@@ -74,8 +57,20 @@ export default async function CourseAnalyticsPage({ params }: { params: Promise<
   const uniqueGradedUserIds = new Set(graded.map((a) => a.user));
   const averageAttemptsPerPerson = uniqueGradedUserIds.size ? graded.length / uniqueGradedUserIds.size : null;
 
+  // Grouped-by-user, aggregated here (in the server component) from the raw
+  // attempt list — no dedicated backend aggregation endpoint; at
+  // internal-tool scale a plain reduce over up to 200 fetched rows is
+  // simpler and avoids a second API shape to maintain. `attemptsByUser`
+  // (every one of a user's own CourseAttempt rows — one per full
+  // course play-through, never a per-slide/per-question count) is what
+  // powers the table's own expand-to-see-every-attempt row.
+  const attemptsByUser: Record<number, CourseAttempt[]> = {};
+  for (const userId of uniqueUserIds) {
+    attemptsByUser[userId] = allAttempts.filter((a) => a.user === userId);
+  }
+
   const summaries: UserSummary[] = uniqueUserIds.map((userId) => {
-    const userAttempts = allAttempts.filter((a) => a.user === userId);
+    const userAttempts = attemptsByUser[userId];
     const userScored = userAttempts.filter((a) => a.score !== null);
     const bestScore = userScored.length ? Math.max(...userScored.map((a) => a.score ?? 0)) : null;
     // "Passed" for the table means at least one of this user's attempts
@@ -91,9 +86,37 @@ export default async function CourseAnalyticsPage({ params }: { params: Promise<
   });
   summaries.sort((a, b) => (a.lastAttemptAt < b.lastAttemptAt ? 1 : -1));
 
+  // Only fetched/shown at all when the course actually has a deadline —
+  // effective deadline is a per-user extension if one exists, else the
+  // course's own default (see Course.effective_deadline_for() in
+  // backend/apps/courses/models.py, mirrored here client-side since this
+  // page already has both pieces in hand).
+  let deadlineByUser: Record<number, string | null> | undefined;
+  if (course.deadline) {
+    const extensions = await djangoFetch<Paginated<CourseDeadlineExtension>>(
+      `/course-deadline-extensions/?course=${id}&page_size=200`,
+    );
+    const extensionByUser = new Map(extensions.results.map((e) => [e.user, e.extended_deadline]));
+    deadlineByUser = Object.fromEntries(
+      uniqueUserIds.map((userId) => [userId, extensionByUser.get(userId) ?? course.deadline]),
+    );
+  }
+
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+        <Card>
+          <CardHeader>
+            {/* Attempts on the COURSE — one row per full play-through
+                (CourseAttempt), never a per-slide/per-question count (that's
+                what SlideResult is, and it never surfaces as a top-level
+                metric here). */}
+            <CardTitle className="text-sm text-muted-foreground">Attempts</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-semibold">{allAttempts.length}</div>
+          </CardContent>
+        </Card>
         <Card>
           <CardHeader>
             <CardTitle className="text-sm text-muted-foreground">Avg. attempts per person</CardTitle>
@@ -139,48 +162,13 @@ export default async function CourseAnalyticsPage({ params }: { params: Promise<
         </div>
       )}
 
-      <div className="rounded-lg border-2 border-border bg-card shadow-sm">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Username</TableHead>
-              <TableHead>Attempts</TableHead>
-              <TableHead>Best score</TableHead>
-              <TableHead>Passed</TableHead>
-              <TableHead>Last attempt</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {summaries.map((summary) => {
-              const user = userById.get(summary.userId);
-              return (
-                <TableRow key={summary.userId}>
-                  <TableCell className="font-medium">{user?.username ?? summary.userId}</TableCell>
-                  <TableCell>{summary.attemptCount}</TableCell>
-                  <TableCell>{summary.bestScore === null ? "—" : `${summary.bestScore}%`}</TableCell>
-                  <TableCell>
-                    {summary.passed === null ? (
-                      "—"
-                    ) : summary.passed ? (
-                      <Badge>Passed</Badge>
-                    ) : (
-                      <Badge variant="destructive">Not passed</Badge>
-                    )}
-                  </TableCell>
-                  <TableCell>{new Date(summary.lastAttemptAt).toLocaleDateString()}</TableCell>
-                </TableRow>
-              );
-            })}
-            {summaries.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={5} className="text-center text-muted-foreground">
-                  No one has attempted this course yet.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
+      <CourseAnalyticsTable
+        summaries={summaries}
+        usersById={Object.fromEntries(users.map((u) => [u.id, u]))}
+        attemptsByUser={attemptsByUser}
+        courseId={id}
+        deadlineByUser={deadlineByUser}
+      />
     </div>
   );
 }

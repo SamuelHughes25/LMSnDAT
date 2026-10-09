@@ -3,10 +3,12 @@ import { notFound } from "next/navigation";
 
 import { CoursePreviewViewer, type PreviewSlide } from "@/components/course-preview/course-preview-viewer";
 import { FullscreenToggle } from "@/components/fullscreen-toggle";
-import { DjangoApiError, djangoFetch } from "@/lib/django";
 import type { Course, CourseVersion } from "@/lib/course-types";
+import { deadlineStatus } from "@/lib/deadline";
+import { DjangoApiError, djangoFetch } from "@/lib/django";
 import { getVisibleCourseIds } from "@/lib/role-access";
 import type { Paginated } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 // The operative-facing "play" page — unlike the admin preview page (which
 // falls back to a draft for the author's own convenience), this only ever
@@ -31,10 +33,15 @@ export default async function PortalCoursePlayerPage({ params }: { params: Promi
   const visibleIds = await getVisibleCourseIds();
   if (visibleIds !== null && !visibleIds.has(id)) notFound();
 
-  const versions = await djangoFetch<Paginated<CourseVersion>>(`/course-versions/?course=${id}`);
+  // page_size=200 — see courses/[id]/builder/page.tsx's identical fetch
+  // for why (the default 25-row page could in principle hide the one
+  // published version a long-lived course is actually looking for here).
+  const versions = await djangoFetch<Paginated<CourseVersion>>(`/course-versions/?course=${id}&page_size=200`);
   const version = versions.results.find((v) => v.status === "published");
 
   if (!version) notFound();
+
+  const deadline = deadlineStatus(course.my_deadline);
 
   const slides: PreviewSlide[] = [...version.lessons]
     .sort((a, b) => a.order - b.order)
@@ -85,6 +92,16 @@ export default async function PortalCoursePlayerPage({ params }: { params: Promi
         </Link>
         <span className="shrink-0 text-muted-foreground/40">/</span>
         <h1 className="min-w-0 flex-1 truncate text-base font-semibold">{course.name}</h1>
+        {deadline && (
+          <span
+            className={cn(
+              "shrink-0 text-sm font-medium",
+              deadline.overdue ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {deadline.label}
+          </span>
+        )}
         <FullscreenToggle />
       </div>
 

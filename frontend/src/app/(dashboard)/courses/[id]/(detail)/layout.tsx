@@ -48,7 +48,7 @@ export default async function CourseDetailLayout({
 
       <div className="mb-6 shrink-0">
         <h1 className="text-2xl font-semibold">{course.name}</h1>
-        {course.description && <p className="mt-1 text-muted-foreground">{course.description}</p>}
+        {course.description && <p className="mt-1 break-words text-muted-foreground">{course.description}</p>}
       </div>
 
       <div className="flex min-h-0 flex-1 items-start gap-6">

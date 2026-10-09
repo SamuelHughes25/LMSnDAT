@@ -200,6 +200,15 @@ export type ExtraImage = BoxTransform & {
   url: string;
 };
 
+// The four text boxes a content slide can have — the keys of box_transforms
+// below, and the field names positionable-box.tsx/text-object-properties.tsx
+// use to namespace a text box's slide-selection-context id
+// (`${slideId}:${field}`). Named and exported here (rather than left as an
+// inline union, or duplicated as a local type alias in every file that needs
+// it) so content-slide-face.tsx and text-object-properties.tsx share one
+// definition instead of two that could quietly drift apart.
+export type PositionableField = "title" | "subtitle" | "body" | "body2";
+
 // Type-specific slide content. The "content" and "multiple_choice"
 // slide_types' shapes are modeled concretely so far; the index signature
 // keeps this open for the other slide_types' config shapes (blanks, pairs,
@@ -298,7 +307,7 @@ export type SlideConfig = {
   // — a different layout means different boxes exist/mean different
   // things, so stale coordinates from the old arrangement aren't carried
   // over into the new one.
-  box_transforms?: Partial<Record<"title" | "subtitle" | "body" | "body2", BoxTransform>>;
+  box_transforms?: Partial<Record<PositionableField, BoxTransform>>;
   // multiple_choice
   question?: string;
   options?: MultipleChoiceOption[];
@@ -378,6 +387,24 @@ export type Lesson = {
   slides: Slide[];
 };
 
+// A saved, standalone copy of a lesson's slides — the "reusable lesson
+// library" entry behind save-as-reusable/import (see backend's
+// ReusableLesson model for the full "one-time clone, not a live link"
+// rationale). `name`/`description` are the library entry's own label,
+// independent of whatever the source lesson was titled at save time.
+// `slide_count` only (not the slides themselves) — the manage/import
+// dialog only needs to show a count per entry, keeping that list light;
+// the actual slides only ever move server-side on import.
+export type ReusableLesson = {
+  id: string;
+  name: string;
+  description: string;
+  created_by: number;
+  created_at: string;
+  updated_at: string;
+  slide_count: number;
+};
+
 export type CourseAsset = {
   id: string;
   course_version: string;
@@ -394,8 +421,10 @@ export type CourseVersion = {
   status: CourseVersionStatus;
   transition_style: TransitionStyle;
   created_by: number;
+  created_by_username: string;
   published_at: string | null;
   created_at: string;
+  updated_at: string;
   lessons: Lesson[];
   assets: CourseAsset[];
 };
@@ -404,6 +433,14 @@ export type Course = {
   id: string;
   name: string;
   description: string;
+  // A course-level picture — set at creation (new-course-dialog.tsx) or
+  // later (course-thumbnail-settings.tsx), independent of any particular
+  // draft/published CourseVersion (unlike a slide's background_image_url,
+  // which lives on a specific version). Null is the common case for any
+  // course created before this field existed, or one nobody's bothered to
+  // set a picture for — every renderer must treat that as "show a plain
+  // placeholder," never an error.
+  thumbnail: string | null;
   created_by: number;
   is_archived: boolean;
   // Marks this course as a scored assessment rather than free-form
@@ -414,8 +451,37 @@ export type Course = {
   // the operative's browser sends.
   is_assessment: boolean;
   passing_score: number | null;
+  // The default due date for this assessment — only meaningful when
+  // is_assessment is true, same convention as passing_score. Prefer
+  // my_deadline below for "what's MY actual deadline" — this is just the
+  // course-wide default, before any personal extension is applied.
+  deadline: string | null;
+  // The REQUESTING user's own effective deadline (their own extension if
+  // they have one, else `deadline` above) — server-computed, this is the
+  // field the portal side should actually check/display, never `deadline`
+  // directly. Null if there's no deadline at all, or for an admin/manager
+  // request context where "my deadline" isn't meaningful.
+  my_deadline: string | null;
   created_at: string;
   updated_at: string;
+};
+
+// A course directly assigned to one specific user, independent of Group
+// membership (see accounts-types.ts's Group.courses for the indirect
+// path) — the two mechanisms freely coexist, including overlapping (a
+// user can hold this AND be in one or more Groups that also contain the
+// course; that's expected, not an error — see the Members tab, which
+// never cross-checks the two against each other). `username`/`course_name`
+// are read-only conveniences from the backend so the Members tab table
+// doesn't need extra round-trips per row.
+export type CourseAssignment = {
+  id: string;
+  course: string;
+  course_name: string;
+  user: number;
+  username: string;
+  assigned_by: number;
+  created_at: string;
 };
 
 export const SLIDE_TYPE_LABELS: Record<SlideType, string> = {

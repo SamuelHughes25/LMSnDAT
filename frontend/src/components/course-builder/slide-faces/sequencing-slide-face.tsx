@@ -9,6 +9,7 @@ import { GripVertical, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { SequencingItem, Slide } from "@/lib/course-types";
+import type { SlideInteractionResult } from "@/lib/slide-interaction";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { useIsClient } from "@/lib/use-is-client";
 import { cn } from "@/lib/utils";
@@ -53,7 +54,14 @@ function shuffleDiffering<T>(items: T[]): T[] {
   return result;
 }
 
-export function SequencingSlideFace({ slide, mode, onConfigChange, onInteraction, isAssessment }: SlideFaceProps) {
+export function SequencingSlideFace({
+  slide,
+  mode,
+  onConfigChange,
+  onInteraction,
+  isAssessment,
+  priorResult,
+}: SlideFaceProps) {
   const instructions = slide.config.instructions ?? "";
   const items = slide.config.sequence_items ?? [];
 
@@ -69,6 +77,7 @@ export function SequencingSlideFace({ slide, mode, onConfigChange, onInteraction
         items={items}
         onInteraction={onInteraction}
         isAssessment={!!isAssessment}
+        priorResult={priorResult}
       />
     );
   }
@@ -233,12 +242,14 @@ function SequencingPresent({
   items,
   onInteraction,
   isAssessment,
+  priorResult,
 }: {
   slide: Slide;
   instructions: string;
   items: SequencingItem[];
   onInteraction: SlideFaceProps["onInteraction"];
   isAssessment: boolean;
+  priorResult?: SlideInteractionResult;
 }) {
   // NOT shuffled in the useState lazy initializer directly — confirmed via
   // a real browser that doing so throws a hydration mismatch ("Hydration
@@ -264,6 +275,39 @@ function SequencingPresent({
   }
   const [submitted, setSubmitted] = useState(false);
   const [score, setScore] = useState(0);
+
+  // Syncs orderedIds/submitted/score from the server's own record of this
+  // slide's answer (priorResult) whenever it CHANGES — ONLY in assessment
+  // mode (see priorResult's own doc comment in slide-faces/index.ts). Not a
+  // one-time lazy useState initializer — see multiple-choice-slide-
+  // face.tsx's identical fix for the full reasoning: a lazy initializer
+  // only captures whatever priorResult happens to be at this component's
+  // very first render, which is wrong both on a fresh page load (the
+  // attempt-resume fetch is still in flight at first mount) and on Retake
+  // (priorResult disappearing needs to clear this back to blank too, even
+  // without a remount — which here also means letting the shuffle-on-
+  // isClient logic above re-shuffle into a fresh order for the new attempt,
+  // by resetting hasShuffled rather than leaving the old submitted order in
+  // place). Not a useEffect either — see that same file's comment on why
+  // this project's lint config specifically flags setState-inside-an-effect,
+  // and why the "adjust state during render" shape below is the sanctioned
+  // alternative (the same shape isClient/hasShuffled itself already uses,
+  // one paragraph up, for the shuffle-once-on-mount logic).
+  const [syncedPriorResult, setSyncedPriorResult] = useState(priorResult);
+  if (isAssessment && priorResult !== syncedPriorResult) {
+    setSyncedPriorResult(priorResult);
+    const finalOrder = (priorResult?.detail as { finalOrder?: string[] } | undefined)?.finalOrder ?? null;
+    if (finalOrder) {
+      setOrderedIds(finalOrder);
+      setHasShuffled(true);
+      setSubmitted(true);
+      setScore(priorResult?.score ?? 0);
+    } else {
+      setHasShuffled(false);
+      setSubmitted(false);
+      setScore(0);
+    }
+  }
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   const itemsById = Object.fromEntries(items.map((it) => [it.id, it]));

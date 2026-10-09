@@ -3,6 +3,8 @@
 import { useRef, useState } from "react";
 
 import { uploadCourseAsset } from "@/app/actions/courses";
+import { CANVAS_H, CANVAS_W } from "../slide-canvas";
+import { snapEdge } from "./snap-guides";
 
 // Shared by every image-editing surface on the content slide type
 // (image-field.tsx's side-by-side layouts, background-image-field.tsx's
@@ -199,16 +201,31 @@ export const HANDLES: { dir: HandleDir; style: React.CSSProperties; cursor: stri
 // wherever the author dragged it to.
 export function ResizeHandles({
   containerRef,
+  xPct,
+  yPct,
   widthPct,
   heightPct,
   onLiveResize,
   onCommitResize,
+  onGuidesChange,
 }: {
   containerRef: React.RefObject<HTMLElement | null>;
+  // The box's fixed center point — needed (in addition to width/height) to
+  // compute where its EDGES actually land on the canvas, which is what
+  // snapping needs to check against the page's own milestone positions (see
+  // snap-guides.ts).
+  xPct: number;
+  yPct: number;
   widthPct: number;
   heightPct: number;
   onLiveResize: (widthPct: number, heightPct: number) => void;
   onCommitResize: (widthPct: number, heightPct: number) => void;
+  // Optional — only slide-canvas.tsx's own drag surfaces (background/extra
+  // images, and the side-by-side image-left/right box) have a SnapGuideProvider
+  // ancestor to report into; kept as a plain callback prop rather than this
+  // component calling useSnapGuides() itself so a future non-canvas caller
+  // (there isn't one today) wouldn't be forced to render inside that provider.
+  onGuidesChange?: (guides: { vertical: number[]; horizontal: number[] }) => void;
 }) {
   function handlePointerDown(dir: HandleDir, e: React.PointerEvent) {
     e.preventDefault();
@@ -241,6 +258,49 @@ export function ResizeHandles({
       if (dir.includes("w")) w = startW - ((2 * dx) / rect.width) * 100;
       if (dir.includes("s")) h = startH + ((2 * dy) / rect.height) * 100;
       if (dir.includes("n")) h = startH - ((2 * dy) / rect.height) * 100;
+
+      // Snap whichever edge this handle moves — straight edge handles only
+      // (n/s/e/w). Corner handles keep their existing aspect-ratio-locked
+      // uniform-scale behavior below completely unchanged: that branch
+      // recomputes w/h together from a single scale factor derived from
+      // startW/startH, which would just discard an edge snap applied here
+      // first anyway, and reconciling "snap one edge, then preserve the
+      // locked aspect ratio around it" is a meaningfully bigger problem than
+      // this pass's scope. A straight-edge drag has no such conflict — it
+      // only ever touches one axis, so snapping it is a plain, final answer.
+      const vertical: number[] = [];
+      const horizontal: number[] = [];
+      if (!isCorner) {
+        if (dir.includes("e")) {
+          const snapped = snapEdge(xPct + w / 2, CANVAS_W);
+          if (snapped.guide !== null) {
+            w = (snapped.value - xPct) * 2;
+            vertical.push(snapped.guide);
+          }
+        }
+        if (dir.includes("w")) {
+          const snapped = snapEdge(xPct - w / 2, CANVAS_W);
+          if (snapped.guide !== null) {
+            w = (xPct - snapped.value) * 2;
+            vertical.push(snapped.guide);
+          }
+        }
+        if (dir.includes("s")) {
+          const snapped = snapEdge(yPct + h / 2, CANVAS_H);
+          if (snapped.guide !== null) {
+            h = (snapped.value - yPct) * 2;
+            horizontal.push(snapped.guide);
+          }
+        }
+        if (dir.includes("n")) {
+          const snapped = snapEdge(yPct - h / 2, CANVAS_H);
+          if (snapped.guide !== null) {
+            h = (yPct - snapped.value) * 2;
+            horizontal.push(snapped.guide);
+          }
+        }
+        onGuidesChange?.({ vertical, horizontal });
+      }
 
       if (isCorner) {
         // Uniform scale about the box's own current aspect ratio (not the
@@ -278,6 +338,7 @@ export function ResizeHandles({
     function onUp() {
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
+      onGuidesChange?.({ vertical: [], horizontal: [] });
       onCommitResize(currentW, currentH);
     }
 

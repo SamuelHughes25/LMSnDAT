@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Course, CourseAsset, CourseVersion, Lesson, Slide
+from .models import Course, CourseAsset, CourseAssignment, CourseVersion, Lesson, ReusableLesson, ReusableSlide, Slide
 
 
 class LessonInline(admin.TabularInline):
@@ -36,3 +36,21 @@ class SlideAdmin(admin.ModelAdmin):
 class CourseAssetAdmin(admin.ModelAdmin):
     list_display = ('file', 'course_version', 'kind', 'uploaded_by', 'created_at')
     list_filter = ('kind',)
+
+
+class ReusableSlideInline(admin.TabularInline):
+    model = ReusableSlide
+    extra = 0
+
+
+@admin.register(ReusableLesson)
+class ReusableLessonAdmin(admin.ModelAdmin):
+    list_display = ('name', 'created_by', 'created_at')
+    search_fields = ('name',)
+    inlines = [ReusableSlideInline]
+
+
+@admin.register(CourseAssignment)
+class CourseAssignmentAdmin(admin.ModelAdmin):
+    list_display = ('course', 'user', 'assigned_by', 'created_at')
+    list_filter = ('course',)

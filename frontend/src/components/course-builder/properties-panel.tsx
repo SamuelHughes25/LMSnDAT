@@ -14,10 +14,21 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { DEFAULT_SLIDE_TITLE, SLIDE_TYPE_LABELS } from "@/lib/course-types";
-import type { ContentSlideLayout, Lesson, Slide, SlideConfig } from "@/lib/course-types";
+import type { ContentSlideLayout, Lesson, PositionableField, Slide, SlideConfig } from "@/lib/course-types";
 import { cn, stripHtml } from "@/lib/utils";
+import { ImageObjectProperties } from "./image-object-properties";
 import { LessonProperties } from "./lesson-properties";
 import { SlideBackgroundPanel } from "./slide-background-panel";
+import { TextObjectProperties } from "./text-object-properties";
+
+// What's currently selected WITHIN a slide (see slide-selection-context.tsx's
+// selectedId, parsed by course-builder.tsx) — independent of which SLIDE is
+// selected (the "slide" kind below already covers that). Only ever paired
+// with `kind: "object"`.
+export type SelectedObject =
+  | { type: "text"; field: PositionableField }
+  | { type: "background-image" }
+  | { type: "extra-image"; imageId: string };
 
 export type PropertiesPanelProps =
   | { kind: "empty" }
@@ -53,6 +64,13 @@ export type PropertiesPanelProps =
       // course-builder.tsx's handleSlideChange vs. handleSlideConfigChange).
       onTitleChange: (title: string) => void;
       onDelete: () => void;
+    }
+  | {
+      kind: "object";
+      slide: Slide;
+      object: SelectedObject;
+      courseVersionId: string;
+      onConfigChange: (config: Partial<SlideConfig>) => void;
     };
 
 export function PropertiesPanel(props: PropertiesPanelProps) {
@@ -72,6 +90,31 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
         lesson={props.lesson}
         onDescriptionChange={props.onDescriptionChange}
         onDelete={props.onDelete}
+      />
+    );
+  }
+
+  if (props.kind === "object") {
+    if (props.object.type === "text") {
+      return <TextObjectProperties slide={props.slide} field={props.object.field} onConfigChange={props.onConfigChange} />;
+    }
+    if (props.object.type === "background-image") {
+      return (
+        <ImageObjectProperties
+          kind="background"
+          slide={props.slide}
+          courseVersionId={props.courseVersionId}
+          onConfigChange={props.onConfigChange}
+        />
+      );
+    }
+    return (
+      <ImageObjectProperties
+        kind="extra"
+        imageId={props.object.imageId}
+        slide={props.slide}
+        courseVersionId={props.courseVersionId}
+        onConfigChange={props.onConfigChange}
       />
     );
   }

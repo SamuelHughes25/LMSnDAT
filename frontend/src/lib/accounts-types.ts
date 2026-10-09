@@ -4,22 +4,42 @@
 
 export type UserRole = "admin" | "manager" | "member";
 
-// A job-title-based content bundle (e.g. "Gas Engineer") — deliberately
-// named JobRole here too, matching the backend model, to avoid confusion
-// with UserRole (the fixed admin/manager/member permission enum) even
-// though the UI itself just calls this "Roles". See JobRole's own doc
-// comment in backend/apps/accounts/models.py for the full reasoning.
-export type JobRole = {
+// An org-chart grouping with a manager — orthogonal to Group below (that
+// gates content visibility; this is just "who reports to whom" and drives
+// the manager-scoped queryset filtering already used throughout the
+// backend, e.g. CourseAttemptViewSet).
+export type Team = {
+  id: number;
+  name: string;
+  description: string;
+  manager: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+// A job-description-shaped content bundle (e.g. "Commercial Dwelling
+// Engineer") — deliberately named Group, not Role, to avoid confusion with
+// UserRole (the fixed admin/manager/member permission enum). Mixes
+// whatever courses AND templates its owner decides into ONE bundle (a
+// "Commercial Dwelling Engineer" group carries both that role's training
+// courses and its audit templates together) — a user can belong to any
+// number of groups at once, e.g. everyone gets "Don't Walk By" and
+// "Asbestos Awareness" on top of their one job-description group. See
+// Group's own doc comment in backend/apps/accounts/models.py for the full
+// reasoning (an earlier pass split this into two independent CourseGroup/
+// TemplateGroup models — reverted on explicit correction).
+export type Group = {
   id: string;
   name: string;
   description: string;
   // Plain id arrays (not expanded objects) — same "PrimaryKeyRelatedField,
   // not a nested serializer" shape DRF returns by default, and exactly
-  // what a PATCH back to /job-roles/{id}/ expects: a full replacement list
-  // of ids, read-modify-write, same pattern as every other list mutation
-  // in this app (see e.g. extra_images in course-types.ts's SlideConfig).
+  // what a PATCH back to /groups/{id}/ expects: a full replacement list of
+  // ids, read-modify-write, same pattern as every other list mutation in
+  // this app (see e.g. extra_images in course-types.ts's SlideConfig).
   courses: string[];
   templates: string[];
+  member_count: number;
   created_at: string;
   updated_at: string;
 };
@@ -35,9 +55,11 @@ export type AccountUser = {
   last_name: string;
   role: UserRole;
   team: number | null;
-  // A user's assigned JobRole id, or null if unassigned — never expanded
-  // to the full JobRole object here, same "id only" convention as
-  // JobRole.courses/templates above.
-  job_role: string | null;
+  // A user can belong to any number of groups at once — their total
+  // visible content (courses AND templates) is the union across all of
+  // them (see role-access.ts). Plain id array, same convention as
+  // Group.courses/templates above — never expanded to full group objects
+  // here.
+  content_groups: string[];
   date_joined: string;
 };

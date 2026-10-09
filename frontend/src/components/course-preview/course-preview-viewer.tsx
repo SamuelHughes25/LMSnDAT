@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { completeCourseAttempt, startCourseAttempt, submitSlideResult } from "@/app/actions/attempts";
@@ -9,6 +10,7 @@ import { CANVAS_H, CANVAS_W } from "@/components/course-builder/slide-canvas";
 import { SLIDE_TYPE_FACES } from "@/components/course-builder/slide-faces";
 import { ExtraImagesLayer, SlideBackgroundLayer } from "@/components/course-builder/slide-faces/background-image-field";
 import { SlideSelectionProvider } from "@/components/course-builder/slide-selection-context";
+import { SnapGuideProvider } from "@/components/course-builder/snap-guide-context";
 import { Button } from "@/components/ui/button";
 import type { CourseAttempt } from "@/lib/attempt-types";
 import type { Slide } from "@/lib/course-types";
@@ -108,6 +110,7 @@ export function CoursePreviewViewer({
   maxWidthClassName?: string;
   attemptTracking?: AttemptTracking;
 }) {
+  const router = useRouter();
   const [currentIndex, setCurrentIndex] = useState(0);
 
   // Accumulates each interactive slide's result as the learner answers it,
@@ -133,23 +136,71 @@ export function CoursePreviewViewer({
 
   const isTrackingAttempt = Boolean(attemptTracking);
 
-  // Fires the actual "start an attempt" call — a pure async action with no
-  // synchronous state resets of its own, so it's safe to call directly
-  // from the mount effect below (the resulting setAttemptId happens inside
-  // the .then() callback, not synchronously during the effect body, which
-  // is the sanctioned "subscribe to an external system" shape rather than
-  // the synchronous-setState-in-an-effect anti-pattern).
+  // startCourseAttempt RESUMES an existing in_progress attempt at this
+  // course version server-side if the learner already has one, rather than
+  // always creating a new one (see CourseAttemptViewSet.perform_create) —
+  // so this single call is all that's needed regardless of which case
+  // applies. Reported directly as a real bug when this was still a
+  // client-side "check, then create" two-step: simply reopening the course
+  // player (a page refresh, a new tab, or just navigating back to it later
+  // without ever clicking Finish) silently abandoned the old attempt and
+  // created another — one user accumulated 16 attempt rows, 14 stuck
+  // in_progress, just from normal back-and-forth browsing — and, since a
+  // check-then-create is never atomic on its own, two near-simultaneous
+  // calls (confirmed via a real browser: dev's React Strict Mode
+  // double-invokes this very mount effect) could each see "no existing
+  // attempt" and both create one anyway. Moving the resume-or-create logic
+  // server-side, backed by a real DB-level UniqueConstraint (see
+  // CourseAttempt.Meta), closes that race properly instead of narrowing it.
+  //
+  // Resuming also restores this attempt's already-submitted answers into
+  // `results` — the same state a single remounted slide face restores via
+  // `priorResult`, just sourced from the server's own `slide_results` since
+  // there's no parent React state yet on a fresh page load. Without this, a
+  // resumed session used to start with blank `results`, letting a learner
+  // re-answer a question the server already had permanently, correctly
+  // graded — quietly defeating the "permanent means permanent" assessment
+  // guarantee one level up from where the remount-bypass fix closed it.
+  //
+  // A pure async action with no synchronous state resets of its own, so
+  // it's safe to call directly from the mount effect below (setAttemptId/
+  // setResults happen inside the .then() callback, not synchronously during
+  // the effect body — the sanctioned "subscribe to an external system"
+  // shape rather than the synchronous-setState-in-an-effect anti-pattern).
   const startAttempt = useCallback(() => {
     if (!attemptTracking) return;
     startCourseAttempt(attemptTracking.courseVersionId)
-      .then((attempt) => setAttemptId(attempt.id))
+      .then((attempt) => {
+        setAttemptId(attempt.id);
+        if (attempt.slide_results.length === 0) return;
+        const slideTypeById = new Map(slides.map((s) => [s.slide.id, s.slide.slide_type]));
+        const restored: Record<string, SlideInteractionResult> = {};
+        for (const slideResult of attempt.slide_results) {
+          const slideType = slideTypeById.get(slideResult.slide);
+          // Slide no longer exists on this version (shouldn't happen — a
+          // published version's slides never change — but a resumed
+          // attempt reaching across a version boundary isn't otherwise
+          // ruled out, so skip rather than restore a result for a slide
+          // that isn't actually in the deck being played).
+          if (!slideType) continue;
+          restored[slideResult.slide] = {
+            slideId: slideResult.slide,
+            slideType,
+            isCorrect: slideResult.is_correct,
+            score: slideResult.score,
+            answeredAt: attempt.started_at,
+            detail: slideResult.detail,
+          };
+        }
+        setResults(restored);
+      })
       .catch(() => {
-        // Best-effort: if starting the attempt fails (network hiccup), the
-        // learner can still browse the deck — handleInteraction below
-        // simply has nothing to submit to until attemptId is set, and
+        // Best-effort: if starting/resuming the attempt fails (network
+        // hiccup), the learner can still browse the deck — handleInteraction
+        // below simply has nothing to submit to until attemptId is set, and
         // Finish is disabled without one (see the render below).
       });
-  }, [attemptTracking]);
+  }, [attemptTracking, slides]);
 
   useEffect(() => {
     startAttempt();
@@ -233,164 +284,185 @@ export function CoursePreviewViewer({
 
   return (
     // PositionableBox (used by content-slide-face.tsx's title/subtitle/
-    // body/body2 fields, in every mode including "present") calls BOTH
-    // useSlideSelection() and useActiveEditorContext() unconditionally —
-    // hooks, so they have to run on every render regardless of mode, even
-    // though "present" mode's own early-return path never actually reads
-    // either value. Both throw if their provider isn't anywhere above them
-    // in the tree. course-builder.tsx already wraps its own tree in both
-    // (ActiveEditorProvider from early on, SlideSelectionProvider added
-    // later for the "resize dots get stuck" fix), but this viewer is a
+    // body/body2 fields, in every mode including "present") calls
+    // useSlideSelection(), useActiveEditorContext(), AND useSnapGuides()
+    // unconditionally — hooks, so they have to run on every render
+    // regardless of mode, even though "present" mode's own early-return
+    // path never actually reads any of the three. All three throw if their
+    // provider isn't anywhere above them in the tree. course-builder.tsx
+    // already wraps its own tree in all three, but this viewer is a
     // genuinely separate top-level component tree — its own route/page,
-    // never nested inside course-builder.tsx — so it never inherited
-    // either. Confirmed via a real browser: previewing ANY course
+    // never nested inside course-builder.tsx — so it never inherited any
+    // of them. Confirmed via a real browser: previewing ANY course
     // containing a "content" slide 500'd the whole page — first on the
-    // missing SlideSelectionProvider, and (after fixing just that) again
-    // immediately on the missing ActiveEditorProvider — which is why
-    // "can't preview" reads as a near-total preview outage, not a niche
-    // edge case: content slides are the most common type by far. Same
-    // nesting order as course-builder.tsx, for no particular reason beyond
-    // consistency — the two providers don't interact.
+    // missing SlideSelectionProvider, then (after fixing just that) on the
+    // missing ActiveEditorProvider, then — missed in both of those earlier
+    // fixes, since it only throws once a learner actually plays a course
+    // with a positioned text box rather than just opening the admin
+    // preview tab — the missing SnapGuideProvider, which is why "can't
+    // take a course" could still surface as a fresh outage even after the
+    // first two were fixed. Same nesting order as course-builder.tsx, for
+    // no particular reason beyond consistency — the three providers don't
+    // interact.
     <ActiveEditorProvider>
       <SlideSelectionProvider>
-        {/* h-full flex column: the caller (either the admin preview tab's
-            self-stretch content slot, or the portal player's min-h-0
-            flex-1 wrapper) is expected to hand this a genuinely bounded
-            height — see those callers' own comments. lessonTitle and the
-            Previous/Slide/Next row below are shrink-0 (their own natural
-            height); the stage region between them is the only flexible
-            one, so it's the one that absorbs whatever room is actually
-            left after those two fixed-height rows. */}
-        <div className="flex h-full w-full flex-col items-center">
-          <div className="mb-1 shrink-0 text-sm text-muted-foreground">{current.lessonTitle}</div>
-
-          {/* The bounded region the stage fits itself into on BOTH axes —
-              min-h-0 is required for a flex-1 item to be allowed to shrink
-              below its content's intrinsic size at all (the default
-              min-height:auto would otherwise let the 960x540 canvas keep
-              this row exactly as tall as it wants, defeating the whole
-              point). useStageScale's ResizeObserver reads THIS div's real
-              rendered width and height and turns whichever is tighter into
-              the inner canvas's zoom factor. */}
-          <div className="flex min-h-0 w-full flex-1 items-center justify-center">
-            <div
-              ref={containerRef}
-              className={cn("h-full w-full overflow-hidden rounded-lg bg-muted", maxWidthClassName)}
-            >
-              <div className="flex h-full w-full items-center justify-center">
-                <div
-                  className="slide-surface relative overflow-hidden rounded-sm bg-white shadow-lg"
-                  style={{ width: CANVAS_W, height: CANVAS_H, zoom: scale }}
-                >
-                  <SlideBackgroundLayer
-                    value={current.slide.config.background_image_url}
-                    mode="present"
-                    xPct={current.slide.config.background_image_x_pct}
-                    yPct={current.slide.config.background_image_y_pct}
-                    widthPct={current.slide.config.background_image_width_pct}
-                    heightPct={current.slide.config.background_image_height_pct}
-                  />
-                  <ExtraImagesLayer images={current.slide.config.extra_images ?? []} mode="present" />
-                  <div className="relative z-10 h-full w-full">
-                    <Face
-                      key={current.slide.id}
-                      slide={current.slide}
+        <SnapGuideProvider>
+          {/* h-full flex column: the caller (either the admin preview tab's
+              self-stretch content slot, or the portal player's min-h-0
+              flex-1 wrapper) is expected to hand this a genuinely bounded
+              height — see those callers' own comments. The Previous/Slide/Next
+              row below is shrink-0 (its own natural height); the stage region
+              above it is the only flexible one, so it's the one that absorbs
+              whatever room is actually left after that fixed-height row. */}
+          <div className="flex h-full w-full flex-col items-center">
+            {/* Lesson title shown only in the admin's own Preview tab — a
+                real operative already knows roughly what they're watching, so
+                this added little value in the portal player and just took up
+                space there; isTrackingAttempt is only ever true for that real
+                player, never the admin preview (see its own comment above). */}
+            {!isTrackingAttempt && (
+              <div className="mb-1 shrink-0 text-sm text-muted-foreground">{current.lessonTitle}</div>
+            )}
+  
+            {/* The bounded region the stage fits itself into on BOTH axes —
+                min-h-0 is required for a flex-1 item to be allowed to shrink
+                below its content's intrinsic size at all (the default
+                min-height:auto would otherwise let the 960x540 canvas keep
+                this row exactly as tall as it wants, defeating the whole
+                point). useStageScale's ResizeObserver reads THIS div's real
+                rendered width and height and turns whichever is tighter into
+                the inner canvas's zoom factor. */}
+            <div className="flex min-h-0 w-full flex-1 items-center justify-center">
+              <div
+                ref={containerRef}
+                className={cn("h-full w-full overflow-hidden rounded-lg bg-muted", maxWidthClassName)}
+              >
+                <div className="flex h-full w-full items-center justify-center">
+                  <div
+                    className="slide-surface relative overflow-hidden rounded-sm bg-white shadow-lg"
+                    style={{ width: CANVAS_W, height: CANVAS_H, zoom: scale }}
+                  >
+                    <SlideBackgroundLayer
+                      value={current.slide.config.background_image_url}
                       mode="present"
-                      onInteraction={handleInteraction}
-                      isAssessment={attemptTracking?.isAssessment}
+                      xPct={current.slide.config.background_image_x_pct}
+                      yPct={current.slide.config.background_image_y_pct}
+                      widthPct={current.slide.config.background_image_width_pct}
+                      heightPct={current.slide.config.background_image_height_pct}
                     />
+                    <ExtraImagesLayer images={current.slide.config.extra_images ?? []} mode="present" />
+                    <div className="relative z-10 h-full w-full">
+                      <Face
+                        key={current.slide.id}
+                        slide={current.slide}
+                        mode="present"
+                        onInteraction={handleInteraction}
+                        isAssessment={attemptTracking?.isAssessment}
+                        priorResult={results[current.slide.id]}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
-          </div>
-
-          {/* Running tally, not a full end-of-deck summary screen — shows once
-              at least one interactive slide has been answered. Later stages
-              (Missing Word, Match the Pair) need no changes here: they report
-              through the same onInteraction/results shape.
-
-              Always rendered (never conditionally mounted) — this row sits
-              below the stage's own flex-1 min-h-0 region, so mounting it
-              only once an answer comes in used to shrink the stage's
-              available height right at that moment, and useStageScale
-              would immediately shrink the canvas to match: reported as the
-              page visibly "zooming out" the instant the last hotspot on a
-              hotspot_image slide got clicked (hotspot_image reports its
-              single completion event on the LAST click, unlike e.g.
-              multiple_choice's first-and-only click, which is why it read
-              as a "last press" bug specifically, though the same jump was
-              always latent for every interactive type). visibility:hidden
-              (not a conditional `&&`) keeps this row's height permanently
-              reserved whether or not there's a score to show, so the
-              stage's available height — and therefore its scale — never
-              changes mid-interaction. */}
-          <div
-            className="mt-1 shrink-0 text-sm text-muted-foreground"
-            style={{ visibility: answeredCount > 0 ? "visible" : "hidden" }}
-          >
-            Score so far: {correctCount}/{answeredCount}
-          </div>
-
-          {/* size="xs" (was "sm") keeps this row's own footprint small
-              without shrinking the buttons below the smallest size this
-              app's Button component defines. py-2 (replacing the earlier
-              plain mt-* margin) gives the row a real band of its own
-              vertical breathing room, with items-center centering the
-              buttons within that band instead of them sitting flush
-              against the very bottom of the page. */}
-          {completedAttempt ? (
-            // The "moment of truth" — replaces the Previous/Next row once
-            // Finish has been clicked and the SERVER (not this component's
-            // own local `results` tally) has returned a graded score.
-            <div className="flex shrink-0 items-center gap-4 py-2">
-              <span className="text-sm font-medium">
-                {completedAttempt.score !== null ? `You scored ${completedAttempt.score}%` : "Course completed"}
-                {attemptTracking?.isAssessment && completedAttempt.passed !== null && (
-                  <span className={completedAttempt.passed ? "text-primary" : "text-destructive"}>
-                    {" — "}
-                    {completedAttempt.passed
-                      ? "Passed"
-                      : `Not passed (minimum ${attemptTracking.passingScore}% required)`}
-                  </span>
-                )}
-              </span>
-              <Button variant="outline" size="xs" onClick={handleRetake}>
-                Retake
-              </Button>
+  
+            {/* Running tally, not a full end-of-deck summary screen — shows once
+                at least one interactive slide has been answered. Later stages
+                (Missing Word, Match the Pair) need no changes here: they report
+                through the same onInteraction/results shape.
+  
+                Always rendered (never conditionally mounted) — this row sits
+                below the stage's own flex-1 min-h-0 region, so mounting it
+                only once an answer comes in used to shrink the stage's
+                available height right at that moment, and useStageScale
+                would immediately shrink the canvas to match: reported as the
+                page visibly "zooming out" the instant the last hotspot on a
+                hotspot_image slide got clicked (hotspot_image reports its
+                single completion event on the LAST click, unlike e.g.
+                multiple_choice's first-and-only click, which is why it read
+                as a "last press" bug specifically, though the same jump was
+                always latent for every interactive type). visibility:hidden
+                (not a conditional `&&`) keeps this row's height permanently
+                reserved whether or not there's a score to show, so the
+                stage's available height — and therefore its scale — never
+                changes mid-interaction. */}
+            <div
+              className="mt-1 shrink-0 text-sm text-muted-foreground"
+              style={{ visibility: answeredCount > 0 ? "visible" : "hidden" }}
+            >
+              Score so far: {correctCount}/{answeredCount}
             </div>
-          ) : (
-            <div className="flex shrink-0 items-center gap-4 py-2">
-              <Button
-                variant="outline"
-                size="xs"
-                disabled={clampedIndex === 0}
-                onClick={() => setCurrentIndex((i) => Math.max(0, i - 1))}
-              >
-                <ChevronLeft className="mr-1 h-4 w-4" />
-                Previous
-              </Button>
-              <span className="text-sm text-muted-foreground">
-                Slide {clampedIndex + 1} of {slides.length}
-              </span>
-              {isTrackingAttempt && clampedIndex === slides.length - 1 ? (
-                <Button size="xs" onClick={handleFinish} disabled={finishing || !attemptId}>
-                  {finishing ? "Finishing…" : "Finish"}
+  
+            {/* size="xs" (was "sm") keeps this row's own footprint small
+                without shrinking the buttons below the smallest size this
+                app's Button component defines. py-2 (replacing the earlier
+                plain mt-* margin) gives the row a real band of its own
+                vertical breathing room, with items-center centering the
+                buttons within that band instead of them sitting flush
+                against the very bottom of the page. */}
+            {completedAttempt ? (
+              // The "moment of truth" — replaces the Previous/Next row once
+              // Finish has been clicked and the SERVER (not this component's
+              // own local `results` tally) has returned a graded score.
+              <div className="flex shrink-0 items-center gap-4 py-2">
+                <span className="text-sm font-medium">
+                  {completedAttempt.score !== null ? `You scored ${completedAttempt.score}%` : "Course completed"}
+                  {attemptTracking?.isAssessment && completedAttempt.passed !== null && (
+                    <span className={completedAttempt.passed ? "text-primary" : "text-destructive"}>
+                      {" — "}
+                      {completedAttempt.passed
+                        ? "Passed"
+                        : `Not passed (minimum ${attemptTracking.passingScore}% required)`}
+                    </span>
+                  )}
+                </span>
+                <Button variant="outline" size="xs" onClick={handleRetake}>
+                  Retake
                 </Button>
-              ) : (
+                {/* Only ever reachable when attemptTracking is set (this block
+                    only renders once completedAttempt exists, which only ever
+                    happens via handleFinish, which is only wired up when
+                    isTrackingAttempt — i.e. only in the real portal course
+                    player, never the admin's own Preview tab), so a hardcoded
+                    "/portal/courses" is safe here rather than needing a
+                    caller-supplied exit route. */}
+                <Button variant="outline" size="xs" onClick={() => router.push("/portal/courses")}>
+                  Exit
+                </Button>
+              </div>
+            ) : (
+              <div className="flex shrink-0 items-center gap-4 py-2">
                 <Button
                   variant="outline"
                   size="xs"
-                  disabled={clampedIndex === slides.length - 1}
-                  onClick={() => setCurrentIndex((i) => Math.min(slides.length - 1, i + 1))}
+                  disabled={clampedIndex === 0}
+                  onClick={() => setCurrentIndex((i) => Math.max(0, i - 1))}
                 >
-                  Next
-                  <ChevronRight className="ml-1 h-4 w-4" />
+                  <ChevronLeft className="mr-1 h-4 w-4" />
+                  Previous
                 </Button>
-              )}
-            </div>
-          )}
-        </div>
+                <span className="text-sm text-muted-foreground">
+                  Slide {clampedIndex + 1} of {slides.length}
+                </span>
+                {isTrackingAttempt && clampedIndex === slides.length - 1 ? (
+                  <Button size="xs" onClick={handleFinish} disabled={finishing || !attemptId}>
+                    {finishing ? "Finishing…" : "Finish"}
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    disabled={clampedIndex === slides.length - 1}
+                    onClick={() => setCurrentIndex((i) => Math.min(slides.length - 1, i + 1))}
+                  >
+                    Next
+                    <ChevronRight className="ml-1 h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
+        </SnapGuideProvider>
       </SlideSelectionProvider>
     </ActiveEditorProvider>
   );

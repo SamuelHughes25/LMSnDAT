@@ -2,17 +2,61 @@
 
 import { revalidatePath } from "next/cache";
 
-import { djangoFetch } from "@/lib/django";
+import { DjangoApiError, djangoFetch } from "@/lib/django";
 import { DEFAULT_SLIDE_TITLE } from "@/lib/course-types";
-import type { Course, CourseAsset, CourseVersion, Lesson, Slide, SlideConfig, SlideType } from "@/lib/course-types";
+import type {
+  Course,
+  CourseAsset,
+  CourseAssignment,
+  CourseVersion,
+  Lesson,
+  ReusableLesson,
+  Slide,
+  SlideConfig,
+  SlideType,
+} from "@/lib/course-types";
+import type { Paginated } from "@/lib/types";
 
 // --- Courses ---
 
-export async function createCourse(name: string, description: string): Promise<Course> {
+// `thumbnail` is optional and, when present, forces a multipart request
+// (djangoFetch's isFormData branch — see lib/django.ts) since a JSON body
+// can't carry a raw File. Built as FormData unconditionally rather than
+// branching JSON-vs-multipart on whether a thumbnail was picked: one
+// request shape for this action, not two independently-drifting ones.
+export async function createCourse(name: string, description: string, thumbnail?: File | null): Promise<Course> {
+  const formData = new FormData();
+  formData.append("name", name);
+  formData.append("description", description);
+  if (thumbnail) formData.append("thumbnail", thumbnail);
   const course = await djangoFetch<Course>("/courses/", {
     method: "POST",
-    body: JSON.stringify({ name, description }),
+    body: formData,
   });
+  revalidatePath("/courses");
+  return course;
+}
+
+// Separate from createCourse above — settings/course-thumbnail-settings.tsx
+// calls this for a course that already exists, uploading immediately (same
+// "commit on selection" pattern as the course builder's own image fields)
+// rather than staging a File until some later form submit. Removal (`null`)
+// goes through as a plain JSON PATCH — a multipart form has no clean way to
+// express "clear this field," but the model's `null=True` already makes the
+// generated DRF field `allow_null=True`, so JSON `null` clears it directly.
+export async function updateCourseThumbnail(courseId: string, thumbnail: File | null): Promise<Course> {
+  let course: Course;
+  if (thumbnail) {
+    const formData = new FormData();
+    formData.append("thumbnail", thumbnail);
+    course = await djangoFetch<Course>(`/courses/${courseId}/`, { method: "PATCH", body: formData });
+  } else {
+    course = await djangoFetch<Course>(`/courses/${courseId}/`, {
+      method: "PATCH",
+      body: JSON.stringify({ thumbnail: null }),
+    });
+  }
+  revalidatePath(`/courses/${courseId}/settings`);
   revalidatePath("/courses");
   return course;
 }
@@ -51,6 +95,22 @@ export async function updateCourseAssessmentSettings(
   return course;
 }
 
+// Deliberately separate from updateCourseAssessmentSettings above — a
+// deadline is its own, independent concept, not conditional on the course
+// being a scored assessment. A purely informative onboarding course with
+// no questions at all can still need a "watch this in your first week"
+// deadline; forcing that through the assessment toggle would make it
+// impossible to express. See Course.deadline's own comment in
+// backend/apps/courses/models.py.
+export async function updateCourseDeadline(courseId: string, deadline: string | null): Promise<Course> {
+  const course = await djangoFetch<Course>(`/courses/${courseId}/`, {
+    method: "PATCH",
+    body: JSON.stringify({ deadline }),
+  });
+  revalidatePath(`/courses/${courseId}/settings`);
+  return course;
+}
+
 // --- Lessons ---
 // No revalidatePath below: the builder page keeps its own client-side state
 // (needed for drag-and-drop) and syncs it directly from each action's
@@ -83,6 +143,46 @@ export async function reorderLessons(lessons: { id: string; order: number }[]): 
       djangoFetch(`/lessons/${l.id}/`, { method: "PATCH", body: JSON.stringify({ order: l.order }) }),
     ),
   );
+}
+
+// --- Reusable lessons ---
+// The saved-lesson library: save a lesson's slides as a standalone,
+// reusable entry, import a copy of one into a (different, or the same)
+// course's draft. Both directions are a one-time CLONE, never a live link —
+// editing either side afterward never affects the other (see the backend's
+// ReusableLesson model docstring). No revalidatePath, same reasoning as the
+// rest of this section — the builder syncs its own state from the returned
+// value.
+
+export async function saveLessonAsReusable(
+  lessonId: string,
+  name: string,
+  description: string,
+): Promise<ReusableLesson> {
+  return djangoFetch<ReusableLesson>(`/lessons/${lessonId}/save-as-reusable/`, {
+    method: "POST",
+    body: JSON.stringify({ name, description }),
+  });
+}
+
+export async function listReusableLessons(): Promise<ReusableLesson[]> {
+  const data = await djangoFetch<Paginated<ReusableLesson>>("/reusable-lessons/?page_size=200");
+  return data.results;
+}
+
+export async function importReusableLesson(
+  courseVersionId: string,
+  reusableLessonId: string,
+  order: number,
+): Promise<Lesson> {
+  return djangoFetch<Lesson>(`/reusable-lessons/${reusableLessonId}/import/`, {
+    method: "POST",
+    body: JSON.stringify({ course_version: courseVersionId, order }),
+  });
+}
+
+export async function deleteReusableLesson(reusableLessonId: string): Promise<void> {
+  await djangoFetch<void>(`/reusable-lessons/${reusableLessonId}/`, { method: "DELETE" });
 }
 
 // --- Slides ---
@@ -169,4 +269,102 @@ export async function uploadCourseAsset(formData: FormData): Promise<CourseAsset
     method: "POST",
     body: formData,
   });
+}
+
+// --- Direct course assignments ---
+// A course directly assigned to one specific user, independent of Group
+// membership — see CourseAssignment's own comment in course-types.ts. No
+// conflict check against existing Group access on either side: a user
+// already covered by a Group that includes this course can still be
+// directly assigned with no error (Groups routinely overlap on the same
+// course) — the Members tab never cross-checks the two.
+
+// DjangoApiError's `message` is the raw DRF response body (djangoFetch does
+// `await res.text()`, not `.json()` — see lib/django.ts). The two expected
+// shapes are special-cased for a friendlier message: `{"non_field_errors":
+// [...]}` (the model's own UniqueConstraint, surfaced automatically by DRF
+// — see CourseAssignmentTests.test_duplicate_assignment_is_a_clean_400_not
+// _a_500) and `{"detail": "..."}` (a raised PermissionDenied, e.g.
+// perform_create's team check). Anything else DRF could plausibly send —
+// per-field validation errors like `{"user": ["Invalid pk \"999\" - object
+// does not exist."]}`, e.g. if the target user was deleted in the gap
+// between this page loading and the click — still surfaces SOME real
+// message instead of falling all the way back to the generic one, by just
+// taking the first string found anywhere in the body. Deliberately never
+// throws itself; a truly malformed/non-JSON body just means the generic
+// fallback below, not a second error on top of the first.
+function describeAssignmentError(err: DjangoApiError): string {
+  try {
+    const body: unknown = JSON.parse(err.message);
+    if (body && typeof body === "object") {
+      if ("non_field_errors" in body && Array.isArray(body.non_field_errors) && body.non_field_errors[0]) {
+        return "This user is already directly assigned to this course.";
+      }
+      if ("detail" in body && typeof body.detail === "string") {
+        return body.detail;
+      }
+      for (const value of Object.values(body)) {
+        if (typeof value === "string") return value;
+        if (Array.isArray(value) && typeof value[0] === "string") return value[0];
+      }
+    }
+  } catch {
+    // Not JSON — fall through to the generic message below.
+  }
+  return `Something went wrong (status ${err.status}).`;
+}
+
+export type CourseAssignmentActionResult =
+  | { ok: true; assignment: CourseAssignment }
+  | { ok: false; error: string };
+
+// Returns a result object rather than letting a DjangoApiError propagate —
+// per Next.js's own guidance (see node_modules/next/dist/docs/01-app/
+// 01-getting-started/10-error-handling.md's "Handling expected errors"),
+// an EXPECTED failure (a duplicate assignment from a double-click, a
+// manager's team check) should be modeled as a return value, not a thrown
+// error: a Server Action's thrown error message is redacted to a generic
+// string in a production build (unlike dev, where the real message shows),
+// so course-access-cell.tsx could never actually display "already
+// assigned" by catching a throw — only by reading it off a normal return
+// value instead. A genuinely unexpected error (network failure, a real
+// 500) still rethrows, so it reaches (dashboard)/error.tsx same as before.
+export async function addCourseAssignment(courseId: string, userId: number): Promise<CourseAssignmentActionResult> {
+  try {
+    const assignment = await djangoFetch<CourseAssignment>("/course-assignments/", {
+      method: "POST",
+      body: JSON.stringify({ course: courseId, user: userId }),
+    });
+    revalidatePath(`/courses/${courseId}/members`);
+    return { ok: true, assignment };
+  } catch (err) {
+    if (err instanceof DjangoApiError && err.status === 400) {
+      return { ok: false, error: describeAssignmentError(err) };
+    }
+    throw err;
+  }
+}
+
+export async function removeCourseAssignment(
+  assignmentId: string,
+  courseId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await djangoFetch<void>(`/course-assignments/${assignmentId}/`, { method: "DELETE" });
+    revalidatePath(`/courses/${courseId}/members`);
+    return { ok: true };
+  } catch (err) {
+    // 404 here means someone else (another admin, another tab) already
+    // removed this exact row — not a real failure from this click's point
+    // of view, the assignment is gone either way, which is what the click
+    // wanted. Still revalidate so this page's own stale copy of the list
+    // (which is what showed a since-deleted row as removable in the first
+    // place) catches up on the next render instead of offering the same
+    // dead "remove" action again.
+    if (err instanceof DjangoApiError && err.status === 404) {
+      revalidatePath(`/courses/${courseId}/members`);
+      return { ok: true };
+    }
+    throw err;
+  }
 }

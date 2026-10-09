@@ -5,9 +5,12 @@ import { useLayoutEffect, useRef, useState } from "react";
 import type { BoxTransform } from "@/lib/course-types";
 import { cn } from "@/lib/utils";
 import { useActiveEditorContext } from "../active-editor-context";
+import { CANVAS_H, CANVAS_W } from "../slide-canvas";
 import { useSlideSelection } from "../slide-selection-context";
+import { useSnapGuides } from "../snap-guide-context";
 import { HANDLES, type HandleDir, clampPositionPct } from "./image-shared";
 import type { SlideFaceProps } from "./index";
+import { snapBoxPosition, snapEdge } from "./snap-guides";
 
 // Width of the invisible "grab to move" band just inside the box's own
 // edges — see the perimeter strips below.
@@ -146,10 +149,10 @@ export function PositionableBox({
   // (focus has entered its own text editor, or the perimeter move band has
   // been grabbed at least once), not for every box on the slide all the
   // time. Set on focus-within and on the first move-drag; cleared on
-  // blur-out, guarded against the formatting toolbar the same way
+  // blur-out, guarded against the properties panel the same way
   // RichTextBody's own onBlur is (see content-slide-face.tsx) — otherwise
-  // clicking a Bold/Italic button in the toolbar would look like focus
-  // left the box and hide its handles mid-format.
+  // clicking a Bold/Italic button in the panel's own formatting controls
+  // would look like focus left the box and hide its handles mid-format.
   //
   // Derived from the SHARED slide-selection-context, not local state: a
   // move/resize drag has to preventDefault() on pointerdown (to suppress
@@ -164,7 +167,8 @@ export function PositionableBox({
   const selectionId = `${slideId}:${fieldKey}`;
   const { selectedId, select, deselect } = useSlideSelection();
   const isSelected = selectedId === selectionId;
-  const { toolbarRef, toolbarInteractingRef } = useActiveEditorContext();
+  const { panelRef, panelInteractingRef } = useActiveEditorContext();
+  const { setGuides, clearGuides } = useSnapGuides();
 
   // Runs after the DOM commits, before paint — the one-time measurement
   // that lets an untouched box's grip/handles appear at its actual current
@@ -332,16 +336,25 @@ export function PositionableBox({
         return;
       }
       moved = true;
-      current = {
-        ...start,
-        xPct: clampPositionPct(start.xPct + ((moveEvent.clientX - startX) / rect.width) * 100),
-        yPct: clampPositionPct(start.yPct + ((moveEvent.clientY - startY) / rect.height) * 100),
-      };
+      const rawX = clampPositionPct(start.xPct + ((moveEvent.clientX - startX) / rect.width) * 100);
+      const rawY = clampPositionPct(start.yPct + ((moveEvent.clientY - startY) / rect.height) * 100);
+      // Snap by whichever of this box's own left/right/center edges lands
+      // closest to a milestone — see snapBoxPosition's own comment for why
+      // a top-left-anchored box needs all three checked, not just its
+      // literal (x, y) anchor point the way a center-anchored image does.
+      const snappedX = snapBoxPosition(rawX, start.widthPct, CANVAS_W);
+      const snappedY = snapBoxPosition(rawY, start.heightPct, CANVAS_H);
+      setGuides({
+        vertical: snappedX.guide !== null ? [snappedX.guide] : [],
+        horizontal: snappedY.guide !== null ? [snappedY.guide] : [],
+      });
+      current = { ...start, xPct: snappedX.pos, yPct: snappedY.pos };
       setLive(current);
     }
     function onUp() {
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
+      clearGuides();
       if (moved) commit(current);
     }
     document.addEventListener("pointermove", onMove);
@@ -389,28 +402,59 @@ export function PositionableBox({
       const dxPct = ((moveEvent.clientX - startX) / rect.width) * 100;
       const dyPct = ((moveEvent.clientY - startY) / rect.height) * 100;
       let { xPct, yPct, widthPct, heightPct } = start;
+      const vertical: number[] = [];
+      const horizontal: number[] = [];
 
+      // Snap whichever edge THIS handle is actually moving — the opposite
+      // edge is the fixed anchor (see this function's own opening comment),
+      // so only the moving one is a meaningful snap target here (unlike a
+      // whole-box MOVE, which checks all three of left/right/center — see
+      // handleMovePointerDown above).
       if (dir.includes("e")) {
         widthPct = clampTextSizePct(start.widthPct + dxPct);
+        const snapped = snapEdge(xPct + widthPct, CANVAS_W);
+        if (snapped.guide !== null) {
+          widthPct = clampTextSizePct(snapped.value - xPct);
+          vertical.push(snapped.guide);
+        }
       }
       if (dir.includes("w")) {
         widthPct = clampTextSizePct(start.widthPct - dxPct);
         xPct = rightAnchor - widthPct;
+        const snapped = snapEdge(xPct, CANVAS_W);
+        if (snapped.guide !== null) {
+          xPct = snapped.value;
+          widthPct = clampTextSizePct(rightAnchor - xPct);
+          vertical.push(snapped.guide);
+        }
       }
       if (dir.includes("s")) {
         heightPct = clampTextSizePct(start.heightPct + dyPct);
+        const snapped = snapEdge(yPct + heightPct, CANVAS_H);
+        if (snapped.guide !== null) {
+          heightPct = clampTextSizePct(snapped.value - yPct);
+          horizontal.push(snapped.guide);
+        }
       }
       if (dir.includes("n")) {
         heightPct = clampTextSizePct(start.heightPct - dyPct);
         yPct = bottomAnchor - heightPct;
+        const snapped = snapEdge(yPct, CANVAS_H);
+        if (snapped.guide !== null) {
+          yPct = snapped.value;
+          heightPct = clampTextSizePct(bottomAnchor - yPct);
+          horizontal.push(snapped.guide);
+        }
       }
 
+      setGuides({ vertical, horizontal });
       current = { xPct, yPct, widthPct, heightPct };
       setLive(current);
     }
     function onUp() {
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
+      clearGuides();
       if (moved) commit(current);
     }
     document.addEventListener("pointermove", onMove);
@@ -423,10 +467,10 @@ export function PositionableBox({
 
   function handleBlur(e: React.FocusEvent<HTMLDivElement>) {
     const nextFocus = e.relatedTarget;
-    const toolbarEl = toolbarRef.current;
-    const focusMovedIntoToolbar = !!(toolbarEl && nextFocus instanceof Node && toolbarEl.contains(nextFocus));
+    const panelEl = panelRef.current;
+    const focusMovedIntoPanel = !!(panelEl && nextFocus instanceof Node && panelEl.contains(nextFocus));
     const focusStayedInBox = !!(nextFocus && e.currentTarget.contains(nextFocus as Node));
-    if (focusMovedIntoToolbar || toolbarInteractingRef.current || focusStayedInBox) {
+    if (focusMovedIntoPanel || panelInteractingRef.current || focusStayedInBox) {
       return;
     }
     deselect(selectionId);

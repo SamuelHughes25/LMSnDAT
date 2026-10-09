@@ -15,7 +15,10 @@ export default async function TemplateBuilderPage({ params }: { params: Promise<
     throw err;
   }
 
-  const versions = await djangoFetch<Paginated<TemplateVersion>>(`/template-versions/?template=${id}`);
+  // page_size=200 — same "don't let the default 25-row page silently hide
+  // a long-lived template's own draft/published version" reasoning as
+  // courses/[id]/builder/page.tsx's identical fetch.
+  const versions = await djangoFetch<Paginated<TemplateVersion>>(`/template-versions/?template=${id}&page_size=200`);
   const draft = versions.results.find((v) => v.status === "draft");
 
   if (!draft) {

@@ -3,6 +3,7 @@
 import { useRef } from "react";
 
 import type { Slide, SlideConfig } from "@/lib/course-types";
+import { SnapGuideLines } from "./snap-guide-lines";
 import { ExtraImagesLayer, SlideBackgroundLayer } from "./slide-faces/background-image-field";
 import { SLIDE_TYPE_FACES } from "./slide-faces";
 
@@ -122,6 +123,13 @@ export function SlideCanvas({
               their own pointer-events-auto) should ever intercept a
               click. */}
           <div ref={overlayRef} className="pointer-events-none absolute inset-0" />
+
+          {/* z-30: above the overlay's own portaled drag controls (z-20)
+              and the clipped content layer (z-10/z-0) — a snap line must
+              stay visible over everything while a drag is in progress. */}
+          <div className="pointer-events-none absolute inset-0 z-30">
+            <SnapGuideLines />
+          </div>
         </div>
       ) : (
         <div className="text-sm text-muted-foreground">Select a slide to edit it</div>

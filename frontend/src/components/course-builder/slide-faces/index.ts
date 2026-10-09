@@ -44,23 +44,39 @@ export type SlideFaceProps = {
   // upload anything, so slide-thumbnail.tsx and course-preview-viewer.tsx
   // never need to pass it.
   courseVersionId?: string;
-  // Only meaningful in "present" mode, and only read by the three types
+  // Only meaningful in "present" mode, and only read by the four types
   // with a real "submit an answer, it's either right or wrong" concept —
-  // multiple-choice-slide-face.tsx, missing-word-slide-face.tsx, and
-  // sequencing-slide-face.tsx. Reported directly as a real gap: all three
-  // let a learner retry indefinitely (multiple_choice silently resets a
-  // wrong pick after a flash; missing_word/sequencing offer an explicit
-  // "Try again" after Submit) — fine, even desirable, for free-form
-  // interactive teaching content, but it means a course marked as an
-  // assessment could never actually be failed, since the learner just
-  // keeps guessing until they land on the right answer. When true, each of
-  // those three types makes the learner's first submitted answer
-  // permanent (wrong or right) instead of allowing another try — see each
-  // component's own present-mode comment for the specific mechanism.
-  // match_pairs/accordion/flashcards/hotspot_image ignore this entirely:
-  // they're completion-tracking content with no "wrong answer" concept at
-  // all (see slide-interaction.ts), so "assessment" doesn't change them.
+  // multiple-choice-slide-face.tsx, missing-word-slide-face.tsx,
+  // sequencing-slide-face.tsx, and match-pairs-slide-face.tsx. Reported
+  // directly as a real gap: all four let a learner retry indefinitely
+  // (multiple_choice silently resets a wrong pick after a flash;
+  // missing_word/sequencing offer an explicit "Try again" after Submit;
+  // match_pairs bounces a mismatch back for another go) — fine, even
+  // desirable, for free-form interactive teaching content, but it means a
+  // course marked as an assessment could never actually be failed, since
+  // the learner just keeps guessing until they land on the right answer.
+  // When true, each of those four types makes the learner's submitted
+  // answer(s) permanent (wrong or right) instead of allowing a retry — see
+  // each component's own present-mode comment for the specific mechanism.
+  // accordion/flashcards/hotspot_image ignore this entirely: they're
+  // completion-tracking content with no "wrong answer" concept at all (see
+  // slide-interaction.ts), so "assessment" doesn't change them.
   isAssessment?: boolean;
+  // The slide's own previously-recorded result, if any — sourced from
+  // course-preview-viewer.tsx's `results` state, which (unlike a slide
+  // face's own internal state) survives navigating to a different slide
+  // and back, since it lives in the parent, not the remounted child.
+  // Reported directly as a real, serious gap: every present-mode component
+  // manages its "have I already answered this" state entirely locally, so
+  // clicking Previous then Next (a fresh mount of the same slide) reset
+  // that state to blank — silently undoing the isAssessment permanence
+  // above and letting a learner simply navigate away and back for a free
+  // retry on a "locked" wrong answer. Only consulted when isAssessment is
+  // true: outside an assessment, resetting on navigation is the correct,
+  // already-intended behavior for free-form practice content (see
+  // isAssessment's own comment) — this prop exists specifically to make
+  // permanence in assessment mode actually permanent.
+  priorResult?: SlideInteractionResult;
 };
 
 // "content", "multiple_choice", "missing_word", "match_pairs", "accordion",

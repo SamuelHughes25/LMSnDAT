@@ -3,38 +3,14 @@ import { BarChart3, Bell, BookOpen, ClipboardList } from "lucide-react";
 
 import { ComingSoonPanel } from "@/components/course-preview/coming-soon-panel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { CourseAttempt } from "@/lib/attempt-types";
+import { getCourseReminders, reminderReason } from "@/lib/course-reminders";
 import type { Course } from "@/lib/course-types";
-import { type CurrentUser, getCurrentUser } from "@/lib/dal";
+import { getCurrentUser } from "@/lib/dal";
+import { deadlineStatus } from "@/lib/deadline";
 import { djangoFetch } from "@/lib/django";
 import { getVisibleCourseIds, getVisibleTemplateIds } from "@/lib/role-access";
 import type { Paginated, Template } from "@/lib/types";
-
-// Real reminders: an assessment course (is_assessment + a passing_score
-// set) the member hasn't yet passed. "Passed" means ANY of their own
-// attempts at it has passed=true — CourseAttempt's role-scoping already
-// limits /course-attempts/?course=<id> to a member's own rows, so no
-// extra user filter is needed here. One fetch per assessment course
-// (rather than one big fetch + a course_version->course lookup) since
-// there's typically only a handful of assessments visible to any one
-// member — simplest correct option at this app's scale. Admins/managers
-// never get real reminders here (they're not the ones with a personal
-// course to retake) — an empty list falls back to the same "No reminders"
-// panel as a member with nothing outstanding.
-async function getRetakeReminders(user: CurrentUser, courses: Course[], visibleIds: Set<string> | null) {
-  if (user.role !== "member") return [];
-  const assessments = courses.filter(
-    (c) => c.is_assessment && c.passing_score !== null && (visibleIds === null || visibleIds.has(c.id)),
-  );
-  if (assessments.length === 0) return [];
-  const results = await Promise.all(
-    assessments.map(async (course) => {
-      const attempts = await djangoFetch<Paginated<CourseAttempt>>(`/course-attempts/?course=${course.id}`);
-      return attempts.results.some((a) => a.passed === true) ? null : course;
-    }),
-  );
-  return results.filter((c): c is Course => c !== null);
-}
+import { cn } from "@/lib/utils";
 
 // A welcome/home screen for operatives — real numbers where the data
 // already exists (course/template counts, and now real retake reminders).
@@ -49,7 +25,7 @@ export default async function PortalHomePage() {
     getVisibleTemplateIds(),
   ]);
 
-  const needsRetake = await getRetakeReminders(user, courses.results, visibleCourseIds);
+  const reminders = await getCourseReminders(user, courses.results, visibleCourseIds);
 
   // Same role-scoping as portal/courses/page.tsx and portal/templates/
   // page.tsx (see role-access.ts) — this card's count previously came
@@ -108,30 +84,37 @@ export default async function PortalHomePage() {
 
       <div>
         <div className="mb-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">Reminders</div>
-        {needsRetake.length > 0 ? (
+        {reminders.length > 0 ? (
           <div className="space-y-2">
-            {needsRetake.map((course) => (
-              <Link key={course.id} href={`/portal/courses/${course.id}`}>
-                <div className="flex items-center justify-between rounded-lg border-2 border-border bg-card p-4 shadow-sm transition-colors hover:bg-muted/40">
-                  <div className="flex items-center gap-3">
-                    <Bell className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <div>
-                      <div className="font-medium">{course.name}</div>
-                      <p className="text-sm text-muted-foreground">
-                        You haven&apos;t passed this yet — minimum {course.passing_score}% required.
-                      </p>
+            {reminders.map((reminder) => {
+              const { course } = reminder;
+              const deadline = deadlineStatus(course.my_deadline);
+              return (
+                <Link key={course.id} href={`/portal/courses/${course.id}`}>
+                  <div className="flex items-center justify-between rounded-lg border-2 border-border bg-card p-4 shadow-sm transition-colors hover:bg-muted/40">
+                    <div className="flex items-center gap-3">
+                      <Bell className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <div>
+                        <div className="font-medium">{course.name}</div>
+                        <p className="text-sm text-muted-foreground">{reminderReason(reminder)}</p>
+                        {deadline && (
+                          <p className={cn("text-sm font-medium", deadline.overdue ? "text-destructive" : "text-muted-foreground")}>
+                            {deadline.label}
+                          </p>
+                        )}
+                      </div>
                     </div>
+                    <span className="shrink-0 text-sm font-medium text-primary">Start</span>
                   </div>
-                  <span className="shrink-0 text-sm font-medium text-primary">Retake</span>
-                </div>
-              </Link>
-            ))}
+                </Link>
+              );
+            })}
           </div>
         ) : (
           <ComingSoonPanel
             icon={Bell}
             title="No reminders yet"
-            description="You're all caught up — nothing to retake right now."
+            description="You're all caught up — nothing outstanding right now."
           />
         )}
       </div>

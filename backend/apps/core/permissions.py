@@ -27,3 +27,17 @@ class IsAdminOrReadOnly(BasePermission):
         if request.method in SAFE_METHODS:
             return bool(request.user and request.user.is_authenticated)
         return _has_role(request.user, {'admin'})
+
+
+class IsAdminOrManagerOrReadOnly(BasePermission):
+    """Any authenticated user can read; only Admins/Managers can write.
+
+    Used for CourseAssignment — a member needs to be able to LIST their own
+    direct course assignments (role-access.ts reads this to compute portal
+    visibility), but only Admins/Managers may create/delete one.
+    """
+
+    def has_permission(self, request, view):
+        if request.method in SAFE_METHODS:
+            return bool(request.user and request.user.is_authenticated)
+        return _has_role(request.user, {'admin', 'manager'})

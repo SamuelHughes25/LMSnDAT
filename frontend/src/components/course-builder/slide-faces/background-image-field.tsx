@@ -5,7 +5,10 @@ import { createPortal } from "react-dom";
 import { Move } from "lucide-react";
 
 import type { ExtraImage } from "@/lib/course-types";
+import { useActiveEditorContext } from "../active-editor-context";
+import { CANVAS_H, CANVAS_W } from "../slide-canvas";
 import { useSlideSelection } from "../slide-selection-context";
+import { useSnapGuides } from "../snap-guide-context";
 import {
   DEFAULT_POSITION_PCT,
   DEFAULT_SIZE_PCT,
@@ -13,6 +16,7 @@ import {
   clampPositionPct,
   imageBoxStyle,
 } from "./image-shared";
+import { snapEdge } from "./snap-guides";
 
 // This slide's own background image never shares its selection id with any
 // text box (those are namespaced `${slideId}:title` etc. — see
@@ -275,12 +279,24 @@ function BackgroundImageEditLayer({
   const { selectedId, select, deselect } = useSlideSelection();
   const isSelected = selectedId === selectionId;
   const frameRef = useRef<HTMLDivElement>(null);
+  // So clicking into the properties panel's own X/Y/Width/Height inputs for
+  // THIS image (image-object-properties.tsx) doesn't immediately deselect it
+  // — those inputs live well outside frameRef (a completely different part
+  // of the page), which the outside-pointerdown check below would otherwise
+  // treat as "clicked away," reverting the panel back to its normal slide
+  // view mid-edit. Same panelRef the text-box selection/blur guards already
+  // use (see positionable-box.tsx and content-slide-face.tsx).
+  const { panelRef } = useActiveEditorContext();
+  const { setGuides, clearGuides } = useSnapGuides();
 
   useEffect(() => {
     if (!isSelected) return;
     function handlePointerDownOutside(e: PointerEvent) {
       const frame = frameRef.current;
-      if (frame && e.target instanceof Node && !frame.contains(e.target)) {
+      const panel = panelRef.current;
+      if (!(e.target instanceof Node)) return;
+      if (panel && panel.contains(e.target)) return;
+      if (frame && !frame.contains(e.target)) {
         deselect(selectionId);
       }
     }
@@ -290,7 +306,7 @@ function BackgroundImageEditLayer({
     // would reach a bubble-phase document listener.
     document.addEventListener("pointerdown", handlePointerDownOutside, true);
     return () => document.removeEventListener("pointerdown", handlePointerDownOutside, true);
-  }, [isSelected, deselect, selectionId]);
+  }, [isSelected, deselect, selectionId, panelRef]);
 
   function commitTransform(next: { x: number; y: number; w: number; h: number }) {
     setLive(null);
@@ -314,9 +330,22 @@ function BackgroundImageEditLayer({
     let current = { x: startXPct, y: startYPct, w: effective.w, h: effective.h };
 
     function onMove(moveEvent: PointerEvent) {
+      const rawX = clampPositionPct(startXPct + ((moveEvent.clientX - startX) / rect.width) * 100);
+      const rawY = clampPositionPct(startYPct + ((moveEvent.clientY - startY) / rect.height) * 100);
+      // A center-anchored image's own anchor point IS the thing to snap
+      // (unlike a text box, whose left/right/center all matter — see
+      // snapBoxPosition's own comment) — its center is what the author is
+      // actually positioning, so checking it directly against the page's
+      // milestones is both simpler and exactly right here.
+      const snappedX = snapEdge(rawX, CANVAS_W);
+      const snappedY = snapEdge(rawY, CANVAS_H);
+      setGuides({
+        vertical: snappedX.guide !== null ? [snappedX.guide] : [],
+        horizontal: snappedY.guide !== null ? [snappedY.guide] : [],
+      });
       current = {
-        x: clampPositionPct(startXPct + ((moveEvent.clientX - startX) / rect.width) * 100),
-        y: clampPositionPct(startYPct + ((moveEvent.clientY - startY) / rect.height) * 100),
+        x: snappedX.value,
+        y: snappedY.value,
         w: effective.w,
         h: effective.h,
       };
@@ -325,6 +354,7 @@ function BackgroundImageEditLayer({
     function onUp() {
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
+      clearGuides();
       commitTransform(current);
     }
     document.addEventListener("pointermove", onMove);
@@ -416,10 +446,13 @@ function BackgroundImageEditLayer({
 
                 <ResizeHandles
                   containerRef={containerRef}
+                  xPct={effective.x}
+                  yPct={effective.y}
                   widthPct={widthPct}
                   heightPct={heightPct}
                   onLiveResize={(w, h) => setLive({ x: effective.x, y: effective.y, w, h })}
                   onCommitResize={(w, h) => commitTransform({ x: effective.x, y: effective.y, w, h })}
+                  onGuidesChange={setGuides}
                 />
               </>
             )}

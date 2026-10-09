@@ -18,7 +18,8 @@ const STATUS_VARIANT: Record<TemplateVersion["status"], "default" | "secondary" 
 export default async function TemplateOverviewPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
-  const versions = await djangoFetch<Paginated<TemplateVersion>>(`/template-versions/?template=${id}`);
+  // page_size=200 — see courses/[id]/builder/page.tsx's identical fetch.
+  const versions = await djangoFetch<Paginated<TemplateVersion>>(`/template-versions/?template=${id}&page_size=200`);
   const sorted = [...versions.results].sort((a, b) => b.version_number - a.version_number);
   const draft = sorted.find((v) => v.status === "draft");
   const published = sorted.find((v) => v.status === "published");

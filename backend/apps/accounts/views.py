@@ -4,12 +4,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.core.permissions import IsAdmin
-from .models import JobRole, Team, User
-from .serializers import JobRoleSerializer, TeamSerializer, UserSerializer
+from .models import Group, Team, User
+from .serializers import GroupSerializer, TeamSerializer, UserSerializer
 
 
 class UserViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.select_related('team', 'job_role').all()
+    queryset = User.objects.select_related('team').prefetch_related('content_groups').all()
     serializer_class = UserSerializer
 
     def get_permissions(self):
@@ -32,7 +32,7 @@ class UserViewSet(viewsets.ModelViewSet):
             qs = qs.filter(pk=user.pk)
 
         # Manual query-param filtering (search-by-username, filter-by-
-        # job_role) applied on TOP of the role-scoping above, matching this
+        # group) applied on TOP of the role-scoping above, matching this
         # codebase's existing "no django-filter, just get_queryset()" style
         # used elsewhere for parent-scoping (e.g. ?course= on child
         # viewsets) — there's no SearchFilter/DjangoFilterBackend anywhere
@@ -40,9 +40,9 @@ class UserViewSet(viewsets.ModelViewSet):
         search = self.request.query_params.get('search')
         if search:
             qs = qs.filter(username__icontains=search)
-        job_role = self.request.query_params.get('job_role')
-        if job_role:
-            qs = qs.filter(job_role=job_role)
+        group = self.request.query_params.get('group')
+        if group:
+            qs = qs.filter(content_groups=group)
         return qs
 
 
@@ -56,9 +56,9 @@ class TeamViewSet(viewsets.ModelViewSet):
         return [IsAuthenticated()]
 
 
-class JobRoleViewSet(viewsets.ModelViewSet):
-    queryset = JobRole.objects.prefetch_related('courses', 'templates').all()
-    serializer_class = JobRoleSerializer
+class GroupViewSet(viewsets.ModelViewSet):
+    queryset = Group.objects.prefetch_related('courses', 'templates', 'members').all()
+    serializer_class = GroupSerializer
 
     def get_permissions(self):
         if self.action in ('create', 'update', 'partial_update', 'destroy'):

@@ -12,28 +12,73 @@ import {
   createSlide,
   deleteLesson,
   deleteSlide,
+  importReusableLesson,
   publishVersion,
   reorderLessons,
   reorderSlides,
+  saveLessonAsReusable,
   updateLesson,
   updateSlide,
 } from "@/app/actions/courses";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Course, CourseVersion, Lesson, Slide, SlideConfig, SlideType } from "@/lib/course-types";
-import { ActiveEditorProvider } from "./active-editor-context";
-import { PropertiesPanel, type PropertiesPanelProps } from "./properties-panel";
+import { ActiveEditorProvider, useActiveEditorContext } from "./active-editor-context";
+import { PropertiesPanel, type PropertiesPanelProps, type SelectedObject } from "./properties-panel";
 import { SlideCanvas } from "./slide-canvas";
 import { SlideRail } from "./slide-rail";
-import { SlideSelectionProvider } from "./slide-selection-context";
-import { SlideTextToolbar } from "./slide-text-toolbar";
+import { SlideSelectionProvider, useSlideSelection } from "./slide-selection-context";
+import { SnapGuideProvider } from "./snap-guide-context";
 
 type Selection =
   | { type: "lesson"; lessonId: string }
   | { type: "slide"; lessonId: string; slideId: string }
   | null;
 
-export function CourseBuilder({
+// Parses slide-selection-context.tsx's own `${slideId}:${field}` /
+// `${slideId}:background-image` / `${slideId}:extra-image:${id}` id shapes
+// back into a structured SelectedObject, scoped to one specific slide — a
+// selectedId belonging to a DIFFERENT (e.g. previously viewed) slide simply
+// won't match this prefix and correctly falls through to null, no separate
+// "is this stale" check needed (see slide-selection-context.tsx's own
+// comment on why namespacing already makes stale ids harmless).
+function parseSelectedObject(selectedId: string | null, slideId: string | undefined): SelectedObject | null {
+  if (!selectedId || !slideId) return null;
+  const prefix = `${slideId}:`;
+  if (!selectedId.startsWith(prefix)) return null;
+  const suffix = selectedId.slice(prefix.length);
+  if (suffix === "title" || suffix === "subtitle" || suffix === "body" || suffix === "body2") {
+    return { type: "text", field: suffix };
+  }
+  if (suffix === "background-image") return { type: "background-image" };
+  if (suffix.startsWith("extra-image:")) {
+    return { type: "extra-image", imageId: suffix.slice("extra-image:".length) };
+  }
+  return null;
+}
+
+// The public export just sets up the two contexts the inner component (and
+// every descendant under SlideCanvas/SlideRail) needs — ActiveEditorProvider
+// and SlideSelectionProvider — and renders CourseBuilderInner as their
+// child. This split exists specifically so CourseBuilderInner can call
+// useSlideSelection()/useActiveEditorContext() itself (to read which object
+// is selected and where the panel's own DOM node is): a component can only
+// consume a context provided by an ANCESTOR, never one it renders itself as
+// part of its own JSX, so the actual builder body has to live one level
+// below these providers, not alongside them.
+export function CourseBuilder(props: { course: Course; initialVersion: CourseVersion }) {
+  return (
+    <ActiveEditorProvider>
+      <SlideSelectionProvider>
+        <SnapGuideProvider>
+          <CourseBuilderInner {...props} />
+        </SnapGuideProvider>
+      </SlideSelectionProvider>
+    </ActiveEditorProvider>
+  );
+}
+
+function CourseBuilderInner({
   course,
   initialVersion,
 }: {
@@ -46,6 +91,8 @@ export function CourseBuilder({
   const [selection, setSelection] = useState<Selection>(null);
   const [publishing, setPublishing] = useState(false);
   const [, startTransition] = useTransition();
+  const { selectedId } = useSlideSelection();
+  const { panelRef } = useActiveEditorContext();
   const router = useRouter();
 
   // Latest known config per slide, read/written OUTSIDE React's render
@@ -94,6 +141,21 @@ export function CourseBuilder({
     startTransition(() => {
       deleteLesson(lessonId).catch(() => {});
     });
+  }
+
+  // Doesn't touch `lessons` state at all — saving a lesson as reusable
+  // clones it into a separate library, it never changes the lesson itself.
+  async function handleSaveLessonAsReusable(lessonId: string, name: string, description: string) {
+    await saveLessonAsReusable(lessonId, name, description);
+  }
+
+  // Mirrors handleAddLesson's optimistic-append shape: the server does the
+  // real cloning (services.import_reusable_lesson), this just appends
+  // whatever Lesson it hands back.
+  async function handleImportLesson(reusableLessonId: string) {
+    const lesson = await importReusableLesson(initialVersion.id, reusableLessonId, lessons.length);
+    setLessons((prev) => [...prev, lesson]);
+    setSelection({ type: "lesson", lessonId: lesson.id });
   }
 
   function handleLessonDragEnd(event: DragEndEvent) {
@@ -231,104 +293,118 @@ export function CourseBuilder({
     });
   }
 
+  // Object selection (a text box or image WITHIN the current slide) takes
+  // priority over the slide's own view — the whole point of this feature is
+  // that selecting something on the canvas replaces the normal per-slide
+  // properties with that object's own controls. `selectedId` comes from
+  // slide-selection-context.tsx and is completely independent of `selection`
+  // above (course-builder's own lesson/slide picker state) — see
+  // parseSelectedObject's own comment for why a selectedId left over from a
+  // different slide can never incorrectly match here.
+  const selectedObject = parseSelectedObject(selectedId, selectedSlide?.id);
+
   const panelProps: PropertiesPanelProps =
-    selectedSlide && selectedLesson
+    selectedSlide && selectedLesson && selectedObject
       ? {
-          kind: "slide",
+          kind: "object",
           slide: selectedSlide,
+          object: selectedObject,
           courseVersionId: initialVersion.id,
           onConfigChange: (config) => handleSlideConfigChange(selectedLesson.id, selectedSlide.id, config),
-          onTitleChange: (title) => handleSlideChange(selectedLesson.id, selectedSlide.id, { title }),
-          onDelete: () => handleDeleteSlide(selectedLesson.id, selectedSlide.id),
         }
-      : selectedLesson
+      : selectedSlide && selectedLesson
         ? {
-            kind: "lesson",
-            lesson: selectedLesson,
-            onDescriptionChange: (v) => handleLessonDescriptionChange(selectedLesson.id, v),
-            onDelete: () => handleDeleteLesson(selectedLesson.id),
+            kind: "slide",
+            slide: selectedSlide,
+            courseVersionId: initialVersion.id,
+            onConfigChange: (config) => handleSlideConfigChange(selectedLesson.id, selectedSlide.id, config),
+            onTitleChange: (title) => handleSlideChange(selectedLesson.id, selectedSlide.id, { title }),
+            onDelete: () => handleDeleteSlide(selectedLesson.id, selectedSlide.id),
           }
-        : { kind: "empty" };
+        : selectedLesson
+          ? {
+              kind: "lesson",
+              lesson: selectedLesson,
+              onDescriptionChange: (v) => handleLessonDescriptionChange(selectedLesson.id, v),
+              onDelete: () => handleDeleteLesson(selectedLesson.id),
+            }
+          : { kind: "empty" };
 
-  const panelKey = selection
-    ? selection.type === "lesson"
-      ? `lesson-${selection.lessonId}`
-      : `slide-${selection.slideId}`
-    : "empty";
+  const panelKey = selectedObject
+    ? `object-${selectedId}`
+    : selection
+      ? selection.type === "lesson"
+        ? `lesson-${selection.lessonId}`
+        : `slide-${selection.slideId}`
+      : "empty";
 
   return (
-    <ActiveEditorProvider>
-      <SlideSelectionProvider>
-        <div className="flex h-full flex-col">
-          <div className="mb-4 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                render={<Link href={`/courses/${course.id}`} aria-label="Back to course" />}
-              >
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-              <div>
-                <h1 className="text-2xl font-semibold">{course.name}</h1>
-                <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
-                  <Badge variant="secondary">Draft</Badge>
-                  <span>Version {initialVersion.version_number}</span>
-                </div>
-              </div>
-            </div>
-            <Button disabled={publishing} onClick={handlePublish}>
-              {publishing ? "Publishing…" : "Publish"}
-            </Button>
-
-            {/* Self-contained: renders nothing until an editor is focused with
-                a non-empty selection (see slide-text-toolbar.tsx), so this
-                mounts unconditionally here rather than needing
-                course-builder.tsx to also read active-editor-context.tsx just
-                to decide whether to include it. It positions itself via
-                `position: fixed` off the current selection's own screen
-                coordinates (see active-editor-context.tsx's `selectionRect`),
-                not off this header's layout, so where it's mounted in the
-                tree no longer matters for where it visually appears. */}
-            <SlideTextToolbar />
-          </div>
-
-          <div className="flex min-h-0 flex-1 gap-4">
-            <div className="w-60 shrink-0">
-              <SlideRail
-                lessons={lessons}
-                selectedLessonId={selection?.type === "lesson" ? selection.lessonId : null}
-                selectedSlideId={selection?.type === "slide" ? selection.slideId : null}
-                onSelectLesson={(lessonId) => setSelection({ type: "lesson", lessonId })}
-                onSelectSlide={(lessonId, slideId) => setSelection({ type: "slide", lessonId, slideId })}
-                onLessonTitleChange={handleLessonTitleChange}
-                onDeleteLesson={handleDeleteLesson}
-                onDeleteSlide={handleDeleteSlide}
-                onSlideDragEnd={handleSlideDragEnd}
-                onLessonDragEnd={handleLessonDragEnd}
-                onAddSlide={handleAddSlide}
-                onAddLesson={handleAddLesson}
-              />
-            </div>
-
-            <SlideCanvas
-              slide={selectedSlide}
-              courseVersionId={initialVersion.id}
-              onTitleChange={(title) => {
-                if (selectedLesson && selectedSlide) handleSlideChange(selectedLesson.id, selectedSlide.id, { title });
-              }}
-              onConfigChange={(config) => {
-                if (selectedLesson && selectedSlide)
-                  handleSlideConfigChange(selectedLesson.id, selectedSlide.id, config);
-              }}
-            />
-
-            <div className="w-64 shrink-0 overflow-y-auto rounded-lg border-2 border-border bg-card shadow-sm">
-              <PropertiesPanel key={panelKey} {...panelProps} />
+    <div className="flex h-full flex-col">
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            render={<Link href={`/courses/${course.id}`} aria-label="Back to course" />}
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div>
+            <h1 className="text-2xl font-semibold">{course.name}</h1>
+            <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+              <Badge variant="secondary">Draft</Badge>
+              <span>Version {initialVersion.version_number}</span>
             </div>
           </div>
         </div>
-      </SlideSelectionProvider>
-    </ActiveEditorProvider>
+        <Button disabled={publishing} onClick={handlePublish}>
+          {publishing ? "Publishing…" : "Publish"}
+        </Button>
+      </div>
+
+      <div className="flex min-h-0 flex-1 gap-4">
+        <div className="w-60 shrink-0">
+          <SlideRail
+            lessons={lessons}
+            selectedLessonId={selection?.type === "lesson" ? selection.lessonId : null}
+            selectedSlideId={selection?.type === "slide" ? selection.slideId : null}
+            onSelectLesson={(lessonId) => setSelection({ type: "lesson", lessonId })}
+            onSelectSlide={(lessonId, slideId) => setSelection({ type: "slide", lessonId, slideId })}
+            onLessonTitleChange={handleLessonTitleChange}
+            onDeleteLesson={handleDeleteLesson}
+            onDeleteSlide={handleDeleteSlide}
+            onSlideDragEnd={handleSlideDragEnd}
+            onLessonDragEnd={handleLessonDragEnd}
+            onAddSlide={handleAddSlide}
+            onAddLesson={handleAddLesson}
+            onSaveLessonAsReusable={handleSaveLessonAsReusable}
+            onImportLesson={handleImportLesson}
+          />
+        </div>
+
+        <SlideCanvas
+          slide={selectedSlide}
+          courseVersionId={initialVersion.id}
+          onTitleChange={(title) => {
+            if (selectedLesson && selectedSlide) handleSlideChange(selectedLesson.id, selectedSlide.id, { title });
+          }}
+          onConfigChange={(config) => {
+            if (selectedLesson && selectedSlide)
+              handleSlideConfigChange(selectedLesson.id, selectedSlide.id, config);
+          }}
+        />
+
+        {/* panelRef/panelInteractingRef (active-editor-context.tsx) point at
+            THIS stable wrapper, not the PropertiesPanel instance inside it —
+            switching between lesson/slide/object views remounts the panel
+            (key={panelKey}) but never this div, so a text editor's onBlur
+            guard (and slide-selection-context's own outside-click checks)
+            can reliably tell "focus moved into the panel" regardless of
+            which view is currently showing. */}
+        <div ref={panelRef} className="w-64 shrink-0 overflow-y-auto rounded-lg border-2 border-border bg-card shadow-sm">
+          <PropertiesPanel key={panelKey} {...panelProps} />
+        </div>
+      </div>
+    </div>
   );
 }

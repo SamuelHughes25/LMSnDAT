@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, Plus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { MultipleChoiceOption, Slide } from "@/lib/course-types";
+import type { SlideInteractionResult } from "@/lib/slide-interaction";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { cn } from "@/lib/utils";
 import type { SlideFaceProps } from "./index";
@@ -33,7 +34,14 @@ function makeOptionId(n: number) {
 const FIELD_CLASSES =
   "w-full border-none bg-transparent p-0 text-foreground outline-none placeholder:text-muted-foreground/50 focus:rounded focus:outline-none focus:ring-1 focus:ring-primary/40";
 
-export function MultipleChoiceSlideFace({ slide, mode, onConfigChange, onInteraction, isAssessment }: SlideFaceProps) {
+export function MultipleChoiceSlideFace({
+  slide,
+  mode,
+  onConfigChange,
+  onInteraction,
+  isAssessment,
+  priorResult,
+}: SlideFaceProps) {
   const question = slide.config.question ?? "";
   const options = slide.config.options ?? [];
   const feedbackIncorrect = slide.config.feedback_incorrect ?? "";
@@ -58,6 +66,7 @@ export function MultipleChoiceSlideFace({ slide, mode, onConfigChange, onInterac
         feedbackIncorrect={feedbackIncorrect}
         onInteraction={onInteraction}
         isAssessment={!!isAssessment}
+        priorResult={priorResult}
       />
     );
   }
@@ -235,6 +244,7 @@ function MultipleChoicePresent({
   feedbackIncorrect,
   onInteraction,
   isAssessment,
+  priorResult,
 }: {
   slide: Slide;
   question: string;
@@ -242,6 +252,7 @@ function MultipleChoicePresent({
   feedbackIncorrect: string;
   onInteraction: SlideFaceProps["onInteraction"];
   isAssessment: boolean;
+  priorResult?: SlideInteractionResult;
 }) {
   // The permanent, final pick — right OR wrong. Outside assessment mode
   // this is only ever set for a correct pick (a wrong one goes through
@@ -258,9 +269,45 @@ function MultipleChoicePresent({
   // handleSelect.
   const [flashIncorrectId, setFlashIncorrectId] = useState<string | null>(null);
   // Purely for the final report's `detail` payload, not for scoring (see
-  // the comment above) — a ref, not state: it doesn't drive any render, it
-  // only needs to be read once, at the moment an answer locks in.
-  const incorrectAttemptsRef = useRef(0);
+  // the comment above). Real state, not a ref — the sync block just below
+  // needs to set it during render (see that block's own comment on why),
+  // and React's lint config disallows mutating a ref's `.current` there.
+  const [incorrectAttempts, setIncorrectAttempts] = useState(0);
+
+  // Syncs lockedId/incorrectAttemptsRef from the server's own record of this
+  // slide's answer (priorResult) whenever it CHANGES — ONLY in assessment
+  // mode (see priorResult's own doc comment in slide-faces/index.ts). Not a
+  // one-time lazy useState initializer — a lazy initializer only captures
+  // whatever priorResult happens to be at THIS component's very first
+  // render, which reported as wrong in two real, confirmed cases: (1) a
+  // fresh page load/new tab — course-preview-viewer.tsx's attempt-resume
+  // fetch is still in flight at the moment this component first mounts, so
+  // priorResult is still undefined on that first render and only arrives a
+  // tick later once the fetch resolves; a lazy initializer would have
+  // already locked in blank forever. (2) Retake — resets the parent's
+  // `results` state to {} for a new attempt WITHOUT necessarily remounting
+  // a slide that happens to still be at the same index/id as before, so
+  // this component's own lockedId has to clear back to blank too when
+  // priorResult disappears, not keep showing a stale locked answer from the
+  // just-completed attempt.
+  //
+  // Also not a useEffect — setting state synchronously inside an effect
+  // body is exactly the "cascading renders" anti-pattern this project's
+  // lint config (react-hooks/set-state-in-effect) flags. Instead this is
+  // the React-sanctioned "adjust state when a prop changes" shape (compare
+  // against the last-seen value, and update synchronously DURING render if
+  // it changed) — the same shape isClient/hasShuffled already uses below
+  // for the shuffle-once-on-mount logic, just tracking priorResult instead
+  // of a boolean flag. Doing it during render (not after, in an effect)
+  // also means there's no visible one-frame flash of "unlocked" in the
+  // ordinary case where priorResult is already available at mount.
+  const [syncedPriorResult, setSyncedPriorResult] = useState(priorResult);
+  if (isAssessment && priorResult !== syncedPriorResult) {
+    setSyncedPriorResult(priorResult);
+    const detail = priorResult?.detail as { selectedOptionId?: string; incorrectAttempts?: number } | undefined;
+    setLockedId(detail?.selectedOptionId ?? null);
+    setIncorrectAttempts(detail?.incorrectAttempts ?? 0);
+  }
 
   // Clears the red flash (and the selection with it) ~1.4s after a wrong
   // pick, giving the learner enough time to read the wrong-answer
@@ -285,11 +332,16 @@ function MultipleChoicePresent({
         isCorrect: true,
         score: 1,
         answeredAt: new Date().toISOString(),
-        detail: { selectedOptionId: option.id, incorrectAttempts: incorrectAttemptsRef.current },
+        detail: { selectedOptionId: option.id, incorrectAttempts },
       });
       return;
     }
-    incorrectAttemptsRef.current += 1;
+    // Computed locally, not read back from state — setIncorrectAttempts
+    // below won't be reflected in `incorrectAttempts` until the next
+    // render, but the detail payload sent this same tick needs the
+    // up-to-date count.
+    const nextIncorrectAttempts = incorrectAttempts + 1;
+    setIncorrectAttempts(nextIncorrectAttempts);
     if (isAssessment) {
       // Permanent — this IS the submitted answer, and it's wrong.
       setLockedId(option.id);
@@ -299,7 +351,7 @@ function MultipleChoicePresent({
         isCorrect: false,
         score: 0,
         answeredAt: new Date().toISOString(),
-        detail: { selectedOptionId: option.id, incorrectAttempts: incorrectAttemptsRef.current },
+        detail: { selectedOptionId: option.id, incorrectAttempts: nextIncorrectAttempts },
       });
       return;
     }

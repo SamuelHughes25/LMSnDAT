@@ -10,12 +10,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { Course } from "@/lib/course-types";
 
-// A course's score/passing-score gates real things (CourseAttempt.passed,
+// A course's score/passing-score gate real things (CourseAttempt.passed,
 // the portal's "retake reminder" — see role-access.ts and portal/page.tsx)
 // so this form only ever writes through the server, never assumes success
 // client-side: the checkbox/input reflect local draft state while editing,
-// but the actual saved is_assessment/passing_score always comes back from
-// the PATCH response.
+// but the actual saved values always come back from the PATCH response.
+//
+// Deliberately does NOT include the deadline setting (see
+// course-deadline-settings.tsx, its own separate card) — a deadline is an
+// independent concept, not conditional on this checkbox. A purely
+// informative onboarding course with no questions at all can still need a
+// "watch this in your first week" deadline; nesting that control inside
+// "is this an assessment" made it impossible to express.
 export function CourseAssessmentSettings({ course }: { course: Course }) {
   const [isAssessment, setIsAssessment] = useState(course.is_assessment);
   const [passingScore, setPassingScore] = useState(course.passing_score?.toString() ?? "70");

@@ -14,7 +14,16 @@ export function DeleteUserButton({ userId, username }: { userId: number; usernam
   function handleClick() {
     if (!window.confirm(`Delete "${username}"? This cannot be undone.`)) return;
     startTransition(async () => {
-      await deleteUser(userId);
+      const result = await deleteUser(userId);
+      if (!result.ok) {
+        // A blocking alert, not inline text: this cell is a single icon
+        // button with no room of its own (unlike course-access-cell.tsx's
+        // wider Members-table cell), and failure here — the user still
+        // has course/attempt history on record — is rare enough that a
+        // plain alert is fine, consistent with the confirm() just above.
+        window.alert(result.error);
+        return;
+      }
       router.refresh();
     });
   }

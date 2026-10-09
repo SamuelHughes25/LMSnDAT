@@ -190,12 +190,16 @@ export function PortalShell({
             </div>
           </header>
         )}
-        {/* Padding shrinks to p-2 on the course player specifically — the
-            same "every pixel here is a pixel the canvas doesn't get"
-            reasoning as the header/title row inside the player page
-            itself. Every other portal page keeps the original p-6
-            breathing room; only the player is meant to feel edge-to-edge. */}
-        <main className={cn("min-h-0 flex-1 overflow-y-auto bg-muted/30", isCoursePlayer ? "p-2" : "p-6")}>
+        {/* Padding shrinks on the course player specifically — the same
+            "every pixel here is a pixel the canvas doesn't get" reasoning as
+            the header/title row inside the player page itself. Every other
+            portal page keeps the original p-6 breathing room; only the
+            player is meant to feel close to edge-to-edge. pl-6 (rather than
+            plain p-2 on all sides) gives the "Back to courses" link in the
+            page's own header row more room from the sidebar edge — p-2
+            alone read as uncomfortably tight there, and pl-3 was still too
+            tight per follow-up feedback. */}
+        <main className={cn("min-h-0 flex-1 overflow-y-auto bg-muted/30", isCoursePlayer ? "p-2 pl-6" : "p-6")}>
           {children}
         </main>
       </div>

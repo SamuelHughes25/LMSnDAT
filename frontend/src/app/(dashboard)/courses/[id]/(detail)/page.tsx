@@ -19,7 +19,8 @@ const STATUS_VARIANT: Record<CourseVersion["status"], "default" | "secondary" | 
 export default async function CourseOverviewPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
-  const versions = await djangoFetch<Paginated<CourseVersion>>(`/course-versions/?course=${id}`);
+  // page_size=200 — see builder/page.tsx's identical fetch for why.
+  const versions = await djangoFetch<Paginated<CourseVersion>>(`/course-versions/?course=${id}&page_size=200`);
   const sorted = [...versions.results].sort((a, b) => b.version_number - a.version_number);
   const draft = sorted.find((v) => v.status === "draft");
   const published = sorted.find((v) => v.status === "published");

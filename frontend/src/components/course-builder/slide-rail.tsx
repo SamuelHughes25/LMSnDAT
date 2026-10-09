@@ -11,7 +11,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronDown, ChevronRight, GripVertical, Plus, Trash2 } from "lucide-react";
+import { BookmarkPlus, ChevronDown, ChevronRight, GripVertical, Library, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,8 @@ import type { Lesson, SlideType } from "@/lib/course-types";
 import { restrictToParentElement, restrictToVerticalAxis } from "@/lib/dnd-modifiers";
 import { cn } from "@/lib/utils";
 import { AddSlideMenu } from "./add-slide-menu";
+import { ManageLessonsDialog } from "./manage-lessons-dialog";
+import { SaveLessonDialog } from "./save-lesson-dialog";
 import { SlideThumbnail } from "./slide-thumbnail";
 
 // The whole left rail: lessons as collapsible sections (drag handle +
@@ -40,6 +42,8 @@ export function SlideRail({
   onLessonDragEnd,
   onAddSlide,
   onAddLesson,
+  onSaveLessonAsReusable,
+  onImportLesson,
 }: {
   lessons: Lesson[];
   selectedLessonId: string | null;
@@ -53,8 +57,11 @@ export function SlideRail({
   onLessonDragEnd: (event: DragEndEvent) => void;
   onAddSlide: (lessonId: string, type: SlideType) => void;
   onAddLesson: () => void;
+  onSaveLessonAsReusable: (lessonId: string, name: string, description: string) => Promise<void>;
+  onImportLesson: (reusableLessonId: string) => Promise<void>;
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const [manageDialogOpen, setManageDialogOpen] = useState(false);
 
   return (
     <div className="flex h-full flex-col">
@@ -74,16 +81,29 @@ export function SlideRail({
                 onDeleteSlide={(slideId) => onDeleteSlide(lesson.id, slideId)}
                 onSlideDragEnd={(event) => onSlideDragEnd(lesson.id, event)}
                 onAddSlide={(type) => onAddSlide(lesson.id, type)}
+                onSaveAsReusable={(name, description) => onSaveLessonAsReusable(lesson.id, name, description)}
               />
             ))}
           </SortableContext>
         </DndContext>
       </div>
 
-      <Button variant="outline" onClick={onAddLesson} className="mt-3 w-full">
-        <Plus className="mr-1 h-4 w-4" />
-        Add lesson
-      </Button>
+      <div className="mt-3 flex gap-2">
+        <Button variant="outline" onClick={onAddLesson} className="flex-1">
+          <Plus className="mr-1 h-4 w-4" />
+          Add lesson
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => setManageDialogOpen(true)}
+          aria-label="Import or manage reusable lessons"
+          title="Import or manage reusable lessons"
+        >
+          <Library className="h-4 w-4" />
+        </Button>
+      </div>
+
+      <ManageLessonsDialog open={manageDialogOpen} onOpenChange={setManageDialogOpen} onImport={onImportLesson} />
     </div>
   );
 }
@@ -99,6 +119,7 @@ function LessonSection({
   onDeleteSlide,
   onSlideDragEnd,
   onAddSlide,
+  onSaveAsReusable,
 }: {
   lesson: Lesson;
   isSelected: boolean;
@@ -110,8 +131,10 @@ function LessonSection({
   onDeleteSlide: (slideId: string) => void;
   onSlideDragEnd: (event: DragEndEvent) => void;
   onAddSlide: (type: SlideType) => void;
+  onSaveAsReusable: (name: string, description: string) => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(true);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: lesson.id });
   // Own nested DndContext/SortableContext for this lesson's slides — same
   // reason cross-lesson slide dragging isn't (and can't be) supported yet:
@@ -172,6 +195,19 @@ function LessonSection({
           size="icon"
           onClick={(e) => {
             e.stopPropagation();
+            setSaveDialogOpen(true);
+          }}
+          aria-label="Save as reusable lesson"
+          title="Save as reusable lesson"
+          className="h-7 w-7"
+        >
+          <BookmarkPlus className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={(e) => {
+            e.stopPropagation();
             onDelete();
           }}
           aria-label="Delete lesson"
@@ -180,6 +216,13 @@ function LessonSection({
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
+
+      <SaveLessonDialog
+        lesson={lesson}
+        open={saveDialogOpen}
+        onOpenChange={setSaveDialogOpen}
+        onSave={onSaveAsReusable}
+      />
 
       {expanded && (
         <div className="space-y-2 border-t border-border p-2">

@@ -17,6 +17,7 @@ import { X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { MissingWordBlank, Slide } from "@/lib/course-types";
+import type { SlideInteractionResult } from "@/lib/slide-interaction";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { useIsClient } from "@/lib/use-is-client";
 import { cn } from "@/lib/utils";
@@ -77,7 +78,14 @@ function shuffle<T>(items: T[]): T[] {
   return result;
 }
 
-export function MissingWordSlideFace({ slide, mode, onConfigChange, onInteraction, isAssessment }: SlideFaceProps) {
+export function MissingWordSlideFace({
+  slide,
+  mode,
+  onConfigChange,
+  onInteraction,
+  isAssessment,
+  priorResult,
+}: SlideFaceProps) {
   const paragraph = slide.config.paragraph ?? "";
   const blanks = slide.config.blanks ?? [];
 
@@ -93,6 +101,7 @@ export function MissingWordSlideFace({ slide, mode, onConfigChange, onInteractio
         blanks={blanks}
         onInteraction={onInteraction}
         isAssessment={!!isAssessment}
+        priorResult={priorResult}
       />
     );
   }
@@ -235,12 +244,14 @@ function MissingWordPresent({
   blanks,
   onInteraction,
   isAssessment,
+  priorResult,
 }: {
   slide: Slide;
   paragraph: string;
   blanks: MissingWordBlank[];
   onInteraction: SlideFaceProps["onInteraction"];
   isAssessment: boolean;
+  priorResult?: SlideInteractionResult;
 }) {
   const [placement, setPlacement] = useState<Placement>(() =>
     Object.fromEntries(blanks.map((b) => [b.id, null])),
@@ -272,6 +283,27 @@ function MissingWordPresent({
   // Which word is currently being dragged, purely to pick what DragOverlay
   // shows below — see the comment on DragOverlay's use for why this exists.
   const [activeId, setActiveId] = useState<string | null>(null);
+
+  // Syncs placement/submitted from the server's own record of this slide's
+  // answer (priorResult) whenever it CHANGES — ONLY in assessment mode (see
+  // priorResult's own doc comment in slide-faces/index.ts). Not a one-time
+  // lazy useState initializer — see multiple-choice-slide-face.tsx's
+  // identical fix for the full reasoning: a lazy initializer only captures
+  // whatever priorResult happens to be at this component's very first
+  // render, which is wrong both on a fresh page load (the attempt-resume
+  // fetch is still in flight at first mount) and on Retake (priorResult
+  // disappearing needs to clear this back to blank too, even without a
+  // remount). Not a useEffect either — see that same file's comment on why
+  // this project's lint config specifically flags setState-inside-an-effect,
+  // and why the "adjust state during render" shape below is the sanctioned
+  // alternative (same shape isClient/hasShuffled above already uses).
+  const [syncedPriorResult, setSyncedPriorResult] = useState(priorResult);
+  if (isAssessment && priorResult !== syncedPriorResult) {
+    setSyncedPriorResult(priorResult);
+    const priorPlacement = (priorResult?.detail as { placements?: Placement } | undefined)?.placements ?? null;
+    setPlacement(priorPlacement ?? Object.fromEntries(blanks.map((b) => [b.id, null])));
+    setSubmitted(priorPlacement !== null);
+  }
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 

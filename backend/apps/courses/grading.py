@@ -57,6 +57,32 @@ def _sequencing(config, detail):
     return score == 1.0, score
 
 
+def _match_pairs(config, detail):
+    """Distinct from the generic `_id_set_covers` graders below because this
+    type can now genuinely be PARTIALLY wrong — unlike accordion/hotspot_image
+    (open-everything/find-everything, no notion of a wrong choice),
+    match_pairs' frontend (assessment mode) permanently records every
+    keyword's assigned definition, right or wrong, in `detail['pairings']`
+    (a full map, one entry per keyword that's been clicked so far — shape
+    mirrors missing_word's `placements`). A keyword id mapped to its own id
+    means it landed on its correct definition (same "shared id = correct
+    pair" convention as missing_word). Score is the fraction of the slide's
+    pairs correctly matched; a mismatch anywhere means this can never reach
+    1.0, matching the frontend's "one wrong pairing fails the whole slide"
+    design without needing a `matchedPairIds`-style boolean anywhere.
+    """
+    pairs = config.get('pairs') or []
+    pair_ids = {p.get('id') for p in pairs if isinstance(p, dict)}
+    if not pair_ids:
+        return False, 0.0
+    pairings = (detail or {}).get('pairings') or {}
+    if not isinstance(pairings, dict):
+        return False, 0.0
+    correct_count = sum(1 for k, v in pairings.items() if k in pair_ids and v == k)
+    score = correct_count / len(pair_ids)
+    return score == 1.0, score
+
+
 def _id_set_covers(config_key, detail_key):
     """Builds a grader for the three "find/open/match everything" types:
     correct iff the submitted id-set is a superset of every id in config.
@@ -90,7 +116,7 @@ _GRADERS = {
     'multiple_choice': _multiple_choice,
     'missing_word': _missing_word,
     'sequencing': _sequencing,
-    'match_pairs': _id_set_covers('pairs', 'matchedPairIds'),
+    'match_pairs': _match_pairs,
     'accordion': _id_set_covers('sections', 'sectionsOpened'),
     'hotspot_image': _id_set_covers('hotspots', 'foundHotspotIds'),
     'flashcards': _flashcards,

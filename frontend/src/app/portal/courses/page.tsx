@@ -1,9 +1,8 @@
-import Link from "next/link";
-import { BookOpen } from "lucide-react";
-
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PortalCoursesView, type PortalCourseCardData } from "@/components/portal-courses-view";
+import { getCourseReminders, reminderReason } from "@/lib/course-reminders";
 import type { Course, CourseVersion } from "@/lib/course-types";
+import { getCurrentUser } from "@/lib/dal";
+import { deadlineStatus } from "@/lib/deadline";
 import { djangoFetch } from "@/lib/django";
 import { getVisibleCourseIds } from "@/lib/role-access";
 import type { Paginated } from "@/lib/types";
@@ -21,7 +20,8 @@ import type { Paginated } from "@/lib/types";
 // unpublished-but-visible course still shows up (so nothing is silently
 // hidden) but as a disabled, clearly-labeled card instead of a link.
 export default async function PortalCoursesPage() {
-  const [courses, versions, visibleIds] = await Promise.all([
+  const [user, courses, versions, visibleIds] = await Promise.all([
+    getCurrentUser(),
     djangoFetch<Paginated<Course>>("/courses/"),
     djangoFetch<Paginated<CourseVersion>>("/course-versions/"),
     getVisibleCourseIds(),
@@ -34,51 +34,55 @@ export default async function PortalCoursesPage() {
   const visibleCourses =
     visibleIds === null ? courses.results : courses.results.filter((course) => visibleIds.has(course.id));
 
+  // Same "why does this course still need me" computation the portal home
+  // page's own Reminders section uses (see lib/course-reminders.ts) — shown
+  // here too, inline on each card/row, so an operative doesn't have to
+  // bounce back to the home page to find out WHY a course is flagged before
+  // they even open it.
+  const reminders = await getCourseReminders(user, visibleCourses, visibleIds);
+  const reminderByCourseId = new Map(reminders.map((r) => [r.course.id, r]));
+
+  // course-reminders.ts and portal-courses-view.tsx are both off-limits to
+  // each other (server-only data fetching vs. a "use client" renderer), so
+  // this is where the two meet: every course gets fully resolved into plain,
+  // serializable props here, once.
+  const items: PortalCourseCardData[] = visibleCourses.map((course) => {
+    const isPlayable = publishedCourseIds.has(course.id);
+    const reminder = reminderByCourseId.get(course.id);
+    const deadline = deadlineStatus(course.my_deadline);
+    return {
+      id: course.id,
+      name: course.name,
+      description: course.description,
+      thumbnail: course.thumbnail,
+      href: isPlayable ? `/portal/courses/${course.id}` : null,
+      badgeLabel: isPlayable && reminder ? (deadline?.overdue ? "Overdue" : "Action needed") : null,
+      reminderReason: reminder ? reminderReason(reminder) : null,
+      deadlineLabel: deadline?.label ?? null,
+      deadlineOverdue: deadline?.overdue ?? false,
+    };
+  });
+
   return (
-    <div className="max-w-4xl space-y-4">
+    // No max-w cap (unlike the portal's other pages) — this page's whole
+    // job is showing the course grid/list, so it should use the full width
+    // `main` actually has rather than leaving a large, arbitrary blank
+    // strip on the right on any screen wider than ~896px — reported
+    // directly as "the right side of the page is not being used."
+    <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-semibold">Courses</h1>
         <p className="mt-1 text-muted-foreground">Pick a course to start.</p>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {visibleCourses.map((course) => {
-          const isPlayable = publishedCourseIds.has(course.id);
-          const card = (
-            <Card className={isPlayable ? "h-full transition-colors hover:bg-muted/40" : "h-full opacity-60"}>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <BookOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="truncate">{course.name}</span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="line-clamp-2 text-sm text-muted-foreground">{course.description || " "}</p>
-                {!isPlayable && (
-                  <Badge variant="outline" className="mt-2">
-                    Not yet published
-                  </Badge>
-                )}
-              </CardContent>
-            </Card>
-          );
-
-          return isPlayable ? (
-            <Link key={course.id} href={`/portal/courses/${course.id}`}>
-              {card}
-            </Link>
-          ) : (
-            <div key={course.id}>{card}</div>
-          );
-        })}
-        {visibleCourses.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            {courses.results.length === 0
-              ? "No courses have been created yet."
-              : "No courses have been assigned to your role yet."}
-          </p>
-        )}
-      </div>
+      <PortalCoursesView
+        items={items}
+        emptyMessage={
+          courses.results.length === 0
+            ? "No courses have been created yet."
+            : "No courses have been assigned to your role yet."
+        }
+      />
     </div>
   );
 }

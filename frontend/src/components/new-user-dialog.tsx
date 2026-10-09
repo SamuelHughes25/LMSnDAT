@@ -16,19 +16,17 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { JobRole, UserRole } from "@/lib/accounts-types";
+import type { UserRole } from "@/lib/accounts-types";
 
-// Sentinel, not an empty string — base-ui's Select treats "" as "no
-// selection" internally, so a real "None" option needs its own distinct
-// value that's translated back to null right before the server action call.
-const NO_ROLE_VALUE = "__none__";
-
-export function NewUserDialog({ roles }: { roles: JobRole[] }) {
+// Course/template group membership is no longer picked here — a user can
+// belong to any number of each, and that's now managed from their own
+// detail page (/users/[id]) rather than a single dropdown at creation
+// time. A brand-new user simply starts in no groups.
+export function NewUserDialog() {
   const [open, setOpen] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [permission, setPermission] = useState<UserRole>("member");
-  const [jobRoleId, setJobRoleId] = useState(NO_ROLE_VALUE);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
@@ -42,13 +40,12 @@ export function NewUserDialog({ roles }: { roles: JobRole[] }) {
     setError(null);
     startTransition(async () => {
       try {
-        await createUser(username.trim(), password, permission, jobRoleId === NO_ROLE_VALUE ? null : jobRoleId);
+        const user = await createUser(username.trim(), password, permission);
         setOpen(false);
         setUsername("");
         setPassword("");
         setPermission("member");
-        setJobRoleId(NO_ROLE_VALUE);
-        router.refresh();
+        router.push(`/users/${user.id}`);
       } catch {
         setError("Could not create user — the username may already be taken.");
       }
@@ -84,24 +81,6 @@ export function NewUserDialog({ roles }: { roles: JobRole[] }) {
                 <SelectItem value="member">Member</SelectItem>
                 <SelectItem value="manager">Manager</SelectItem>
                 <SelectItem value="admin">Admin</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label>Role</Label>
-            <Select value={jobRoleId} onValueChange={(v) => setJobRoleId(v ?? NO_ROLE_VALUE)}>
-              <SelectTrigger className="w-full">
-                <SelectValue>
-                  {(value: string) => (value === NO_ROLE_VALUE ? "None" : (roles.find((r) => r.id === value)?.name ?? "None"))}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={NO_ROLE_VALUE}>None</SelectItem>
-                {roles.map((role) => (
-                  <SelectItem key={role.id} value={role.id}>
-                    {role.name}
-                  </SelectItem>
-                ))}
               </SelectContent>
             </Select>
           </div>

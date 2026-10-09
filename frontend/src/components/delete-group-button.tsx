@@ -4,17 +4,17 @@ import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Trash2 } from "lucide-react";
 
-import { deleteRole } from "@/app/actions/roles";
+import { deleteGroup } from "@/app/actions/groups";
 import { Button } from "@/components/ui/button";
 
-export function DeleteRoleButton({ roleId, roleName }: { roleId: string; roleName: string }) {
+export function DeleteGroupButton({ groupId, groupName }: { groupId: string; groupName: string }) {
   const [pending, startTransition] = useTransition();
   const router = useRouter();
 
   function handleClick() {
-    if (!window.confirm(`Delete "${roleName}"? This cannot be undone.`)) return;
+    if (!window.confirm(`Delete "${groupName}"? This cannot be undone.`)) return;
     startTransition(async () => {
-      await deleteRole(roleId);
+      await deleteGroup(groupId);
       router.refresh();
     });
   }
@@ -25,7 +25,7 @@ export function DeleteRoleButton({ roleId, roleName }: { roleId: string; roleNam
       size="icon-sm"
       disabled={pending}
       onClick={handleClick}
-      aria-label={`Delete ${roleName}`}
+      aria-label={`Delete ${groupName}`}
       className="text-muted-foreground hover:text-destructive"
     >
       <Trash2 className="h-4 w-4" />

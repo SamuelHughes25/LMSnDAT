@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
-import { createRole } from "@/app/actions/roles";
+import { createGroup } from "@/app/actions/groups";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
-export function NewRoleDialog() {
+export function NewGroupDialog() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -34,32 +34,36 @@ export function NewRoleDialog() {
     setError(null);
     startTransition(async () => {
       try {
-        await createRole(name.trim(), description.trim());
+        await createGroup(name.trim(), description.trim());
         setOpen(false);
         setName("");
         setDescription("");
         router.refresh();
       } catch {
-        setError("Could not create role — the name may already be taken.");
+        setError("Could not create group — the name may already be taken.");
       }
     });
   }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button />}>New role</DialogTrigger>
+      <DialogTrigger render={<Button size="sm" />}>New group</DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>New role</DialogTitle>
+          <DialogTitle>New group</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="name">Name</Label>
-            <Input id="name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+            <Label htmlFor="group-name">Name</Label>
+            <Input id="group-name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="description">Description</Label>
-            <Textarea id="description" value={description} onChange={(e) => setDescription(e.target.value)} />
+            <Label htmlFor="group-description">Description</Label>
+            <Textarea
+              id="group-description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
           </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
           <DialogFooter>

@@ -1,13 +1,18 @@
+import datetime
 import shutil
 import tempfile
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import IntegrityError, transaction
 from django.test import override_settings
 
-from apps.accounts.models import Team, User
+from apps.accounts.models import Group, Team, User
 from apps.core.test_utils import APIAuthTestCase
 from apps.courses.grading import grade_slide
-from apps.courses.models import Course, CourseAttempt, CourseVersion, Lesson, Slide, SlideResult
+from apps.courses.models import (
+    Course, CourseAssignment, CourseAttempt, CourseDeadlineExtension, CourseVersion, Lesson, ReusableLesson,
+    ReusableSlide, Slide, SlideResult,
+)
 
 MEDIA_ROOT = tempfile.mkdtemp()
 
@@ -332,6 +337,27 @@ class CourseBuilderFlowTests(APIAuthTestCase):
         )
         self.assertEqual(resp.status_code, 400, resp.content)
 
+    def test_description_length_is_capped(self):
+        """Regression test for a real reported bug: an unbounded description
+        forced the courses list table wider than the viewport, since a
+        <TableCell> is whitespace-nowrap by default (see courses/page.tsx).
+        Course.description now has max_length=300 — confirms the API
+        actually rejects an overlong value rather than just the frontend
+        input silently trimming it, and that the boundary itself (exactly
+        300) is still accepted."""
+        admin_client = self.auth('admin', 'pw')
+
+        resp = admin_client.post(
+            '/api/v1/courses/', {'name': 'Too Wordy', 'description': 'x' * 301}, format='json'
+        )
+        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertIn('description', resp.data)
+
+        resp = admin_client.post(
+            '/api/v1/courses/', {'name': 'Exactly Long Enough', 'description': 'x' * 300}, format='json'
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+
 
 class GradingTests(APIAuthTestCase):
     """Unit-level coverage of grade_slide() itself, plus one API-level test
@@ -390,11 +416,34 @@ class GradingTests(APIAuthTestCase):
         self.assertEqual(grade_slide(slide, {'finalOrder': ['1', '1', '2']}), (False, 0.0))
         self.assertEqual(grade_slide(slide, {'finalOrder': ['1', '2', 'nope']}), (False, 0.0))
 
-    def test_completion_types(self):
-        pairs_slide = self.make_slide('match_pairs', {'pairs': [{'id': 'p1', 'keyword': 'k', 'definition': 'd'}]})
-        self.assertEqual(grade_slide(pairs_slide, {'matchedPairIds': ['p1']}), (True, 1.0))
-        self.assertEqual(grade_slide(pairs_slide, {'matchedPairIds': []}), (False, 0.0))
+    def test_match_pairs_fails_overall_on_any_mismatch(self):
+        slide = self.make_slide('match_pairs', {
+            'pairs': [
+                {'id': 'p1', 'keyword': 'k1', 'definition': 'd1'},
+                {'id': 'p2', 'keyword': 'k2', 'definition': 'd2'},
+            ],
+        })
+        # All correct.
+        self.assertEqual(grade_slide(slide, {'pairings': {'p1': 'p1', 'p2': 'p2'}}), (True, 1.0))
+        # One mismatch (p1 permanently landed on p2's definition) — this is
+        # the "forced leftover mismatch" cascade: p2 can then only ever
+        # receive p1's leftover definition, also wrong. Overall fail, but
+        # partial credit reflects the one pair that was still legitimately
+        # correct in a 3-pair slide (checked separately below).
+        is_correct, score = grade_slide(slide, {'pairings': {'p1': 'p2', 'p2': 'p1'}})
+        self.assertFalse(is_correct)
+        self.assertEqual(score, 0.0)
+        # Incomplete attempt (only one keyword answered so far) — never
+        # "correct" while incomplete, but scores the fraction actually
+        # correct rather than nothing, matching the missing_word precedent.
+        is_correct, score = grade_slide(slide, {'pairings': {'p1': 'p1'}})
+        self.assertFalse(is_correct)
+        self.assertEqual(score, 0.5)
+        # No submission at all.
+        self.assertEqual(grade_slide(slide, {'pairings': {}}), (False, 0.0))
+        self.assertEqual(grade_slide(slide, {}), (False, 0.0))
 
+    def test_completion_types(self):
         accordion_slide = self.make_slide('accordion', {'sections': [{'id': 's1', 'title': 't', 'body': 'b'}]})
         self.assertEqual(grade_slide(accordion_slide, {'sectionsOpened': ['s1']}), (True, 1.0))
         self.assertEqual(grade_slide(accordion_slide, {'sectionsOpened': []}), (False, 0.0))
@@ -473,6 +522,13 @@ class CourseAttemptTests(APIAuthTestCase):
                 ],
             },
         )
+        self.match_pairs_slide = Slide.objects.create(
+            lesson=lesson, slide_type='match_pairs', order=1,
+            config={'pairs': [
+                {'id': 'p1', 'keyword': 'k1', 'definition': 'd1'},
+                {'id': 'p2', 'keyword': 'k2', 'definition': 'd2'},
+            ]},
+        )
 
     def test_member_only_sees_own_attempts(self):
         CourseAttempt.objects.create(course_version=self.assessment_version, user=self.member)
@@ -490,6 +546,78 @@ class CourseAttemptTests(APIAuthTestCase):
         resp = admin_client.get('/api/v1/course-attempts/')
         self.assertEqual(len(resp.data['results']), 2)
 
+    def test_repeated_create_resumes_in_progress_attempt_not_duplicates(self):
+        """The real bug this whole fix exists for: POSTing to /course-attempts/
+        while an in_progress attempt already exists at that course version
+        must resume it, not spawn another — a user's real account
+        accumulated 16 attempt rows, 14 stuck in_progress, from ordinary
+        revisits before this existed. Also covers the DB-level
+        UniqueConstraint doing its job when perform_create's own
+        check-then-create loses a race (simulated directly, since a real
+        concurrent request race isn't practical to construct in a test)."""
+        member_client = self.auth('attempt_member', 'pw')
+        resp1 = member_client.post(
+            '/api/v1/course-attempts/', {'course_version': str(self.assessment_version.id)}, format='json'
+        )
+        self.assertEqual(resp1.status_code, 201, resp1.content)
+
+        resp2 = member_client.post(
+            '/api/v1/course-attempts/', {'course_version': str(self.assessment_version.id)}, format='json'
+        )
+        self.assertEqual(resp2.status_code, 201, resp2.content)
+        self.assertEqual(resp1.data['id'], resp2.data['id'])
+        self.assertEqual(
+            CourseAttempt.objects.filter(user=self.member, course_version=self.assessment_version).count(), 1
+        )
+
+        # The DB constraint itself: bypassing the view entirely (as if
+        # perform_create's own guard had lost a race) still can't produce a
+        # second in_progress row for the same (user, course_version).
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            CourseAttempt.objects.create(user=self.member, course_version=self.assessment_version)
+
+        # Completing the attempt frees up the constraint — a genuine retake
+        # (a new in_progress attempt at the same version) is always allowed.
+        CourseAttempt.objects.filter(user=self.member, course_version=self.assessment_version).update(
+            status=CourseAttempt.Status.COMPLETED
+        )
+        CourseAttempt.objects.create(user=self.member, course_version=self.assessment_version)
+
+    def test_course_version_and_status_filters_find_in_progress_attempt(self):
+        """Covers the query the course player uses to RESUME an existing
+        in_progress attempt instead of starting a new one on every visit —
+        the real bug that produced a real user's 16 attempt rows (14 stuck
+        in_progress) from ordinary back-and-forth browsing. Also checks the
+        resumed attempt's response includes slide_results, which the
+        frontend needs to restore locked-in answers into local state."""
+        member_client = self.auth('attempt_member', 'pw')
+        resp = member_client.post(
+            '/api/v1/course-attempts/', {'course_version': str(self.assessment_version.id)}, format='json'
+        )
+        attempt_id = resp.data['id']
+        member_client.post(
+            f'/api/v1/course-attempts/{attempt_id}/results/',
+            {'results': [{'slide': str(self.mc_slide.id), 'detail': {'selectedOptionId': 'a'}}]},
+            format='json',
+        )
+
+        resp = member_client.get(
+            f'/api/v1/course-attempts/?course_version={self.assessment_version.id}&status=in_progress'
+        )
+        self.assertEqual(len(resp.data['results']), 1)
+        found = resp.data['results'][0]
+        self.assertEqual(found['id'], attempt_id)
+        self.assertEqual(len(found['slide_results']), 1)
+        self.assertEqual(found['slide_results'][0]['is_correct'], True)
+
+        # Completing it means it's no longer found by the in_progress filter
+        # — the player should then start a genuinely new attempt instead.
+        member_client.post(f'/api/v1/course-attempts/{attempt_id}/complete/')
+        resp = member_client.get(
+            f'/api/v1/course-attempts/?course_version={self.assessment_version.id}&status=in_progress'
+        )
+        self.assertEqual(len(resp.data['results']), 0)
+
     def test_results_upsert_replaces_not_duplicates(self):
         member_client = self.auth('attempt_member', 'pw')
         resp = member_client.post(
@@ -506,6 +634,50 @@ class CourseAttemptTests(APIAuthTestCase):
             self.assertEqual(resp.status_code, 200, resp.content)
 
         self.assertEqual(SlideResult.objects.filter(attempt_id=attempt_id).count(), 1)
+
+    def test_repeated_upsert_to_same_slide_keeps_score_fresh(self):
+        """Regression test for a real bug found via manual browser
+        verification: Django's update_or_create() passes
+        update_fields={'detail'} on every UPDATE (not CREATE) call — which,
+        without SlideResult.save()'s own fix forcing is_correct/score into
+        that field list, meant only the FIRST-ever submission to a given
+        (attempt, slide) actually got its score written to the database;
+        every later resubmission updated `detail` but silently left the old,
+        now-wrong score/is_correct frozen in place. match_pairs' new
+        assessment-mode design (one report per click, not just at
+        completion — see match-pairs-slide-face.tsx) means this exact
+        (attempt, slide) pair now legitimately gets update_or_create'd
+        multiple times in normal use, so this had to actually be fixed, not
+        just theoretical."""
+        member_client = self.auth('attempt_member', 'pw')
+        resp = member_client.post(
+            '/api/v1/course-attempts/', {'course_version': str(self.assessment_version.id)}, format='json'
+        )
+        attempt_id = resp.data['id']
+
+        def submit(pairings):
+            return member_client.post(
+                f'/api/v1/course-attempts/{attempt_id}/results/',
+                {'results': [{'slide': str(self.match_pairs_slide.id), 'detail': {'pairings': pairings}}]},
+                format='json',
+            )
+
+        # First click: one pair, wrong.
+        resp = submit({'p1': 'p2'})
+        self.assertEqual(resp.data[0]['score'], 0.0)
+        # Second click: both pairs now assigned, both correct — the row
+        # already exists, so this goes through update_or_create's UPDATE
+        # path where the bug lived.
+        resp = submit({'p1': 'p1', 'p2': 'p2'})
+        self.assertEqual(resp.data[0]['score'], 1.0)
+        self.assertTrue(resp.data[0]['is_correct'])
+
+        # Still exactly one row (upsert, not a duplicate), and the DB's
+        # actual stored value matches what the API just reported — not a
+        # response-only artifact.
+        result = SlideResult.objects.get(attempt_id=attempt_id, slide=self.match_pairs_slide)
+        self.assertEqual(result.score, 1.0)
+        self.assertTrue(result.is_correct)
 
     def test_complete_computes_score_and_passed_for_assessment(self):
         member_client = self.auth('attempt_member', 'pw')
@@ -567,3 +739,480 @@ class CourseAttemptTests(APIAuthTestCase):
             format='json',
         )
         self.assertEqual(resp.status_code, 404)
+
+    def test_user_filter_and_course_name_on_cross_course_history(self):
+        """Covers the query the new user detail page uses for its
+        cross-course history section — every attempt for ONE user across
+        every course, each one self-labeled with course_id/course_name so
+        the frontend doesn't need extra round-trips."""
+        CourseAttempt.objects.create(course_version=self.assessment_version, user=self.member)
+        CourseAttempt.objects.create(course_version=self.plain_version, user=self.member)
+        CourseAttempt.objects.create(course_version=self.assessment_version, user=self.other_member)
+
+        admin_client = self.auth('attempt_admin', 'pw')
+        resp = admin_client.get(f'/api/v1/course-attempts/?user={self.member.id}')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(len(resp.data['results']), 2)
+        course_names = {r['course_name'] for r in resp.data['results']}
+        self.assertEqual(course_names, {'Assessment Course', 'Plain Course'})
+
+
+class CourseDeadlineTests(APIAuthTestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(username='deadline_admin', password='pw', role=User.Role.ADMIN)
+        self.team = Team.objects.create(name='Deadline Team')
+        self.other_team = Team.objects.create(name='Other Deadline Team')
+        self.manager = User.objects.create_user(
+            username='deadline_manager', password='pw', role=User.Role.MANAGER, team=self.team
+        )
+        self.member = User.objects.create_user(
+            username='deadline_member', password='pw', role=User.Role.MEMBER, team=self.team
+        )
+        self.other_team_member = User.objects.create_user(
+            username='deadline_other_member', password='pw', role=User.Role.MEMBER, team=self.other_team
+        )
+        self.course = Course.objects.create(
+            name='Deadline Course', created_by=self.admin, is_assessment=True, passing_score=70,
+            deadline=datetime.date(2026, 1, 31),
+        )
+
+    def test_effective_deadline_falls_back_to_course_default(self):
+        self.assertEqual(self.course.effective_deadline_for(self.member), datetime.date(2026, 1, 31))
+
+    def test_effective_deadline_uses_extension_when_present(self):
+        CourseDeadlineExtension.objects.create(
+            course=self.course, user=self.member, extended_deadline=datetime.date(2026, 3, 15)
+        )
+        self.assertEqual(self.course.effective_deadline_for(self.member), datetime.date(2026, 3, 15))
+        # Someone else with no extension still gets the course's own default.
+        self.assertEqual(self.course.effective_deadline_for(self.other_team_member), datetime.date(2026, 1, 31))
+
+    def test_course_with_no_deadline_has_no_effective_deadline(self):
+        plain = Course.objects.create(name='No Deadline Course', created_by=self.admin)
+        self.assertIsNone(plain.effective_deadline_for(self.member))
+
+    def test_member_cannot_create_deadline_extensions(self):
+        member_client = self.auth('deadline_member', 'pw')
+        resp = member_client.post(
+            '/api/v1/course-deadline-extensions/',
+            {'course': str(self.course.id), 'user': self.member.id, 'extended_deadline': '2026-03-15'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_manager_can_grant_extension_for_own_team_member(self):
+        manager_client = self.auth('deadline_manager', 'pw')
+        resp = manager_client.post(
+            '/api/v1/course-deadline-extensions/',
+            {'course': str(self.course.id), 'user': self.member.id, 'extended_deadline': '2026-03-15'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+
+    def test_manager_cannot_grant_extension_outside_own_team(self):
+        manager_client = self.auth('deadline_manager', 'pw')
+        resp = manager_client.post(
+            '/api/v1/course-deadline-extensions/',
+            {'course': str(self.course.id), 'user': self.other_team_member.id, 'extended_deadline': '2026-03-15'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_manager_cannot_see_extensions_outside_own_team(self):
+        CourseDeadlineExtension.objects.create(
+            course=self.course, user=self.other_team_member, extended_deadline=datetime.date(2026, 3, 15)
+        )
+        manager_client = self.auth('deadline_manager', 'pw')
+        resp = manager_client.get(f'/api/v1/course-deadline-extensions/?course={self.course.id}')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(len(resp.data['results']), 0)
+
+    def test_only_one_extension_per_user_per_course(self):
+        admin_client = self.auth('deadline_admin', 'pw')
+        resp = admin_client.post(
+            '/api/v1/course-deadline-extensions/',
+            {'course': str(self.course.id), 'user': self.member.id, 'extended_deadline': '2026-03-15'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+        resp = admin_client.post(
+            '/api/v1/course-deadline-extensions/',
+            {'course': str(self.course.id), 'user': self.member.id, 'extended_deadline': '2026-04-01'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 400, resp.content)
+
+    def test_admin_can_set_course_deadline(self):
+        admin_client = self.auth('deadline_admin', 'pw')
+        resp = admin_client.patch(
+            f'/api/v1/courses/{self.course.id}/', {'deadline': '2026-06-30'}, format='json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.deadline, datetime.date(2026, 6, 30))
+
+    def test_my_deadline_reflects_the_requesting_users_own_extension(self):
+        """Covers the mechanism the portal side actually uses — a member
+        can read their own effective deadline straight off /courses/{id}/
+        without ever touching /course-deadline-extensions/, which is
+        admin/manager-only."""
+        member_client = self.auth('deadline_member', 'pw')
+        resp = member_client.get(f'/api/v1/courses/{self.course.id}/')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.data['my_deadline'], datetime.date(2026, 1, 31))
+
+        CourseDeadlineExtension.objects.create(
+            course=self.course, user=self.member, extended_deadline=datetime.date(2026, 3, 15)
+        )
+        resp = member_client.get(f'/api/v1/courses/{self.course.id}/')
+        self.assertEqual(resp.data['my_deadline'], datetime.date(2026, 3, 15))
+
+        # A different member with no extension still just gets the course default.
+        other_client = self.auth('deadline_other_member', 'pw')
+        resp = other_client.get(f'/api/v1/courses/{self.course.id}/')
+        self.assertEqual(resp.data['my_deadline'], datetime.date(2026, 1, 31))
+
+    def test_manager_can_update_their_own_teams_extension_date(self):
+        extension = CourseDeadlineExtension.objects.create(
+            course=self.course, user=self.member, extended_deadline=datetime.date(2026, 3, 15)
+        )
+        manager_client = self.auth('deadline_manager', 'pw')
+        resp = manager_client.patch(
+            f'/api/v1/course-deadline-extensions/{extension.id}/',
+            {'extended_deadline': '2026-04-01'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        extension.refresh_from_db()
+        self.assertEqual(extension.extended_deadline, datetime.date(2026, 4, 1))
+
+    def test_cannot_repoint_an_extension_to_a_user_outside_the_team_via_patch(self):
+        """setDeadlineExtension (app/actions/deadlines.ts) only ever PATCHes
+        `extended_deadline`, but the API itself allowed `user` through too —
+        a manager could PATCH an existing extension's `user` to someone
+        OUTSIDE their own team, completely bypassing the exact team check
+        perform_create enforces on the equivalent POST. `course` has the
+        same hole for the same reason. `user`/`course` are read-only once an
+        instance exists (see the serializer's get_fields()), so DRF just
+        silently drops the attempted change rather than erroring — the
+        contract that actually matters is that the row is untouched."""
+        extension = CourseDeadlineExtension.objects.create(
+            course=self.course, user=self.member, extended_deadline=datetime.date(2026, 3, 15)
+        )
+        manager_client = self.auth('deadline_manager', 'pw')
+        resp = manager_client.patch(
+            f'/api/v1/course-deadline-extensions/{extension.id}/',
+            {'user': self.other_team_member.id},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.data['user'], self.member.id)
+        extension.refresh_from_db()
+        self.assertEqual(extension.user_id, self.member.id)
+
+    def test_manager_cannot_delete_another_teams_extension(self):
+        extension = CourseDeadlineExtension.objects.create(
+            course=self.course, user=self.other_team_member, extended_deadline=datetime.date(2026, 3, 15)
+        )
+        manager_client = self.auth('deadline_manager', 'pw')
+        resp = manager_client.delete(f'/api/v1/course-deadline-extensions/{extension.id}/')
+        self.assertEqual(resp.status_code, 404)
+        self.assertTrue(CourseDeadlineExtension.objects.filter(id=extension.id).exists())
+
+
+class ReusableLessonTests(APIAuthTestCase):
+    """Covers the "save a lesson, import it into another course" library
+    feature — a one-time CLONE in both directions (save and import), never a
+    live link: editing either side afterward must never affect the other."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(username='rl_admin', password='pw', role=User.Role.ADMIN)
+        self.member = User.objects.create_user(username='rl_member', password='pw', role=User.Role.MEMBER)
+
+        self.source_course = Course.objects.create(name='Source Course', created_by=self.admin)
+        self.source_version = CourseVersion.objects.create(
+            course=self.source_course, version_number=1, status=CourseVersion.Status.DRAFT, created_by=self.admin,
+        )
+        self.source_lesson = Lesson.objects.create(
+            course_version=self.source_version, title='Company Intro', description='Who we are.', order=0,
+        )
+        Slide.objects.create(
+            lesson=self.source_lesson, slide_type='content', title='Welcome', order=0,
+            config={'body': 'Welcome aboard.', 'image_url': None, 'image_position': 'top'},
+        )
+        Slide.objects.create(
+            lesson=self.source_lesson, slide_type='content', title='History', order=1,
+            config={'body': 'Founded in 1990.', 'image_url': None, 'image_position': 'top'},
+        )
+
+        self.target_course = Course.objects.create(name='Target Course', created_by=self.admin)
+        self.target_version = CourseVersion.objects.create(
+            course=self.target_course, version_number=1, status=CourseVersion.Status.DRAFT, created_by=self.admin,
+        )
+
+    def test_save_as_reusable_clones_slides_verbatim(self):
+        admin_client = self.auth('rl_admin', 'pw')
+        resp = admin_client.post(
+            f'/api/v1/lessons/{self.source_lesson.id}/save-as-reusable/',
+            {'name': 'Company Intro (reusable)', 'description': 'Shared onboarding intro.'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertEqual(resp.data['name'], 'Company Intro (reusable)')
+        self.assertEqual(resp.data['slide_count'], 2)
+
+        reusable = ReusableLesson.objects.get(id=resp.data['id'])
+        reusable_slides = list(reusable.slides.order_by('order'))
+        self.assertEqual(len(reusable_slides), 2)
+        self.assertEqual(reusable_slides[0].title, 'Welcome')
+        self.assertEqual(reusable_slides[0].config, {'body': 'Welcome aboard.', 'image_url': None, 'image_position': 'top'})
+        self.assertEqual(reusable_slides[1].title, 'History')
+
+        # The source lesson/slides are untouched — this is a clone, not a move.
+        self.assertEqual(self.source_lesson.slides.count(), 2)
+
+    def test_member_cannot_save_as_reusable(self):
+        member_client = self.auth('rl_member', 'pw')
+        resp = member_client.post(
+            f'/api/v1/lessons/{self.source_lesson.id}/save-as-reusable/', {'name': 'nope'}, format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_import_creates_independent_lesson_and_slides(self):
+        admin_client = self.auth('rl_admin', 'pw')
+        reusable = ReusableLesson.objects.create(name='Shared Lesson', description='', created_by=self.admin)
+        ReusableSlide.objects.create(
+            reusable_lesson=reusable, slide_type='content', title='Shared Slide', order=0,
+            config={'body': 'Shared body.', 'image_url': None, 'image_position': 'top'},
+        )
+
+        resp = admin_client.post(
+            f'/api/v1/reusable-lessons/{reusable.id}/import/',
+            {'course_version': str(self.target_version.id), 'order': 0},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+        new_lesson_id = resp.data['id']
+        self.assertEqual(resp.data['title'], 'Shared Lesson')
+        self.assertEqual(len(resp.data['slides']), 1)
+        self.assertEqual(resp.data['slides'][0]['title'], 'Shared Slide')
+
+        new_lesson = Lesson.objects.get(id=new_lesson_id)
+        self.assertEqual(new_lesson.course_version_id, self.target_version.id)
+        new_slide = new_lesson.slides.first()
+
+        # Editing the imported copy must never touch the reusable source —
+        # confirms this is a one-time clone, not a live link.
+        new_slide.config = {'body': 'Edited in target course.', 'image_url': None, 'image_position': 'top'}
+        new_slide.save(update_fields=['config'])
+        reusable_slide = reusable.slides.first()
+        reusable_slide.refresh_from_db()
+        self.assertEqual(reusable_slide.config['body'], 'Shared body.')
+
+    def test_cannot_import_into_a_non_draft_version(self):
+        admin_client = self.auth('rl_admin', 'pw')
+        reusable = ReusableLesson.objects.create(name='Shared Lesson', description='', created_by=self.admin)
+        self.target_version.status = CourseVersion.Status.PUBLISHED
+        self.target_version.save(update_fields=['status'])
+
+        resp = admin_client.post(
+            f'/api/v1/reusable-lessons/{reusable.id}/import/',
+            {'course_version': str(self.target_version.id), 'order': 0},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_member_cannot_import(self):
+        member_client = self.auth('rl_member', 'pw')
+        reusable = ReusableLesson.objects.create(name='Shared Lesson', description='', created_by=self.admin)
+        resp = member_client.post(
+            f'/api/v1/reusable-lessons/{reusable.id}/import/',
+            {'course_version': str(self.target_version.id), 'order': 0},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_delete_reusable_lesson(self):
+        admin_client = self.auth('rl_admin', 'pw')
+        reusable = ReusableLesson.objects.create(name='Disposable', description='', created_by=self.admin)
+        resp = admin_client.delete(f'/api/v1/reusable-lessons/{reusable.id}/')
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(ReusableLesson.objects.filter(id=reusable.id).exists())
+
+
+class CourseAssignmentTests(APIAuthTestCase):
+    """Direct per-user course assignment — coexists with (and never
+    conflicts with) Group-based access. See CourseAssignment's own
+    docstring: a user already covered by a Group that contains this course
+    must still be assignable directly with no error — Groups routinely
+    overlap on the same course."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(username='ca_admin', password='pw', role=User.Role.ADMIN)
+        self.team = Team.objects.create(name='CA Team')
+        self.other_team = Team.objects.create(name='CA Other Team')
+        self.manager = User.objects.create_user(
+            username='ca_manager', password='pw', role=User.Role.MANAGER, team=self.team
+        )
+        self.member = User.objects.create_user(
+            username='ca_member', password='pw', role=User.Role.MEMBER, team=self.team
+        )
+        self.other_team_member = User.objects.create_user(
+            username='ca_other_member', password='pw', role=User.Role.MEMBER, team=self.other_team
+        )
+        self.course = Course.objects.create(name='CA Course', created_by=self.admin)
+
+    def test_admin_can_assign_course_directly_to_a_user(self):
+        admin_client = self.auth('ca_admin', 'pw')
+        resp = admin_client.post(
+            '/api/v1/course-assignments/',
+            {'course': str(self.course.id), 'user': self.member.id},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertEqual(resp.data['username'], 'ca_member')
+        self.assertEqual(resp.data['course_name'], 'CA Course')
+        self.assertEqual(resp.data['assigned_by'], self.admin.id)
+
+    def test_direct_assignment_succeeds_even_when_user_already_has_course_via_a_group(self):
+        """The core behavior this feature is built around: NO conflict
+        error when a user already has the course through one or more
+        Groups — direct assignment and group-based access coexist freely."""
+        group_a = Group.objects.create(name='CA Group A')
+        group_b = Group.objects.create(name='CA Group B')
+        group_a.courses.add(self.course)
+        group_b.courses.add(self.course)
+        self.member.content_groups.add(group_a, group_b)
+
+        admin_client = self.auth('ca_admin', 'pw')
+        resp = admin_client.post(
+            '/api/v1/course-assignments/',
+            {'course': str(self.course.id), 'user': self.member.id},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertTrue(
+            CourseAssignment.objects.filter(course=self.course, user=self.member).exists()
+        )
+
+    def test_member_sees_only_their_own_assignments(self):
+        CourseAssignment.objects.create(course=self.course, user=self.member, assigned_by=self.admin)
+        CourseAssignment.objects.create(course=self.course, user=self.other_team_member, assigned_by=self.admin)
+
+        member_client = self.auth('ca_member', 'pw')
+        resp = member_client.get('/api/v1/course-assignments/')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(len(resp.data['results']), 1)
+        self.assertEqual(resp.data['results'][0]['user'], self.member.id)
+
+    def test_manager_sees_only_their_teams_assignments(self):
+        CourseAssignment.objects.create(course=self.course, user=self.member, assigned_by=self.admin)
+        CourseAssignment.objects.create(course=self.course, user=self.other_team_member, assigned_by=self.admin)
+
+        manager_client = self.auth('ca_manager', 'pw')
+        resp = manager_client.get('/api/v1/course-assignments/')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(len(resp.data['results']), 1)
+        self.assertEqual(resp.data['results'][0]['user'], self.member.id)
+
+    def test_manager_cannot_assign_course_to_user_outside_their_team(self):
+        manager_client = self.auth('ca_manager', 'pw')
+        resp = manager_client.post(
+            '/api/v1/course-assignments/',
+            {'course': str(self.course.id), 'user': self.other_team_member.id},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_member_cannot_create_an_assignment(self):
+        member_client = self.auth('ca_member', 'pw')
+        resp = member_client.post(
+            '/api/v1/course-assignments/',
+            {'course': str(self.course.id), 'user': self.member.id},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_delete_removes_the_assignment(self):
+        assignment = CourseAssignment.objects.create(course=self.course, user=self.member, assigned_by=self.admin)
+        admin_client = self.auth('ca_admin', 'pw')
+        resp = admin_client.delete(f'/api/v1/course-assignments/{assignment.id}/')
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(CourseAssignment.objects.filter(id=assignment.id).exists())
+
+    def test_duplicate_assignment_is_a_clean_400_not_a_500(self):
+        """The model's UniqueConstraint (course, user) must surface as a
+        normal DRF validation error, not an unhandled IntegrityError — a
+        double-click on the Members tab's "Add" button (two POSTs for the
+        same (course, user) racing each other) is a completely ordinary
+        thing for a real admin to do, not a contrived attack."""
+        CourseAssignment.objects.create(course=self.course, user=self.member, assigned_by=self.admin)
+        admin_client = self.auth('ca_admin', 'pw')
+        resp = admin_client.post(
+            '/api/v1/course-assignments/',
+            {'course': str(self.course.id), 'user': self.member.id},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertEqual(CourseAssignment.objects.filter(course=self.course, user=self.member).count(), 1)
+
+    def test_cannot_assign_a_nonexistent_course(self):
+        admin_client = self.auth('ca_admin', 'pw')
+        resp = admin_client.post(
+            '/api/v1/course-assignments/',
+            {'course': '00000000-0000-0000-0000-000000000000', 'user': self.member.id},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 400, resp.content)
+
+    def test_cannot_assign_to_a_nonexistent_user(self):
+        admin_client = self.auth('ca_admin', 'pw')
+        resp = admin_client.post(
+            '/api/v1/course-assignments/',
+            {'course': str(self.course.id), 'user': 999999},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 400, resp.content)
+
+    def test_unauthenticated_request_is_rejected(self):
+        # self.client (APITestCase's default) carries no auth credentials.
+        resp = self.client.get('/api/v1/course-assignments/')
+        self.assertEqual(resp.status_code, 401)
+        resp = self.client.post(
+            '/api/v1/course-assignments/',
+            {'course': str(self.course.id), 'user': self.member.id},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 401)
+
+    def test_manager_cannot_delete_another_teams_assignment(self):
+        """get_queryset's team-scoping has to protect DESTROY too, not just
+        LIST — a manager who somehow learns another team's assignment id
+        (sequential ids, a shared link, whatever) must not be able to
+        delete it just by guessing the URL."""
+        assignment = CourseAssignment.objects.create(
+            course=self.course, user=self.other_team_member, assigned_by=self.admin
+        )
+        manager_client = self.auth('ca_manager', 'pw')
+        resp = manager_client.delete(f'/api/v1/course-assignments/{assignment.id}/')
+        self.assertEqual(resp.status_code, 404)
+        self.assertTrue(CourseAssignment.objects.filter(id=assignment.id).exists())
+
+    def test_update_is_not_allowed_at_all(self):
+        """CourseAssignment is add/remove only (see the model's own
+        docstring and the frontend's course-access-cell.tsx, which only
+        ever POSTs or DELETEs) — PATCH/PUT must not exist as a side door
+        around perform_create's team check. Without this, an admin or
+        manager could PATCH an existing row's `user` (or `course`) to
+        silently repoint it at someone else's team, bypassing the exact
+        check perform_create enforces on the equivalent POST."""
+        assignment = CourseAssignment.objects.create(course=self.course, user=self.member, assigned_by=self.admin)
+        admin_client = self.auth('ca_admin', 'pw')
+        resp = admin_client.patch(
+            f'/api/v1/course-assignments/{assignment.id}/',
+            {'user': self.other_team_member.id},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 405, resp.content)
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.user_id, self.member.id)

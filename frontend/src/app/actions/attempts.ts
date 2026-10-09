@@ -3,6 +3,11 @@
 import type { CourseAttempt, SlideResult } from "@/lib/attempt-types";
 import { djangoFetch } from "@/lib/django";
 
+// RESUMES the caller's own existing in_progress attempt at this course
+// version if one already exists, rather than always creating a new one —
+// see CourseAttemptViewSet.perform_create for why this is handled
+// server-side (atomically, backed by a real DB constraint) rather than as a
+// separate client-side "check, then create" call.
 export async function startCourseAttempt(courseVersionId: string): Promise<CourseAttempt> {
   return djangoFetch<CourseAttempt>("/course-attempts/", {
     method: "POST",

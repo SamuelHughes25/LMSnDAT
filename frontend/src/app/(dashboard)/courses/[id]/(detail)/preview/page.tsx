@@ -10,7 +10,8 @@ import type { Paginated } from "@/lib/types";
 export default async function CoursePreviewPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
-  const versions = await djangoFetch<Paginated<CourseVersion>>(`/course-versions/?course=${id}`);
+  // page_size=200 — see builder/page.tsx's identical fetch for why.
+  const versions = await djangoFetch<Paginated<CourseVersion>>(`/course-versions/?course=${id}&page_size=200`);
   const sorted = [...versions.results].sort((a, b) => b.version_number - a.version_number);
   const version = sorted.find((v) => v.status === "published") ?? sorted.find((v) => v.status === "draft");
 

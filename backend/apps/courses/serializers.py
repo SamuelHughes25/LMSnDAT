@@ -1,7 +1,10 @@
 from rest_framework import serializers
 
 from .constants import SlideType
-from .models import Course, CourseAsset, CourseAttempt, CourseVersion, Lesson, Slide, SlideResult
+from .models import (
+    Course, CourseAsset, CourseAssignment, CourseAttempt, CourseDeadlineExtension, CourseVersion, Lesson,
+    ReusableLesson, Slide, SlideResult,
+)
 
 
 class SlideSerializer(serializers.ModelSerializer):
@@ -285,6 +288,23 @@ class LessonSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class ReusableLessonSerializer(serializers.ModelSerializer):
+    # A count, not the nested slides themselves — the manage/import dialog
+    # only needs to show "12 slides" per entry in a list; the full slide
+    # configs (potentially large — rich text, image URLs, per-type payloads)
+    # would bloat that list response for no UI benefit. The actual slides
+    # only ever move server-side, via services.import_reusable_lesson.
+    slide_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReusableLesson
+        fields = ['id', 'name', 'description', 'created_by', 'created_at', 'updated_at', 'slide_count']
+        read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
+
+    def get_slide_count(self, obj):
+        return obj.slides.count()
+
+
 class CourseAssetSerializer(serializers.ModelSerializer):
     class Meta:
         model = CourseAsset
@@ -295,14 +315,21 @@ class CourseAssetSerializer(serializers.ModelSerializer):
 class CourseVersionSerializer(serializers.ModelSerializer):
     lessons = LessonSerializer(many=True, read_only=True)
     assets = CourseAssetSerializer(many=True, read_only=True)
+    # Convenience field for the Activity tab's version-history table — same
+    # ReadOnlyField-username convention as CourseAssignmentSerializer above,
+    # so the frontend doesn't need a separate /users/ round-trip just to show
+    # who created/published each version.
+    created_by_username = serializers.ReadOnlyField(source='created_by.username')
 
     class Meta:
         model = CourseVersion
         fields = [
             'id', 'course', 'version_number', 'status', 'transition_style', 'created_by',
-            'published_at', 'created_at', 'lessons', 'assets',
+            'created_by_username', 'published_at', 'created_at', 'updated_at', 'lessons', 'assets',
         ]
-        read_only_fields = ['id', 'version_number', 'status', 'created_by', 'published_at', 'created_at']
+        read_only_fields = [
+            'id', 'version_number', 'status', 'created_by', 'published_at', 'created_at', 'updated_at',
+        ]
 
     def validate(self, attrs):
         if (
@@ -317,19 +344,76 @@ class CourseVersionSerializer(serializers.ModelSerializer):
 
 
 class CourseSerializer(serializers.ModelSerializer):
+    # The REQUESTING user's own effective deadline for this course (their
+    # own CourseDeadlineExtension if they have one, else the course's own
+    # default `deadline` — see Course.effective_deadline_for()). Computed
+    # here, on every course fetch, specifically so the portal (member) side
+    # can show "your deadline is X" / flag overdue courses WITHOUT needing
+    # access to /course-deadline-extensions/, which is admin/manager-only —
+    # a member reading their own effective deadline this way never touches
+    # that endpoint at all. None for an unauthenticated request or a course
+    # with no deadline.
+    my_deadline = serializers.SerializerMethodField()
+
     class Meta:
         model = Course
         fields = [
-            'id', 'name', 'description', 'created_by', 'is_archived',
-            'is_assessment', 'passing_score', 'created_at', 'updated_at',
+            'id', 'name', 'description', 'thumbnail', 'created_by', 'is_archived',
+            'is_assessment', 'passing_score', 'deadline', 'my_deadline', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
+
+    def get_my_deadline(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user or not request.user.is_authenticated:
+            return None
+        return obj.effective_deadline_for(request.user)
 
     def validate(self, attrs):
         passing_score = attrs.get('passing_score', getattr(self.instance, 'passing_score', None))
         if passing_score is not None and not (0 <= passing_score <= 100):
             raise serializers.ValidationError({'passing_score': 'Must be between 0 and 100.'})
         return attrs
+
+
+class CourseDeadlineExtensionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CourseDeadlineExtension
+        fields = ['id', 'course', 'user', 'extended_deadline', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_fields(self):
+        # `course`/`user` are only ever meant to be SET once, at creation —
+        # setDeadlineExtension (frontend/src/app/actions/deadlines.ts) only
+        # ever PATCHes `extended_deadline` on an existing row. Without this,
+        # a manager could PATCH an existing extension's `user` (or `course`)
+        # to repoint it at someone outside their own team, bypassing the
+        # team check CourseDeadlineExtensionViewSet.perform_create enforces
+        # on the equivalent POST — perform_create only ever runs on CREATE,
+        # so a field that stays writable on UPDATE sails right past it.
+        # Locking both fields read-only once an instance exists (update,
+        # not create) closes that off at the serializer level, the same
+        # place PrimaryKeyRelatedField's own existence validation already
+        # lives, rather than trying to re-derive "is this an update" inside
+        # a perform_update override.
+        fields = super().get_fields()
+        if self.instance is not None:
+            fields['course'].read_only = True
+            fields['user'].read_only = True
+        return fields
+
+
+class CourseAssignmentSerializer(serializers.ModelSerializer):
+    # Read-only conveniences so the Members tab's table doesn't need extra
+    # round-trips per row to label each assignment — same pattern
+    # CourseAttemptSerializer already uses for course_id/course_name.
+    username = serializers.ReadOnlyField(source='user.username')
+    course_name = serializers.ReadOnlyField(source='course.name')
+
+    class Meta:
+        model = CourseAssignment
+        fields = ['id', 'course', 'course_name', 'user', 'username', 'assigned_by', 'created_at']
+        read_only_fields = ['id', 'assigned_by', 'created_at']
 
 
 class SlideResultSerializer(serializers.ModelSerializer):
@@ -353,9 +437,30 @@ class SlideResultBulkUpsertSerializer(serializers.Serializer):
 
 
 class CourseAttemptSerializer(serializers.ModelSerializer):
+    # Read-only, nested — lets the frontend RESUME an in-progress attempt
+    # (see CourseAttemptViewSet.get_queryset's course_version/status filters)
+    # and rebuild its local `results` state from what was already
+    # server-graded, instead of starting blank. Without this, a page refresh
+    # or a new tab mid-assessment would show every slide as unanswered even
+    # though the server already has a permanent, locked-in answer for it —
+    # the exact same "permanent means permanent" gap the remount-bypass fix
+    # closed at the component level, just one level up. The queryset this
+    # serializer is used against already does .prefetch_related('slide_results'),
+    # so this doesn't add an extra query per attempt.
+    slide_results = SlideResultSerializer(many=True, read_only=True)
+    # Read-only conveniences so a caller building a cross-course view (e.g.
+    # the user detail page's course history, which lists attempts across
+    # EVERY course, not one course's own analytics table which already
+    # knows which course it's looking at) doesn't have to resolve
+    # course_version -> course itself via extra round-trips just to label
+    # each attempt.
+    course_id = serializers.ReadOnlyField(source='course_version.course_id')
+    course_name = serializers.ReadOnlyField(source='course_version.course.name')
+
     class Meta:
         model = CourseAttempt
         fields = [
-            'id', 'course_version', 'user', 'status', 'started_at', 'completed_at', 'score', 'passed',
+            'id', 'course_version', 'course_id', 'course_name', 'user', 'status', 'started_at',
+            'completed_at', 'score', 'passed', 'slide_results',
         ]
         read_only_fields = ['id', 'user', 'status', 'started_at', 'completed_at', 'score', 'passed']

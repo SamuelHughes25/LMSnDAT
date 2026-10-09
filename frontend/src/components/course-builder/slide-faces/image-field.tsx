@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { ImagePlus, Loader2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useSnapGuides } from "../snap-guide-context";
 import { cn } from "@/lib/utils";
 import {
   DEFAULT_SIZE_PCT,
@@ -84,6 +85,7 @@ function ImageUploadField({
   className?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const { setGuides, clearGuides } = useSnapGuides();
 
   // Wraps onCommit so a fresh upload also sizes the box to the image's own
   // proportions, instead of leaving it at whatever widthPct/heightPct was
@@ -202,13 +204,17 @@ function ImageUploadField({
           </div>
           <ResizeHandles
             containerRef={containerRef}
+            xPct={50}
+            yPct={50}
             widthPct={widthPct}
             heightPct={heightPct}
             onLiveResize={(width, height) => setLiveSize({ width, height })}
             onCommitResize={(width, height) => {
               setLiveSize(null);
+              clearGuides();
               onResize(width, height);
             }}
+            onGuidesChange={setGuides}
           />
         </div>
       ) : (

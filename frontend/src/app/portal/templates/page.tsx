@@ -1,8 +1,4 @@
-import Link from "next/link";
-import { ClipboardList } from "lucide-react";
-
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PortalTemplatesView, type PortalTemplateCardData } from "@/components/portal-templates-view";
 import { djangoFetch } from "@/lib/django";
 import { getVisibleTemplateIds } from "@/lib/role-access";
 import type { Paginated, Template, TemplateVersion } from "@/lib/types";
@@ -26,51 +22,30 @@ export default async function PortalTemplatesPage() {
   const visibleTemplates =
     visibleIds === null ? templates.results : templates.results.filter((template) => visibleIds.has(template.id));
 
+  const items: PortalTemplateCardData[] = visibleTemplates.map((template) => ({
+    id: template.id,
+    name: template.name,
+    description: template.description,
+    href: publishedTemplateIds.has(template.id) ? `/portal/templates/${template.id}` : null,
+  }));
+
   return (
-    <div className="max-w-4xl space-y-4">
+    // No max-w cap — same "use the full width main actually has" fix as
+    // portal/courses/page.tsx.
+    <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-semibold">Templates</h1>
         <p className="mt-1 text-muted-foreground">Pick an audit to fill out.</p>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {visibleTemplates.map((template) => {
-          const isFillable = publishedTemplateIds.has(template.id);
-          const card = (
-            <Card className={isFillable ? "h-full transition-colors hover:bg-muted/40" : "h-full opacity-60"}>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <ClipboardList className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="truncate">{template.name}</span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="line-clamp-2 text-sm text-muted-foreground">{template.description || " "}</p>
-                {!isFillable && (
-                  <Badge variant="outline" className="mt-2">
-                    Not yet published
-                  </Badge>
-                )}
-              </CardContent>
-            </Card>
-          );
-
-          return isFillable ? (
-            <Link key={template.id} href={`/portal/templates/${template.id}`}>
-              {card}
-            </Link>
-          ) : (
-            <div key={template.id}>{card}</div>
-          );
-        })}
-        {visibleTemplates.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            {templates.results.length === 0
-              ? "No templates have been created yet."
-              : "No templates have been assigned to your role yet."}
-          </p>
-        )}
-      </div>
+      <PortalTemplatesView
+        items={items}
+        emptyMessage={
+          templates.results.length === 0
+            ? "No templates have been created yet."
+            : "No templates have been assigned to your role yet."
+        }
+      />
     </div>
   );
 }
