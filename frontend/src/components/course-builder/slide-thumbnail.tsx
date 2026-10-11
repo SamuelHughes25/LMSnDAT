@@ -30,6 +30,7 @@ export function SlideThumbnail({
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: slide.id });
   const Face = SLIDE_TYPE_FACES[slide.slide_type];
+  const isFreeformContent = slide.slide_type === "content" && slide.config.layout == null;
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -79,16 +80,23 @@ export function SlideThumbnail({
             {/* Rendered at the same full canvas pixel size as the Face
                 below, inside the same scaled wrapper, so the "true
                 miniature" property holds for the background image too —
-                it scales down along with everything else, not separately. */}
-            <SlideBackgroundLayer
-              value={slide.config.background_image_url}
-              mode="static"
-              xPct={slide.config.background_image_x_pct}
-              yPct={slide.config.background_image_y_pct}
-              widthPct={slide.config.background_image_width_pct}
-              heightPct={slide.config.background_image_height_pct}
-            />
-            <ExtraImagesLayer images={slide.config.extra_images ?? []} mode="static" />
+                it scales down along with everything else, not separately.
+                Skipped for a freeform content slide — see slide-canvas.tsx's
+                own isFreeformContent comment: its Face renders these itself,
+                interleaved with text per object_order. */}
+            {!isFreeformContent && (
+              <>
+                <SlideBackgroundLayer
+                  value={slide.config.background_image_url}
+                  mode="static"
+                  xPct={slide.config.background_image_x_pct}
+                  yPct={slide.config.background_image_y_pct}
+                  widthPct={slide.config.background_image_width_pct}
+                  heightPct={slide.config.background_image_height_pct}
+                />
+                <ExtraImagesLayer images={slide.config.extra_images ?? []} mode="static" />
+              </>
+            )}
             <div className="relative z-10 h-full w-full">
               <Face slide={slide} mode="static" />
             </div>

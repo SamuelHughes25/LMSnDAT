@@ -15,8 +15,45 @@ class Course(BaseModel):
     # short enough to never need more than the truncated single line the
     # list page gives it.
     description = models.TextField(blank=True, max_length=300)
-    created_by = models.ForeignKey('accounts.User', on_delete=models.PROTECT, related_name='courses_created')
+    # SET_NULL, not PROTECT: `owner` below is now the field that actually
+    # represents "who's responsible for this course" and determines
+    # whether deleting a user is blocked (see UserViewSet.purge) —
+    # created_by is just a historical "who originally clicked New Course"
+    # footnote, never read anywhere outside a couple of display-only
+    # serializer fields and the Django admin list, so there's nothing
+    # audit-critical lost by letting it go null. Keeping this PROTECT would
+    # otherwise silently defeat the entire point of a transferable owner:
+    # transferring ownership away is supposed to be what unblocks purging
+    # the original owner, but if they're also still this course's
+    # permanent created_by, that PROTECT would keep blocking them anyway.
+    created_by = models.ForeignKey(
+        'accounts.User', null=True, blank=True, on_delete=models.SET_NULL, related_name='courses_created'
+    )
+    # Transferable — unlike created_by above, this is "who's currently in
+    # charge of this course" and can be handed off
+    # (CourseViewSet.transfer_ownership). Always set on creation (same user
+    # as created_by, see perform_create) and backfilled from created_by for
+    # every pre-existing row — see migration 0012. PROTECT: deleting an
+    # owner outright must not silently orphan a course — UserViewSet.purge
+    # checks this field specifically to decide whether a user's content
+    # needs reassigning before they can be removed for good.
+    owner = models.ForeignKey('accounts.User', on_delete=models.PROTECT, related_name='courses_owned')
+    # Granted per-course edit rights (course fields, versions, lessons,
+    # slides, assets — see apps.core.permissions.IsContentOwnerEditorOrAdmin)
+    # without needing the global admin role. Only the owner or an admin can
+    # change this list (CourseViewSet.set_editors) — an editor can't add
+    # other editors themselves.
+    editors = models.ManyToManyField('accounts.User', blank=True, related_name='courses_editing')
     is_archived = models.BooleanField(default=False)
+    # Who archived this course and when — SET_NULL (not PROTECT) since this
+    # is purely an audit convenience, not a safety-critical reference; it
+    # should never be the thing blocking a user's own deletion. Both are
+    # cleared on restore and reset on every subsequent archive, so they
+    # always describe the CURRENT archive, not some past one.
+    archived_by = models.ForeignKey(
+        'accounts.User', null=True, blank=True, on_delete=models.SET_NULL, related_name='+'
+    )
+    archived_at = models.DateTimeField(null=True, blank=True)
     # Whole-course, not per-version (same level as is_archived) — marks this
     # course as a scored assessment rather than free-form training content.
     # passing_score is a 0-100 percentage, only meaningful when True; a
@@ -53,6 +90,20 @@ class Course(BaseModel):
 
     def __str__(self):
         return self.name
+
+    def save(self, *args, **kwargs):
+        # Falls back to created_by when owner isn't explicitly set — the
+        # same backfill semantics migration 0013 applied to every
+        # pre-existing row, just applied forever here too, so any code
+        # path that creates a Course without thinking about `owner`
+        # specifically (tests, scripts, a future call site) still gets a
+        # sane value instead of hitting the NOT NULL constraint. The real,
+        # intentional "owner starts as the creator" case already sets both
+        # explicitly (see CourseViewSet.perform_create) — this only
+        # matters when owner is left unset.
+        if self.owner_id is None and self.created_by_id is not None:
+            self.owner_id = self.created_by_id
+        super().save(*args, **kwargs)
 
     @property
     def published_version(self):

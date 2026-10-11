@@ -15,7 +15,7 @@ export const THEME_STORAGE_KEY = "lms-theme";
 // throughout this app's own components) picks up dark mode automatically
 // the moment `.dark` lands on <html>; this component's only job is
 // deciding when that happens. No next-themes or other library: the exact
-// same plain useState+localStorage pattern portal-shell.tsx already uses
+// same plain useState+localStorage pattern app-shell.tsx already uses
 // for its own sidebar-collapse preference, just applied to
 // document.documentElement.classList instead of a React-rendered
 // className, since <html> isn't part of this component's own render tree
@@ -37,7 +37,7 @@ export function ThemeToggle() {
   // light — there's no meaningful "server" theme — then the real stored
   // preference is applied by adjusting state during render, same
   // "sanctioned alternative to setState-in-an-effect" pattern
-  // portal-shell.tsx already uses for appliedStoredValue there.
+  // app-shell.tsx already uses for appliedStoredValue there.
   if (isClient && !appliedStoredValue) {
     setAppliedStoredValue(true);
     try {

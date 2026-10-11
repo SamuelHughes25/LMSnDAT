@@ -1,13 +1,17 @@
 from django.db import IntegrityError, transaction
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import SAFE_METHODS, IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.models import User
-from apps.core.permissions import IsAdminOrManager, IsAdminOrManagerOrReadOnly, IsAdminOrReadOnly
+from apps.core.permissions import (
+    HasArchiveTabAccessOrIsOwner, HasDashboardTabAccess, IsContentOwnerEditorOrAdmin, IsContentOwnerOrAdmin, IsSuperuser,
+    user_can_access_tab, user_can_edit_content,
+)
 from . import services
 from .models import (
     Course, CourseAsset, CourseAssignment, CourseAttempt, CourseDeadlineExtension, CourseVersion, Lesson,
@@ -21,12 +25,137 @@ from .serializers import (
 
 
 class CourseViewSet(viewsets.ModelViewSet):
-    queryset = Course.objects.all()
+    queryset = Course.objects.all().prefetch_related('editors')
     serializer_class = CourseSerializer
-    permission_classes = [IsAdminOrReadOnly]
+    required_tab = 'courses'
+
+    def get_owning_content(self, obj):
+        # obj IS the content here — see IsContentOwnerEditorOrAdmin's own
+        # docstring for why every viewset needs this method.
+        return obj
+
+    def get_permissions(self):
+        # Editing this course's own fields (and create-draft, which starts
+        # a new version of it) opens up to the owner/editors, not just
+        # someone with the Courses tab — everything else (create a
+        # brand-new course) is tab-gated as normal. Archive/restore/purge
+        # are their own, separate 'archive' tab, not 'courses'. Managing
+        # WHO owns/edits this course is its own, stricter tier. Reading
+        # (list/retrieve) stays open to any authenticated user regardless
+        # of tab access — unlike every other dashboard-only resource, the
+        # PORTAL (member-facing, no permission set at all) also reads
+        # course data directly, same as the old IsAdminOrReadOnly's open-
+        # read behavior this replaced.
+        if self.action in ('update', 'partial_update', 'create_draft'):
+            return [IsContentOwnerEditorOrAdmin()]
+        if self.action == 'transfer_ownership':
+            # Super-super-user only now — not the owner, not even someone
+            # with the Courses tab. See IsSuperuser's own comment for why.
+            return [IsSuperuser()]
+        if self.action == 'set_editors':
+            return [IsContentOwnerOrAdmin()]
+        if self.action in ('destroy', 'restore', 'purge'):
+            # Owner can always archive/restore/purge their own course too,
+            # even with no Archive tab granted — see
+            # HasArchiveTabAccessOrIsOwner's own comment.
+            return [HasArchiveTabAccessOrIsOwner()]
+        if self.request.method in SAFE_METHODS:
+            return [IsAuthenticated()]
+        return [HasDashboardTabAccess()]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        # Archived courses are excluded from every normal list by default —
+        # this one filter is what makes archiving "remove it from
+        # everywhere" (admin list, portal, Groups' course picker, Roles
+        # tabs) without needing matching exclusion logic in each of those
+        # places individually. ?archived=true is the one deliberate
+        # opt-in, used only by the admin Archive page.
+        if self.request.query_params.get('archived') == 'true':
+            qs = qs.filter(is_archived=True)
+        else:
+            qs = qs.filter(is_archived=False)
+        return qs
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        # owner starts as the creator too (same user as created_by) — it's
+        # just transferable afterward, unlike created_by, which stays
+        # permanent authorship history. See transfer_ownership below.
+        serializer.save(created_by=self.request.user, owner=self.request.user)
+
+    @action(detail=True, methods=['post'], url_path='transfer-ownership')
+    def transfer_ownership(self, request, pk=None):
+        # get_permissions gates this to the CURRENT owner or an admin —
+        # self.get_object() re-checks that against the course this id
+        # actually resolves to (not just whatever course the request
+        # claims), via DRF's automatic check_object_permissions.
+        course = self.get_object()
+        new_owner = User.objects.filter(pk=request.data.get('owner')).first()
+        if not new_owner:
+            return Response({'owner': 'Required and must reference an existing user.'}, status=400)
+        course.owner = new_owner
+        course.save(update_fields=['owner'])
+        return Response(CourseSerializer(course, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'], url_path='set-editors')
+    def set_editors(self, request, pk=None):
+        course = self.get_object()
+        editor_ids = request.data.get('editors', [])
+        if not isinstance(editor_ids, list):
+            return Response({'editors': 'Must be a list of user ids.'}, status=400)
+        # Full replace, same "send the complete list" convention as
+        # Group.courses/templates and User.content_groups elsewhere in
+        # this app — not an incremental add/remove.
+        course.editors.set(User.objects.filter(pk__in=editor_ids))
+        return Response(CourseSerializer(course, context={'request': request}).data)
+
+    def destroy(self, request, *args, **kwargs):
+        # The trash button now archives instead of hard-deleting — see
+        # restore/purge below for the rest of the lifecycle. Mirrors
+        # TemplateViewSet.destroy/UserViewSet.destroy exactly.
+        course = self.get_object()
+        course.is_archived = True
+        course.archived_by = request.user
+        course.archived_at = timezone.now()
+        course.save(update_fields=['is_archived', 'archived_by', 'archived_at'])
+        return Response(status=204)
+
+    @action(detail=True, methods=['post'])
+    def restore(self, request, pk=None):
+        # Looked up against the unfiltered model manager, not
+        # self.get_object() — get_queryset() excludes archived rows by
+        # default, which is exactly what this action needs to find. That
+        # means DRF's usual get_object()-triggered check_object_permissions
+        # never runs here, so it's called explicitly — otherwise
+        # HasArchiveTabAccessOrIsOwner's object-level owner check would
+        # silently never fire and this action would be tab-gated only.
+        course = get_object_or_404(Course, pk=pk)
+        self.check_object_permissions(request, course)
+        course.is_archived = False
+        course.archived_by = None
+        course.archived_at = None
+        course.save(update_fields=['is_archived', 'archived_by', 'archived_at'])
+        return Response(CourseSerializer(course, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def purge(self, request, pk=None):
+        # The real, final hard delete — only reachable from the Archive
+        # page against an already-archived course. CourseAttempt.course_version
+        # is the one PROTECT standing between a Course and deletion (confirmed:
+        # no other model anywhere protects Course/CourseVersion); explicitly
+        # deleting those rows first is a deliberate purge of that course's
+        # history across every user who took it, then course.delete() cascades
+        # the rest (CourseVersion -> Lesson -> Slide -> SlideResult,
+        # CourseDeadlineExtension, CourseAssignment) cleanly since those are
+        # all plain CASCADE already.
+        course = get_object_or_404(Course, pk=pk)
+        self.check_object_permissions(request, course)
+        if not course.is_archived:
+            return Response({'detail': 'Only archived courses can be permanently deleted.'}, status=400)
+        with transaction.atomic():
+            CourseAttempt.objects.filter(course_version__course=course).delete()
+            course.delete()
+        return Response(status=204)
 
     @action(detail=True, methods=['post'], url_path='create-draft')
     def create_draft(self, request, pk=None):
@@ -38,7 +167,11 @@ class CourseViewSet(viewsets.ModelViewSet):
 class CourseVersionViewSet(viewsets.ModelViewSet):
     queryset = CourseVersion.objects.select_related('course').prefetch_related('lessons__slides', 'assets')
     serializer_class = CourseVersionSerializer
-    permission_classes = [IsAdminOrReadOnly]
+    permission_classes = [IsContentOwnerEditorOrAdmin]
+    required_tab = 'courses'
+
+    def get_owning_content(self, obj):
+        return obj.course
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -46,6 +179,16 @@ class CourseVersionViewSet(viewsets.ModelViewSet):
         if course_id:
             qs = qs.filter(course_id=course_id)
         return qs
+
+    def perform_create(self, serializer):
+        # has_object_permission (IsContentOwnerEditorOrAdmin) only fires
+        # once an instance exists — create needs its own check, resolving
+        # the ancestor Course from the submitted data instead. Mirrors
+        # CourseAssignmentViewSet.perform_create's existing manual check.
+        course = serializer.validated_data['course']
+        if not user_can_edit_content(self.request.user, course, self.required_tab):
+            raise PermissionDenied("You don't have edit access to this course.")
+        serializer.save(created_by=self.request.user)
 
     @action(detail=True, methods=['post'])
     def publish(self, request, pk=None):
@@ -57,7 +200,11 @@ class CourseVersionViewSet(viewsets.ModelViewSet):
 class LessonViewSet(viewsets.ModelViewSet):
     queryset = Lesson.objects.all()
     serializer_class = LessonSerializer
-    permission_classes = [IsAdminOrReadOnly]
+    permission_classes = [IsContentOwnerEditorOrAdmin]
+    required_tab = 'courses'
+
+    def get_owning_content(self, obj):
+        return obj.course_version.course
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -65,6 +212,12 @@ class LessonViewSet(viewsets.ModelViewSet):
         if version_id:
             qs = qs.filter(course_version_id=version_id)
         return qs
+
+    def perform_create(self, serializer):
+        course = serializer.validated_data['course_version'].course
+        if not user_can_edit_content(self.request.user, course, self.required_tab):
+            raise PermissionDenied("You don't have edit access to this course.")
+        serializer.save()
 
     @action(detail=True, methods=['post'], url_path='save-as-reusable')
     def save_as_reusable(self, request, pk=None):
@@ -80,11 +233,27 @@ class ReusableLessonViewSet(viewsets.ModelViewSet):
     are only ever created via LessonViewSet.save_as_reusable above (cloning
     an existing authored lesson), never directly through this viewset's own
     create, so this intentionally has no custom perform_create; standard
-    list/retrieve/destroy cover the manage/import dialog's needs."""
+    list/retrieve/destroy cover the manage/import dialog's needs.
+
+    The library itself (create/update/destroy a saved entry) stays admin-
+    only — it has no single owning course for IsContentOwnerEditorOrAdmin
+    to check against (see ReusableLesson's own docstring: a fully
+    independent, standing library item). `import_into` is the one
+    exception: its real effect is adding a lesson to a SPECIFIC course's
+    draft, so it checks edit access against that TARGET course manually
+    instead, same reasoning as CourseAssignmentViewSet.perform_create's
+    existing manual check — an editor should be able to use the library on
+    their own course even though they can't manage the library itself.
+    """
 
     queryset = ReusableLesson.objects.all()
     serializer_class = ReusableLessonSerializer
-    permission_classes = [IsAdminOrReadOnly]
+    required_tab = 'courses'
+
+    def get_permissions(self):
+        if self.action == 'import_into':
+            return [IsAuthenticated()]
+        return [HasDashboardTabAccess()]
 
     @action(detail=True, methods=['post'], url_path='import')
     def import_into(self, request, pk=None):
@@ -93,6 +262,8 @@ class ReusableLessonViewSet(viewsets.ModelViewSet):
         target_version = CourseVersion.objects.filter(id=version_id).first()
         if not target_version:
             return Response({'course_version': 'Required and must reference an existing course version.'}, status=400)
+        if not user_can_edit_content(request.user, target_version.course, self.required_tab):
+            raise PermissionDenied("You don't have edit access to this course.")
         if target_version.status != CourseVersion.Status.DRAFT:
             return Response({'course_version': 'Can only import into a draft course version.'}, status=400)
         order = request.data.get('order', 0)
@@ -103,7 +274,11 @@ class ReusableLessonViewSet(viewsets.ModelViewSet):
 class SlideViewSet(viewsets.ModelViewSet):
     queryset = Slide.objects.all()
     serializer_class = SlideSerializer
-    permission_classes = [IsAdminOrReadOnly]
+    permission_classes = [IsContentOwnerEditorOrAdmin]
+    required_tab = 'courses'
+
+    def get_owning_content(self, obj):
+        return obj.lesson.course_version.course
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -112,11 +287,21 @@ class SlideViewSet(viewsets.ModelViewSet):
             qs = qs.filter(lesson_id=lesson_id)
         return qs
 
+    def perform_create(self, serializer):
+        course = serializer.validated_data['lesson'].course_version.course
+        if not user_can_edit_content(self.request.user, course, self.required_tab):
+            raise PermissionDenied("You don't have edit access to this course.")
+        serializer.save()
+
 
 class CourseAssetViewSet(viewsets.ModelViewSet):
     queryset = CourseAsset.objects.all()
     serializer_class = CourseAssetSerializer
-    permission_classes = [IsAdminOrReadOnly]
+    permission_classes = [IsContentOwnerEditorOrAdmin]
+    required_tab = 'courses'
+
+    def get_owning_content(self, obj):
+        return obj.course_version.course
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -126,6 +311,9 @@ class CourseAssetViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
+        course = serializer.validated_data['course_version'].course
+        if not user_can_edit_content(self.request.user, course, self.required_tab):
+            raise PermissionDenied("You don't have edit access to this course.")
         serializer.save(uploaded_by=self.request.user)
 
 
@@ -139,11 +327,12 @@ class CourseAttemptViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = super().get_queryset()
-        if user.role == User.Role.ADMIN:
-            pass
-        elif user.role == User.Role.MANAGER:
-            qs = qs.filter(user__team=user.team)
-        else:
+        # Full visibility for anyone with Courses tab access (or above) —
+        # no team-scoping any more (that was role=='manager'-specific;
+        # permission sets are flat/global, see apps.core.permissions
+        # .user_can_access_tab's own comment on this deliberate change).
+        # Anyone else only ever sees their own attempts.
+        if not user_can_access_tab(user, 'courses'):
             qs = qs.filter(user=user)
 
         course_id = self.request.query_params.get('course')
@@ -240,19 +429,20 @@ class CourseAttemptViewSet(viewsets.ModelViewSet):
 class CourseDeadlineExtensionViewSet(viewsets.ModelViewSet):
     """The "this one person needs more time" escape hatch for a course's
     default deadline — see Course.effective_deadline_for(). Members never
-    touch this endpoint directly; it's admin/manager tooling, surfaced from
+    touch this endpoint directly; it's dashboard tooling, surfaced from
     the course's own per-user analytics table."""
 
     queryset = CourseDeadlineExtension.objects.select_related('course', 'user')
     serializer_class = CourseDeadlineExtensionSerializer
-    permission_classes = [IsAdminOrManager]
+    permission_classes = [HasDashboardTabAccess]
+    required_tab = 'courses'
 
     def get_queryset(self):
-        user = self.request.user
         qs = super().get_queryset()
-        if user.role != User.Role.ADMIN:
-            qs = qs.filter(user__team=user.team)
-
+        # No team-scoping any more — see CourseAttemptViewSet.get_queryset's
+        # identical comment. Anyone reaching this endpoint at all already
+        # has Courses tab access (the class-level permission above), so
+        # there's no narrower-but-still-allowed case left to scope down to.
         course_id = self.request.query_params.get('course')
         if course_id:
             qs = qs.filter(course_id=course_id)
@@ -260,17 +450,6 @@ class CourseDeadlineExtensionViewSet(viewsets.ModelViewSet):
         if target_user_id:
             qs = qs.filter(user_id=target_user_id)
         return qs
-
-    def perform_create(self, serializer):
-        # get_queryset's team-scoping only protects reads/updates/deletes of
-        # EXISTING rows — a manager POSTing a brand-new extension for an
-        # arbitrary user id isn't filtered by that at all, so it needs its
-        # own check here.
-        requester = self.request.user
-        target_user = serializer.validated_data['user']
-        if requester.role != User.Role.ADMIN and target_user.team != requester.team:
-            raise PermissionDenied("Cannot set a deadline extension for a user outside your team.")
-        serializer.save()
 
 
 class CourseAssignmentViewSet(
@@ -284,33 +463,37 @@ class CourseAssignmentViewSet(
     CourseAssignment's own docstring for why this deliberately has NO
     "already has it via a Group" conflict check: Groups routinely overlap
     on the same course, and the two assignment mechanisms are meant to
-    freely coexist. Read access is broader than write access (IsAuthenticated,
-    not IsAdminOrManager) specifically so a member can list their OWN direct
-    assignments — frontend/src/lib/role-access.ts's getVisibleCourseIds()
-    relies on exactly that to fold direct assignments into a member's
-    portal-visible course set.
+    freely coexist. Read access is broader than write access (any
+    authenticated user, not gated on the Courses tab) specifically so a
+    member can list their OWN direct assignments —
+    frontend/src/lib/role-access.ts's getVisibleCourseIds() relies on
+    exactly that to fold direct assignments into a member's portal-visible
+    course set.
 
     Deliberately NOT a plain ModelViewSet — there is no update action here
     (PUT/PATCH), by design, not oversight: course-access-cell.tsx only ever
-    creates or deletes a row, and allowing PATCH would let an admin/manager
-    silently repoint an existing row's `user` (or `course`) to someone else
-    entirely, bypassing perform_create's team check below, which only ever
-    runs on the equivalent POST. Excluding UpdateModelMixin removes PUT/PATCH
-    from the router altogether (a clean 405) rather than relying on a
-    perform_update override to remember to repeat that same check."""
+    creates or deletes a row, and allowing PATCH would let someone with
+    Courses tab access silently repoint an existing row's `user` (or
+    `course`) to someone else entirely. Excluding UpdateModelMixin removes
+    PUT/PATCH from the router altogether (a clean 405)."""
 
     queryset = CourseAssignment.objects.select_related('course', 'user', 'assigned_by')
     serializer_class = CourseAssignmentSerializer
-    permission_classes = [IsAdminOrManagerOrReadOnly]
+    required_tab = 'courses'
+
+    def get_permissions(self):
+        if self.request.method in SAFE_METHODS:
+            return [IsAuthenticated()]
+        return [HasDashboardTabAccess()]
 
     def get_queryset(self):
         user = self.request.user
         qs = super().get_queryset()
-        if user.role == User.Role.ADMIN:
-            pass
-        elif user.role == User.Role.MANAGER:
-            qs = qs.filter(user__team=user.team)
-        else:
+        # No team-scoping any more — see CourseAttemptViewSet.get_queryset's
+        # identical comment. Full visibility for anyone with Courses tab
+        # access; anyone else (a member reading their own direct
+        # assignments) only ever sees their own.
+        if not user_can_access_tab(user, 'courses'):
             qs = qs.filter(user=user)
 
         course_id = self.request.query_params.get('course')
@@ -322,11 +505,4 @@ class CourseAssignmentViewSet(
         return qs
 
     def perform_create(self, serializer):
-        # Same reasoning as CourseDeadlineExtensionViewSet.perform_create
-        # above — get_queryset's team-scoping only protects existing rows,
-        # a manager POSTing for an arbitrary user id needs its own check.
-        requester = self.request.user
-        target_user = serializer.validated_data['user']
-        if requester.role != User.Role.ADMIN and target_user.team != requester.team:
-            raise PermissionDenied("Cannot assign a course to a user outside your team.")
-        serializer.save(assigned_by=requester)
+        serializer.save(assigned_by=self.request.user)

@@ -66,7 +66,7 @@ export function ObjectPositionFields({
 //
 // Resyncs its local text from `pct` by comparing against a tracked previous
 // value during render (this project's sanctioned alternative to
-// setState-in-an-effect — see portal-shell.tsx's own use of the same
+// setState-in-an-effect — see app-shell.tsx's own use of the same
 // pattern) — needed so a canvas drag that changes the real position while
 // this field isn't focused is reflected here next time it's shown, rather
 // than this field freezing at whatever it last displayed.

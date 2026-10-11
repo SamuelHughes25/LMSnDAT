@@ -64,8 +64,16 @@
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
+  /* Was oklch(0.922 0 0) — only an ~8% lightness step from --background/
+     --card (both pure white, oklch(1 0 0)), so every "rounded-lg border-2
+     border-border bg-card" panel across the app (the established
+     convention, ~30+ call sites) rendered with no visible edge at all in
+     light mode — "just one white screen with floating text." Dark mode's
+     own --border was never affected (it's a translucent white over a
+     genuinely darker --card there, already visible) — this change is
+     light-mode-only. */
+  --border: oklch(0.87 0 0);
+  --input: oklch(0.87 0 0);
   --ring: oklch(0.708 0 0);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
@@ -79,7 +87,7 @@
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.97 0 0);
   --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-border: oklch(0.87 0 0);
   --sidebar-ring: oklch(0.708 0 0);
 }
 
@@ -145,8 +153,8 @@
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
+  --border: oklch(0.87 0 0);
+  --input: oklch(0.87 0 0);
   --ring: oklch(0.708 0 0);
 }
 

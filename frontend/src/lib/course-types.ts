@@ -198,7 +198,49 @@ export type BoxTransform = {
 export type ExtraImage = BoxTransform & {
   id: string;
   url: string;
+  // Layers-panel label (slide-layers-panel.tsx) — optional, auto-derived
+  // ("Image 1", "Image 2"...) by list position when unset, same convention
+  // as FreeTextBox.name below.
+  name?: string;
 };
+
+// A freeform, author-placed text box on a "freeform" content slide (see
+// SlideConfig.text_boxes) — the generic, un-specialized replacement for the
+// old fixed title/subtitle/body/body2 fields. Deliberately has NONE of
+// RichTextTitle's special-casing (no forced single-line/nowrap, no forced
+// font-bold, no Enter suppression) — see free-text-box.tsx's own comment
+// for why that unification is the actual fix for the "bold does nothing on
+// titles" / "bullet list breaks title width" bugs, not a patch applied to
+// the legacy fields themselves. Positioned/sized exactly like ExtraImage —
+// same BoxTransform shape, same per-object stable id requirement (a
+// selection id and React key need something that survives reordering).
+export type FreeTextBox = BoxTransform & {
+  id: string;
+  // Sanitized HTML string, identical contract to the legacy title/body
+  // fields (see SlideConfig.body's own comment) — authored by the same
+  // TipTap setup, just without the title-specific constraints.
+  html: string;
+  // Layers-panel label — optional, auto-derived ("Text 1", "Text 2"...) by
+  // list position when unset. Deliberately not derived from `html`'s own
+  // content (e.g. first few words) — that would change out from under the
+  // user as they type, which reads as more confusing than a plain "Text N"
+  // placeholder a user can rename if they want something more specific.
+  name?: string;
+};
+
+// A reference into one of a freeform slide's object arrays (text_boxes or
+// extra_images), used ONLY for `SlideConfig.object_order` — see that
+// field's own comment for why stacking order needs to exist as an explicit,
+// reorderable list rather than being implied by array position within
+// text_boxes/extra_images themselves (those arrays' own order is
+// creation-order, not necessarily display/stacking order, once a user
+// reorders via the layers panel). The background image is deliberately NOT
+// representable here — see SlideConfig.background_image_url's own note on
+// why it stays a separate, non-reorderable backdrop layer rather than a
+// stackable object for this pass. Written to extend cleanly to a future
+// `{type: "widget"; id: string}` variant without reworking the ordering/
+// panel mechanism, once widgets exist.
+export type SlideObjectRef = { type: "text"; id: string } | { type: "image"; id: string };
 
 // The four text boxes a content slide can have — the keys of box_transforms
 // below, and the field names positionable-box.tsx/text-object-properties.tsx
@@ -216,6 +258,22 @@ export type PositionableField = "title" | "subtitle" | "body" | "body2";
 // lib/types.ts.
 export type SlideConfig = {
   // content
+  //
+  // A content slide renders via exactly ONE of two systems, branched on
+  // whether `layout` is set at all — see content-slide-face.tsx's own
+  // top-of-file comment for the full rationale. In short: `layout` set
+  // means the LEGACY fixed-field system below (title/subtitle/body/body2/
+  // box_transforms, one of 9 hardcoded ContentSlideLayout presets) — this
+  // covers every slide that existed before text_boxes/object_order were
+  // introduced, rendered completely unchanged, no migration, no
+  // regression risk. `layout` unset means the FREEFORM system
+  // (text_boxes/object_order below) — every brand-new content slide from
+  // then on. Applying a "Templates" preset from the properties panel does
+  // NOT set `layout` — it seeds text_boxes/object_order with a one-time
+  // starting arrangement and leaves the slide in freeform mode, since the
+  // whole point is that seeded boxes stay ordinary, freely editable
+  // objects afterward rather than a locked structural "layout" the slide
+  // is pinned to.
   layout?: ContentSlideLayout;
   // Sanitized HTML string authored by the TipTap rich-text editor in
   // slide-faces/content-slide-face.tsx (bold/italic/underline/lists/font-size
@@ -308,6 +366,24 @@ export type SlideConfig = {
   // things, so stale coordinates from the old arrangement aren't carried
   // over into the new one.
   box_transforms?: Partial<Record<PositionableField, BoxTransform>>;
+  // Freeform content-slide system — see `layout`'s own comment above for
+  // the legacy-vs-freeform branch this pair drives. Both are only ever
+  // meaningful together, and only when `layout` is unset.
+  //
+  // The author-placed text boxes themselves — unordered as far as this
+  // array goes (append-only; a box's position in THIS array has no
+  // rendering meaning), stable-id'd so object_order/selection/edits can
+  // all reference one unambiguously regardless of edits to any other box.
+  text_boxes?: FreeTextBox[];
+  // Explicit stacking/layers-panel order: index 0 = back-most, last =
+  // front-most (array position IS the z-order — no separate numeric
+  // z-index field needed, since this array is itself the single source of
+  // truth both the renderer and slide-layers-panel.tsx read). A newly
+  // added text box or image is always appended (front-most) and removed
+  // here the moment it's deleted from text_boxes/extra_images — the two
+  // must never drift out of sync, since an orphaned ref would try to
+  // render an object that no longer exists.
+  object_order?: SlideObjectRef[];
   // multiple_choice
   question?: string;
   options?: MultipleChoiceOption[];
@@ -352,6 +428,34 @@ export type SlideConfig = {
   hotspots?: HotspotMarker[];
   [key: string]: unknown;
 };
+
+// The actual stacking order to render/show-in-the-layers-panel, self-
+// healing against `object_order` drifting out of sync with text_boxes/
+// extra_images — confirmed as a real, live bug: extra_images could be
+// added (slide-background-panel.tsx's old AddImageRow) without ever being
+// pushed into object_order, silently making that image un-reorderable and
+// invisible to the layers panel even though it still rendered on the
+// canvas via its own separate rendering path. Both bugs are fixed at
+// their source now, but this stays as a permanent safety net — any
+// text_boxes/extra_images entry missing from object_order is appended
+// (front-most, same "newly added = front-most" convention as a genuine
+// add), and any object_order entry pointing at an object that no longer
+// exists is dropped — so a slide can never end up with content that's
+// silently unreachable from either the canvas or the layers panel.
+export function normalizeObjectOrder(config: SlideConfig): SlideObjectRef[] {
+  const textIds = new Set((config.text_boxes ?? []).map((b) => b.id));
+  const imageIds = new Set((config.extra_images ?? []).map((i) => i.id));
+  const stillExists = (r: SlideObjectRef) => (r.type === "text" ? textIds.has(r.id) : imageIds.has(r.id));
+  const order = (config.object_order ?? []).filter(stillExists);
+  const known = new Set(order.map((r) => `${r.type}:${r.id}`));
+  const missingText = (config.text_boxes ?? [])
+    .filter((b) => !known.has(`text:${b.id}`))
+    .map((b): SlideObjectRef => ({ type: "text", id: b.id }));
+  const missingImages = (config.extra_images ?? [])
+    .filter((i) => !known.has(`image:${i.id}`))
+    .map((i): SlideObjectRef => ({ type: "image", id: i.id }));
+  return [...order, ...missingText, ...missingImages];
+}
 
 export type Slide = {
   id: string;
@@ -441,8 +545,33 @@ export type Course = {
   // set a picture for — every renderer must treat that as "show a plain
   // placeholder," never an error.
   thumbnail: string | null;
-  created_by: number;
+  // Purely historical ("who originally clicked New Course") — null once
+  // that user is deleted (SET_NULL, not PROTECT: unlike owner below, this
+  // is never what determines whether a user can be removed), and —
+  // unlike `owner` — never changes again once set, not even across a
+  // transfer_ownership. `owner` is the field that actually represents
+  // "who's in charge of this course now"; this is the permanent record
+  // of who it originally belonged to, rendered on the Ownership card
+  // (content-ownership-card.tsx) as "Originally created by."
+  created_by: number | null;
+  created_by_username: string | null;
   is_archived: boolean;
+  // Who archived this course and when — null unless is_archived (cleared
+  // on restore). Read-only: these only ever change via the archive/
+  // restore/purge actions in actions/courses.ts, never a plain PATCH.
+  archived_by: number | null;
+  archived_by_username: string | null;
+  archived_at: string | null;
+  // Transferable — see transferCourseOwnership in actions/courses.ts.
+  // Determines real edit rights (apps.core.permissions
+  // .IsContentOwnerEditorOrAdmin on the backend) without needing the
+  // admin role, and is what UserViewSet.purge checks before blocking
+  // deletion of a content-owning user. Read-only here: only ever changes
+  // via transferCourseOwnership/setCourseEditors, never a plain PATCH.
+  owner: number;
+  owner_username: string;
+  editors: number[];
+  editor_usernames: string[];
   // Marks this course as a scored assessment rather than free-form
   // training content. passing_score (0-100) is only meaningful when this
   // is true — see backend/apps/courses/models.py's Course model and

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { DjangoApiError, djangoFetch } from "@/lib/django";
+import { DjangoApiError, djangoFetch, extractErrorDetail } from "@/lib/django";
 import { DEFAULT_SLIDE_TITLE } from "@/lib/course-types";
 import type {
   Course,
@@ -77,9 +77,105 @@ export async function publishVersion(courseId: string, versionId: string): Promi
   return version;
 }
 
-export async function deleteCourse(courseId: string): Promise<void> {
-  await djangoFetch<void>(`/courses/${courseId}/`, { method: "DELETE" });
-  revalidatePath("/courses");
+// DELETE now archives rather than hard-deleting (see the backend's
+// CourseViewSet.destroy) — the course disappears from this list and from
+// everyone's portal, but all its data/attempts/analytics stay fully
+// intact and reversible from the Archive page (restoreCourse/purgeCourse
+// above). The real, final hard delete — which DOES need to deal with
+// CourseAttempt.course_version's on_delete=PROTECT — only lives behind
+// purgeCourse now. The result-object shape here is kept (rather than
+// letting a Server Action throw) in case a future constraint ever makes
+// archiving itself fail; today it always succeeds for an existing course.
+export async function deleteCourse(courseId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await djangoFetch<void>(`/courses/${courseId}/`, { method: "DELETE" });
+    revalidatePath("/courses");
+    return { ok: true };
+  } catch (err) {
+    const detail = extractErrorDetail(err, "This course can't be archived right now.");
+    if (detail !== null) return { ok: false, error: detail };
+    throw err;
+  }
+}
+
+// --- Archive ---
+// deleteCourse above now archives instead of hard-deleting (see the
+// backend's CourseViewSet.destroy) — restoreCourse/purgeCourse are the
+// rest of that lifecycle, only ever called from the Archive page.
+
+export async function restoreCourse(courseId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await djangoFetch<Course>(`/courses/${courseId}/restore/`, { method: "POST" });
+    revalidatePath("/archive");
+    revalidatePath("/courses");
+    return { ok: true };
+  } catch (err) {
+    const detail = extractErrorDetail(err, "This course can't be restored right now.");
+    if (detail !== null) return { ok: false, error: detail };
+    throw err;
+  }
+}
+
+// The real, final hard delete — purges this course's attempt history
+// across every user who took it (see the backend's CourseViewSet.purge),
+// so unlike deleteCourse's "rare failure" framing above, a 400 here is a
+// real, user-facing outcome that needs the actual backend message (e.g.
+// "Only archived courses can be permanently deleted"), not a generic one.
+export async function purgeCourse(courseId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await djangoFetch<void>(`/courses/${courseId}/purge/`, { method: "POST" });
+    revalidatePath("/archive");
+    return { ok: true };
+  } catch (err) {
+    const detail = extractErrorDetail(err, "This course can't be permanently deleted.");
+    if (detail !== null) return { ok: false, error: detail };
+    throw err;
+  }
+}
+
+// Owner-or-admin only on the backend (IsContentOwnerOrAdmin) — a plain
+// editor attempting either of these gets a clean 403 {"detail": "..."}, the
+// same body shape describeAssignmentError below already parses, so both
+// reuse it instead of duplicating that extraction logic.
+export async function transferCourseOwnership(
+  courseId: string,
+  newOwnerId: number,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await djangoFetch<Course>(`/courses/${courseId}/transfer-ownership/`, {
+      method: "POST",
+      body: JSON.stringify({ owner: newOwnerId }),
+    });
+    revalidatePath(`/courses/${courseId}/members`);
+    return { ok: true };
+  } catch (err) {
+    if (err instanceof DjangoApiError && (err.status === 400 || err.status === 403)) {
+      return { ok: false, error: describeAssignmentError(err) };
+    }
+    throw err;
+  }
+}
+
+// Full replace, same "send the complete list" convention as
+// addUserToGroup/removeUserFromGroup's content_groups PATCH in
+// actions/users.ts — not an incremental add/remove.
+export async function setCourseEditors(
+  courseId: string,
+  editorIds: number[],
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await djangoFetch<Course>(`/courses/${courseId}/set-editors/`, {
+      method: "POST",
+      body: JSON.stringify({ editors: editorIds }),
+    });
+    revalidatePath(`/courses/${courseId}/members`);
+    return { ok: true };
+  } catch (err) {
+    if (err instanceof DjangoApiError && (err.status === 400 || err.status === 403)) {
+      return { ok: false, error: describeAssignmentError(err) };
+    }
+    throw err;
+  }
 }
 
 export async function updateCourseAssessmentSettings(
@@ -216,6 +312,13 @@ function defaultSlideConfig(slideType: SlideType): SlideConfig {
         feedback_incorrect: "",
       };
     case "content":
+      // Genuinely empty — no `layout`, so content-slide-face.tsx renders
+      // the new freeform system (see SlideConfig.layout's own comment) with
+      // zero text boxes/images, not the old title-body-by-default. The
+      // author adds boxes themselves via "Add text box" / the image panel,
+      // or starts from a "Templates" preset if they want a quick-start
+      // arrangement instead.
+      return { text_boxes: [], object_order: [] };
     default:
       return { body: "", image_url: null, image_position: "top" };
   }

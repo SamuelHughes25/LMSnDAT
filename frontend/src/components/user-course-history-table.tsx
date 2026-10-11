@@ -21,10 +21,25 @@ export type CourseSummary = {
   bestScore: number | null;
   passed: boolean | null;
   lastAttemptAt: string;
+  // Still archived, not yet permanently deleted — history stays visible
+  // here either way, this just labels it. A permanently deleted course
+  // never reaches this table at all (its attempts are purged along with
+  // it), so there's no equivalent "deleted" state to render.
+  isArchived: boolean;
+  // Needed to tell apart the two reasons `passed` (on the summary, or on
+  // any individual attempt below) can be null: a non-assessment course
+  // never has a pass/fail concept at all (grading.py only ever sets
+  // `passed` when course.is_assessment), vs. an assessment course's
+  // attempt that's simply still in_progress, not yet completed. Reported
+  // directly as confusing — a bare "—" looked identical for both, reading
+  // as "this attempt is incomplete/broken" even for a course that was
+  // never going to have a pass/fail result in the first place.
+  isAssessment: boolean;
 };
 
-function PassedBadge({ passed }: { passed: boolean | null }) {
-  if (passed === null) return <>—</>;
+function PassedBadge({ passed, isAssessment }: { passed: boolean | null; isAssessment: boolean }) {
+  if (!isAssessment) return <span className="text-muted-foreground">Not an assessment</span>;
+  if (passed === null) return <span className="text-muted-foreground">In progress</span>;
   return passed ? <Badge>Passed</Badge> : <Badge variant="destructive">Failed</Badge>;
 }
 
@@ -62,11 +77,18 @@ export function UserCourseHistoryTable({
             return (
               <Fragment key={summary.courseId}>
                 <TableRow>
-                  <TableCell className="truncate font-medium">{summary.courseName}</TableCell>
+                  <TableCell className="truncate font-medium">
+                    {summary.courseName}
+                    {summary.isArchived && (
+                      <Badge variant="outline" className="ml-2">
+                        Archived
+                      </Badge>
+                    )}
+                  </TableCell>
                   <TableCell>{summary.attemptCount}</TableCell>
                   <TableCell>{summary.bestScore === null ? "—" : `${summary.bestScore}%`}</TableCell>
                   <TableCell>
-                    <PassedBadge passed={summary.passed} />
+                    <PassedBadge passed={summary.passed} isAssessment={summary.isAssessment} />
                   </TableCell>
                   <TableCell>{new Date(summary.lastAttemptAt).toLocaleDateString()}</TableCell>
                   <TableCell>
@@ -95,7 +117,7 @@ export function UserCourseHistoryTable({
                       <TableCell />
                       <TableCell>{attempt.score === null ? "—" : `${attempt.score}%`}</TableCell>
                       <TableCell>
-                        <PassedBadge passed={attempt.passed} />
+                        <PassedBadge passed={attempt.passed} isAssessment={summary.isAssessment} />
                       </TableCell>
                       <TableCell>{new Date(attempt.started_at).toLocaleDateString()}</TableCell>
                       <TableCell />

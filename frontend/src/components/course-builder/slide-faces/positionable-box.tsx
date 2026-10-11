@@ -544,8 +544,21 @@ export function PositionableBox({
           stay visible regardless of how many times the box has been
           resized. Text still gets clipped to the box's own bounds exactly
           as before — clipping just moved to the element that's supposed
-          to own it. */}
-      <div className="h-full w-full overflow-hidden">{children}</div>
+          to own it.
+
+          Also carries a faint border, always visible in edit mode —
+          before this, a box had NO visible boundary at all until clicked
+          (the move band is invisible, only a cursor change; resize
+          handles only appear once selected), making it hard to tell at a
+          glance where one box ends and another begins, or how much empty
+          space is actually inside an unselected one. border-border/50
+          (not a stronger/dashed treatment) stays subtle enough not to
+          compete with the box's own content — a boundary hint, not a
+          selection indicator (that's still the resize handles/z-index
+          treatment above). This whole branch only runs in edit mode
+          (mode !== "edit" returns early, well above), so no extra mode
+          check is needed here. */}
+      <div className="h-full w-full overflow-hidden border border-border/50">{children}</div>
 
       {baseline && slideRef && (
         <>

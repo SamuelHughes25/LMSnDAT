@@ -6,7 +6,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
 from django.test import override_settings
 
-from apps.accounts.models import Group, Team, User
+from apps.accounts.models import Group, PermissionSet, Team, User
 from apps.core.test_utils import APIAuthTestCase
 from apps.courses.grading import grade_slide
 from apps.courses.models import (
@@ -31,7 +31,7 @@ class CourseBuilderFlowTests(APIAuthTestCase):
         shutil.rmtree(MEDIA_ROOT, ignore_errors=True)
 
     def setUp(self):
-        self.admin = User.objects.create_user(username='admin', password='pw', role=User.Role.ADMIN)
+        self.admin = User.objects.create_user(username='admin', password='pw', is_platform_admin=True)
         self.member = User.objects.create_user(username='member', password='pw', role=User.Role.MEMBER)
 
     def test_full_course_builder_flow(self):
@@ -488,11 +488,13 @@ class GradingTests(APIAuthTestCase):
 
 class CourseAttemptTests(APIAuthTestCase):
     def setUp(self):
-        self.admin = User.objects.create_user(username='attempt_admin', password='pw', role=User.Role.ADMIN)
+        self.admin = User.objects.create_user(username='attempt_admin', password='pw', is_platform_admin=True)
         self.team = Team.objects.create(name='Attempt Team')
-        self.manager = User.objects.create_user(
-            username='attempt_manager', password='pw', role=User.Role.MANAGER, team=self.team
-        )
+        # No permission set — the new equivalent of "not an admin," used
+        # to confirm no-Courses-tab-access means self-only visibility,
+        # replacing the old role=='manager' team-scoping behavior (removed
+        # — see apps.core.permissions.user_can_access_tab's own comment).
+        self.manager = User.objects.create_user(username='attempt_manager', password='pw', team=self.team)
         self.member = User.objects.create_user(
             username='attempt_member', password='pw', role=User.Role.MEMBER, team=self.team
         )
@@ -530,21 +532,25 @@ class CourseAttemptTests(APIAuthTestCase):
             ]},
         )
 
-    def test_member_only_sees_own_attempts(self):
+    def test_courses_tab_access_controls_attempt_visibility(self):
         CourseAttempt.objects.create(course_version=self.assessment_version, user=self.member)
         CourseAttempt.objects.create(course_version=self.assessment_version, user=self.other_member)
+        manager_attempt = CourseAttempt.objects.create(course_version=self.assessment_version, user=self.manager)
 
         member_client = self.auth('attempt_member', 'pw')
         resp = member_client.get('/api/v1/course-attempts/')
         self.assertEqual(len(resp.data['results']), 1)
 
+        # No Courses tab access -> only their own, same as a plain member —
+        # no more team-scoped middle tier.
         manager_client = self.auth('attempt_manager', 'pw')
         resp = manager_client.get('/api/v1/course-attempts/')
         self.assertEqual(len(resp.data['results']), 1)
+        self.assertEqual(resp.data['results'][0]['id'], str(manager_attempt.id))
 
         admin_client = self.auth('attempt_admin', 'pw')
         resp = admin_client.get('/api/v1/course-attempts/')
-        self.assertEqual(len(resp.data['results']), 2)
+        self.assertEqual(len(resp.data['results']), 3)
 
     def test_repeated_create_resumes_in_progress_attempt_not_duplicates(self):
         """The real bug this whole fix exists for: POSTing to /course-attempts/
@@ -759,12 +765,17 @@ class CourseAttemptTests(APIAuthTestCase):
 
 class CourseDeadlineTests(APIAuthTestCase):
     def setUp(self):
-        self.admin = User.objects.create_user(username='deadline_admin', password='pw', role=User.Role.ADMIN)
+        # Courses tab access is what controls deadline-extension management
+        # now — flat/global, no team dimension any more (team-scoping
+        # removed, see apps.core.permissions.user_can_access_tab's own
+        # comment). deadline_manager deliberately has NO permission set,
+        # replacing the old "sees/manages only their own team" tier with
+        # a clean has-tab-access-or-doesn't split.
+        courses_set = PermissionSet.objects.create(name='Course Manager', can_access_courses=True)
+        self.admin = User.objects.create_user(username='deadline_admin', password='pw', permission_set=courses_set)
         self.team = Team.objects.create(name='Deadline Team')
         self.other_team = Team.objects.create(name='Other Deadline Team')
-        self.manager = User.objects.create_user(
-            username='deadline_manager', password='pw', role=User.Role.MANAGER, team=self.team
-        )
+        self.manager = User.objects.create_user(username='deadline_manager', password='pw', team=self.team)
         self.member = User.objects.create_user(
             username='deadline_member', password='pw', role=User.Role.MEMBER, team=self.team
         )
@@ -800,32 +811,33 @@ class CourseDeadlineTests(APIAuthTestCase):
         )
         self.assertEqual(resp.status_code, 403)
 
-    def test_manager_can_grant_extension_for_own_team_member(self):
+    def test_courses_tab_access_can_grant_an_extension_for_any_user(self):
+        admin_client = self.auth('deadline_admin', 'pw')
+        resp = admin_client.post(
+            '/api/v1/course-deadline-extensions/',
+            {'course': str(self.course.id), 'user': self.other_team_member.id, 'extended_deadline': '2026-03-15'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+
+    def test_no_courses_tab_access_cannot_grant_an_extension(self):
         manager_client = self.auth('deadline_manager', 'pw')
         resp = manager_client.post(
             '/api/v1/course-deadline-extensions/',
             {'course': str(self.course.id), 'user': self.member.id, 'extended_deadline': '2026-03-15'},
             format='json',
         )
-        self.assertEqual(resp.status_code, 201, resp.content)
-
-    def test_manager_cannot_grant_extension_outside_own_team(self):
-        manager_client = self.auth('deadline_manager', 'pw')
-        resp = manager_client.post(
-            '/api/v1/course-deadline-extensions/',
-            {'course': str(self.course.id), 'user': self.other_team_member.id, 'extended_deadline': '2026-03-15'},
-            format='json',
-        )
         self.assertEqual(resp.status_code, 403)
 
-    def test_manager_cannot_see_extensions_outside_own_team(self):
+    def test_no_courses_tab_access_cannot_list_extensions_at_all(self):
+        # No team-scoped "sees 0 results" middle tier any more — no tab
+        # access means the endpoint is closed outright, not filtered down.
         CourseDeadlineExtension.objects.create(
             course=self.course, user=self.other_team_member, extended_deadline=datetime.date(2026, 3, 15)
         )
         manager_client = self.auth('deadline_manager', 'pw')
         resp = manager_client.get(f'/api/v1/course-deadline-extensions/?course={self.course.id}')
-        self.assertEqual(resp.status_code, 200, resp.content)
-        self.assertEqual(len(resp.data['results']), 0)
+        self.assertEqual(resp.status_code, 403)
 
     def test_only_one_extension_per_user_per_course(self):
         admin_client = self.auth('deadline_admin', 'pw')
@@ -872,12 +884,12 @@ class CourseDeadlineTests(APIAuthTestCase):
         resp = other_client.get(f'/api/v1/courses/{self.course.id}/')
         self.assertEqual(resp.data['my_deadline'], datetime.date(2026, 1, 31))
 
-    def test_manager_can_update_their_own_teams_extension_date(self):
+    def test_courses_tab_access_can_update_any_extensions_date(self):
         extension = CourseDeadlineExtension.objects.create(
             course=self.course, user=self.member, extended_deadline=datetime.date(2026, 3, 15)
         )
-        manager_client = self.auth('deadline_manager', 'pw')
-        resp = manager_client.patch(
+        admin_client = self.auth('deadline_admin', 'pw')
+        resp = admin_client.patch(
             f'/api/v1/course-deadline-extensions/{extension.id}/',
             {'extended_deadline': '2026-04-01'},
             format='json',
@@ -886,21 +898,18 @@ class CourseDeadlineTests(APIAuthTestCase):
         extension.refresh_from_db()
         self.assertEqual(extension.extended_deadline, datetime.date(2026, 4, 1))
 
-    def test_cannot_repoint_an_extension_to_a_user_outside_the_team_via_patch(self):
+    def test_cannot_repoint_an_extension_via_patch(self):
         """setDeadlineExtension (app/actions/deadlines.ts) only ever PATCHes
-        `extended_deadline`, but the API itself allowed `user` through too —
-        a manager could PATCH an existing extension's `user` to someone
-        OUTSIDE their own team, completely bypassing the exact team check
-        perform_create enforces on the equivalent POST. `course` has the
-        same hole for the same reason. `user`/`course` are read-only once an
-        instance exists (see the serializer's get_fields()), so DRF just
-        silently drops the attempted change rather than erroring — the
+        `extended_deadline` — the API itself allows `user`/`course` through
+        on the serializer's face, but both are read-only once an instance
+        exists (see the serializer's get_fields()), so DRF just silently
+        drops an attempted change to either rather than erroring — the
         contract that actually matters is that the row is untouched."""
         extension = CourseDeadlineExtension.objects.create(
             course=self.course, user=self.member, extended_deadline=datetime.date(2026, 3, 15)
         )
-        manager_client = self.auth('deadline_manager', 'pw')
-        resp = manager_client.patch(
+        admin_client = self.auth('deadline_admin', 'pw')
+        resp = admin_client.patch(
             f'/api/v1/course-deadline-extensions/{extension.id}/',
             {'user': self.other_team_member.id},
             format='json',
@@ -910,13 +919,13 @@ class CourseDeadlineTests(APIAuthTestCase):
         extension.refresh_from_db()
         self.assertEqual(extension.user_id, self.member.id)
 
-    def test_manager_cannot_delete_another_teams_extension(self):
+    def test_no_courses_tab_access_cannot_delete_an_extension(self):
         extension = CourseDeadlineExtension.objects.create(
             course=self.course, user=self.other_team_member, extended_deadline=datetime.date(2026, 3, 15)
         )
         manager_client = self.auth('deadline_manager', 'pw')
         resp = manager_client.delete(f'/api/v1/course-deadline-extensions/{extension.id}/')
-        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.status_code, 403)
         self.assertTrue(CourseDeadlineExtension.objects.filter(id=extension.id).exists())
 
 
@@ -926,7 +935,14 @@ class ReusableLessonTests(APIAuthTestCase):
     live link: editing either side afterward must never affect the other."""
 
     def setUp(self):
-        self.admin = User.objects.create_user(username='rl_admin', password='pw', role=User.Role.ADMIN)
+        # Courses tab access, not just course ownership — the reusable-
+        # lesson library itself (e.g. deleting an entry) has no owning
+        # course to grant access via (see ReusableLessonViewSet's own
+        # comment), unlike save-as-reusable/import below which also work
+        # via rl_admin being source_course/target_course's owner (set
+        # automatically — see Course.save()'s created_by fallback).
+        courses_set = PermissionSet.objects.create(name='Course Manager', can_access_courses=True)
+        self.admin = User.objects.create_user(username='rl_admin', password='pw', permission_set=courses_set)
         self.member = User.objects.create_user(username='rl_member', password='pw', role=User.Role.MEMBER)
 
         self.source_course = Course.objects.create(name='Source Course', created_by=self.admin)
@@ -1048,12 +1064,15 @@ class CourseAssignmentTests(APIAuthTestCase):
     overlap on the same course."""
 
     def setUp(self):
-        self.admin = User.objects.create_user(username='ca_admin', password='pw', role=User.Role.ADMIN)
+        # Courses tab access, flat/global — no team dimension any more
+        # (team-scoping removed, see apps.core.permissions
+        # .user_can_access_tab's own comment). ca_manager deliberately has
+        # no permission set, replacing the old team-scoped middle tier.
+        courses_set = PermissionSet.objects.create(name='Course Manager', can_access_courses=True)
+        self.admin = User.objects.create_user(username='ca_admin', password='pw', permission_set=courses_set)
         self.team = Team.objects.create(name='CA Team')
         self.other_team = Team.objects.create(name='CA Other Team')
-        self.manager = User.objects.create_user(
-            username='ca_manager', password='pw', role=User.Role.MANAGER, team=self.team
-        )
+        self.manager = User.objects.create_user(username='ca_manager', password='pw', team=self.team)
         self.member = User.objects.create_user(
             username='ca_member', password='pw', role=User.Role.MEMBER, team=self.team
         )
@@ -1105,17 +1124,19 @@ class CourseAssignmentTests(APIAuthTestCase):
         self.assertEqual(len(resp.data['results']), 1)
         self.assertEqual(resp.data['results'][0]['user'], self.member.id)
 
-    def test_manager_sees_only_their_teams_assignments(self):
+    def test_no_courses_tab_access_sees_only_their_own_assignments(self):
         CourseAssignment.objects.create(course=self.course, user=self.member, assigned_by=self.admin)
-        CourseAssignment.objects.create(course=self.course, user=self.other_team_member, assigned_by=self.admin)
+        manager_assignment = CourseAssignment.objects.create(
+            course=self.course, user=self.manager, assigned_by=self.admin
+        )
 
         manager_client = self.auth('ca_manager', 'pw')
         resp = manager_client.get('/api/v1/course-assignments/')
         self.assertEqual(resp.status_code, 200, resp.content)
         self.assertEqual(len(resp.data['results']), 1)
-        self.assertEqual(resp.data['results'][0]['user'], self.member.id)
+        self.assertEqual(resp.data['results'][0]['id'], str(manager_assignment.id))
 
-    def test_manager_cannot_assign_course_to_user_outside_their_team(self):
+    def test_no_courses_tab_access_cannot_assign_a_course_to_anyone(self):
         manager_client = self.auth('ca_manager', 'pw')
         resp = manager_client.post(
             '/api/v1/course-assignments/',
@@ -1185,17 +1206,13 @@ class CourseAssignmentTests(APIAuthTestCase):
         )
         self.assertEqual(resp.status_code, 401)
 
-    def test_manager_cannot_delete_another_teams_assignment(self):
-        """get_queryset's team-scoping has to protect DESTROY too, not just
-        LIST — a manager who somehow learns another team's assignment id
-        (sequential ids, a shared link, whatever) must not be able to
-        delete it just by guessing the URL."""
+    def test_no_courses_tab_access_cannot_delete_any_assignment(self):
         assignment = CourseAssignment.objects.create(
             course=self.course, user=self.other_team_member, assigned_by=self.admin
         )
         manager_client = self.auth('ca_manager', 'pw')
         resp = manager_client.delete(f'/api/v1/course-assignments/{assignment.id}/')
-        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.status_code, 403)
         self.assertTrue(CourseAssignment.objects.filter(id=assignment.id).exists())
 
     def test_update_is_not_allowed_at_all(self):
@@ -1216,3 +1233,333 @@ class CourseAssignmentTests(APIAuthTestCase):
         self.assertEqual(resp.status_code, 405, resp.content)
         assignment.refresh_from_db()
         self.assertEqual(assignment.user_id, self.member.id)
+
+
+class CourseArchiveTests(APIAuthTestCase):
+    """DELETE on a course now archives instead of hard-deleting (mirrors
+    TemplateViewSet/UserViewSet) — the real, final hard delete only lives
+    behind the new `purge` action, which deliberately purges this course's
+    CourseAttempt history across every user first, since an admin reaching
+    this action has already made a deliberate, final decision."""
+
+    def setUp(self):
+        # Needs both 'archive' (destroy/restore/purge — its own tab,
+        # separate from 'courses', see CourseViewSet.get_permissions's own
+        # comment) and 'courses' (this suite also lists /courses/ directly
+        # to confirm archived-exclusion) — is_platform_admin covers both
+        # without needing two separately-reasoned-about grants.
+        self.admin = User.objects.create_user(username='ar_admin', password='pw', is_platform_admin=True)
+        self.member = User.objects.create_user(username='ar_member', password='pw', role=User.Role.MEMBER)
+        self.course = Course.objects.create(name='Archive Me', created_by=self.admin)
+
+    def test_delete_archives_instead_of_deleting(self):
+        admin_client = self.auth('ar_admin', 'pw')
+        resp = admin_client.delete(f'/api/v1/courses/{self.course.id}/')
+        self.assertEqual(resp.status_code, 204, resp.content)
+        self.course.refresh_from_db()
+        self.assertTrue(self.course.is_archived)
+        self.assertEqual(self.course.archived_by_id, self.admin.id)
+        self.assertIsNotNone(self.course.archived_at)
+
+    def test_archived_course_is_excluded_from_the_default_list(self):
+        admin_client = self.auth('ar_admin', 'pw')
+        admin_client.delete(f'/api/v1/courses/{self.course.id}/')
+        resp = admin_client.get('/api/v1/courses/')
+        self.assertNotIn(str(self.course.id), [c['id'] for c in resp.data['results']])
+        resp = admin_client.get('/api/v1/courses/?archived=true')
+        self.assertIn(str(self.course.id), [c['id'] for c in resp.data['results']])
+
+    def test_restore_brings_it_back_to_the_default_list(self):
+        admin_client = self.auth('ar_admin', 'pw')
+        admin_client.delete(f'/api/v1/courses/{self.course.id}/')
+        resp = admin_client.post(f'/api/v1/courses/{self.course.id}/restore/')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.course.refresh_from_db()
+        self.assertFalse(self.course.is_archived)
+        self.assertIsNone(self.course.archived_by_id)
+        resp = admin_client.get('/api/v1/courses/')
+        self.assertIn(str(self.course.id), [c['id'] for c in resp.data['results']])
+
+    def test_purge_requires_archiving_first(self):
+        admin_client = self.auth('ar_admin', 'pw')
+        resp = admin_client.post(f'/api/v1/courses/{self.course.id}/purge/')
+        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertTrue(Course.objects.filter(id=self.course.id).exists())
+
+    def test_purge_deletes_the_course_and_purges_attempt_history(self):
+        version = CourseVersion.objects.create(course=self.course, version_number=1, created_by=self.admin)
+        CourseAttempt.objects.create(course_version=version, user=self.member)
+        admin_client = self.auth('ar_admin', 'pw')
+        admin_client.delete(f'/api/v1/courses/{self.course.id}/')
+        resp = admin_client.post(f'/api/v1/courses/{self.course.id}/purge/')
+        self.assertEqual(resp.status_code, 204, resp.content)
+        self.assertFalse(Course.objects.filter(id=self.course.id).exists())
+        self.assertFalse(CourseAttempt.objects.filter(course_version=version).exists())
+
+    def test_member_cannot_archive_restore_or_purge(self):
+        member_client = self.auth('ar_member', 'pw')
+        self.assertEqual(member_client.delete(f'/api/v1/courses/{self.course.id}/').status_code, 403)
+        self.assertEqual(member_client.post(f'/api/v1/courses/{self.course.id}/restore/').status_code, 403)
+        self.assertEqual(member_client.post(f'/api/v1/courses/{self.course.id}/purge/').status_code, 403)
+
+
+class CourseOwnerArchivePermissionTests(APIAuthTestCase):
+    """HasArchiveTabAccessOrIsOwner (apps/core/permissions.py) — a manager-
+    equivalent permission set with no Archive tab granted should still be
+    able to archive/restore/purge a course they personally own; anyone
+    else in that same position (no Archive tab, not the owner) stays
+    blocked exactly as before. Also covers restore/purge's own explicit
+    check_object_permissions() call, since both bypass get_object() (to
+    reach an already-archived row) and so don't get DRF's automatic
+    object-level check for free the way destroy does."""
+
+    def setUp(self):
+        # Deliberately NOT given 'archive' — that's the whole point of
+        # this suite: owner access has to work WITHOUT it. role=ADMIN
+        # explicitly, not left at its default — role defaults to MEMBER
+        # (operative), and the owner bypass this suite is testing is
+        # deliberately walled off from operatives (see
+        # HasArchiveTabAccessOrIsOwner's own comment) — these fixtures are
+        # meant to represent an OFFICE user who just lacks the Archive
+        # tab, not an operative, so leaving role at its default would
+        # silently test the wrong scenario entirely.
+        no_archive = PermissionSet.objects.create(
+            name='No Archive', can_access_courses=True, can_access_templates=True,
+        )
+        self.owner = User.objects.create_user(
+            username='oap_owner', password='pw', role=User.Role.ADMIN, permission_set=no_archive,
+        )
+        self.other = User.objects.create_user(
+            username='oap_other', password='pw', role=User.Role.ADMIN, permission_set=no_archive,
+        )
+        self.course = Course.objects.create(name='Owner Archive Test', created_by=self.owner, owner=self.owner)
+
+    def test_owner_without_archive_tab_can_still_archive_their_own_course(self):
+        client = self.auth('oap_owner', 'pw')
+        resp = client.delete(f'/api/v1/courses/{self.course.id}/')
+        self.assertEqual(resp.status_code, 204, resp.content)
+        self.course.refresh_from_db()
+        self.assertTrue(self.course.is_archived)
+
+    def test_non_owner_without_archive_tab_still_blocked(self):
+        client = self.auth('oap_other', 'pw')
+        resp = client.delete(f'/api/v1/courses/{self.course.id}/')
+        self.assertEqual(resp.status_code, 403, resp.content)
+        self.course.refresh_from_db()
+        self.assertFalse(self.course.is_archived)
+
+    def test_error_message_names_the_owner(self):
+        client = self.auth('oap_other', 'pw')
+        resp = client.delete(f'/api/v1/courses/{self.course.id}/')
+        self.assertIn('oap_owner', resp.data['detail'])
+
+    def test_owner_without_archive_tab_can_restore_their_own_course(self):
+        self.course.is_archived = True
+        self.course.save(update_fields=['is_archived'])
+        client = self.auth('oap_owner', 'pw')
+        resp = client.post(f'/api/v1/courses/{self.course.id}/restore/')
+        self.assertEqual(resp.status_code, 200, resp.content)
+
+    def test_non_owner_without_archive_tab_cannot_restore(self):
+        self.course.is_archived = True
+        self.course.save(update_fields=['is_archived'])
+        client = self.auth('oap_other', 'pw')
+        resp = client.post(f'/api/v1/courses/{self.course.id}/restore/')
+        self.assertEqual(resp.status_code, 403, resp.content)
+
+    def test_owner_without_archive_tab_can_purge_their_own_course(self):
+        self.course.is_archived = True
+        self.course.save(update_fields=['is_archived'])
+        client = self.auth('oap_owner', 'pw')
+        resp = client.post(f'/api/v1/courses/{self.course.id}/purge/')
+        self.assertEqual(resp.status_code, 204, resp.content)
+        self.assertFalse(Course.objects.filter(id=self.course.id).exists())
+
+    def test_non_owner_without_archive_tab_cannot_purge(self):
+        self.course.is_archived = True
+        self.course.save(update_fields=['is_archived'])
+        client = self.auth('oap_other', 'pw')
+        resp = client.post(f'/api/v1/courses/{self.course.id}/purge/')
+        self.assertEqual(resp.status_code, 403, resp.content)
+        self.assertTrue(Course.objects.filter(id=self.course.id).exists())
+
+
+class CourseOwnershipTests(APIAuthTestCase):
+    """Course.owner/editors open up real editing rights (course fields,
+    versions, lessons, slides) to non-admins scoped to ONE specific
+    course, without making them a global admin — see
+    apps.core.permissions.IsContentOwnerEditorOrAdmin. A manager with
+    neither relationship to the course stays as locked out as before."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(username='own_admin', password='pw', role=User.Role.ADMIN)
+        # created_by=admin, owner defaults to admin too (Course.save's
+        # fallback) — manually reassigned to the designated owner/editor
+        # below so each test can decide who holds which role.
+        self.owner = User.objects.create_user(username='own_owner', password='pw', role=User.Role.MANAGER)
+        self.editor = User.objects.create_user(username='own_editor', password='pw', role=User.Role.MANAGER)
+        self.outsider = User.objects.create_user(username='own_outsider', password='pw', role=User.Role.MANAGER)
+        self.course = Course.objects.create(name='Owned Course', created_by=self.admin, owner=self.owner)
+        self.course.editors.add(self.editor)
+        self.version = CourseVersion.objects.create(course=self.course, version_number=1, created_by=self.admin)
+
+    def test_editor_can_edit_course_fields_and_create_lesson_and_slide(self):
+        editor_client = self.auth('own_editor', 'pw')
+        resp = editor_client.patch(f'/api/v1/courses/{self.course.id}/', {'name': 'Renamed'}, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+
+        resp = editor_client.post(
+            '/api/v1/lessons/',
+            {'course_version': str(self.version.id), 'title': 'L1', 'description': '', 'order': 0},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+        lesson_id = resp.data['id']
+
+        resp = editor_client.post(
+            '/api/v1/slides/',
+            {'lesson': lesson_id, 'slide_type': 'content', 'title': 'S1', 'order': 0, 'config': {}},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+
+    def test_owner_can_edit_too(self):
+        owner_client = self.auth('own_owner', 'pw')
+        resp = owner_client.patch(f'/api/v1/courses/{self.course.id}/', {'name': 'Renamed'}, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+
+    def test_outsider_manager_is_blocked(self):
+        outsider_client = self.auth('own_outsider', 'pw')
+        resp = outsider_client.patch(f'/api/v1/courses/{self.course.id}/', {'name': 'Renamed'}, format='json')
+        self.assertEqual(resp.status_code, 403, resp.content)
+        resp = outsider_client.post(
+            '/api/v1/lessons/',
+            {'course_version': str(self.version.id), 'title': 'L1', 'description': '', 'order': 0},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 403, resp.content)
+
+    def test_only_the_super_super_user_can_transfer_ownership(self):
+        # Tightened deliberately: transfer-ownership used to be reachable
+        # by the current owner or anyone with Courses tab access
+        # (IsContentOwnerOrAdmin) — now it's is_superuser only, not even
+        # the owner themselves, per the user's own words: "only me the
+        # super super user can take ownership of a course... no one else
+        # can, even the original owner."
+        editor_client = self.auth('own_editor', 'pw')
+        resp = editor_client.post(
+            f'/api/v1/courses/{self.course.id}/transfer-ownership/', {'owner': self.editor.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 403, resp.content)
+
+        # The owner themselves can no longer self-transfer either.
+        owner_client = self.auth('own_owner', 'pw')
+        resp = owner_client.post(
+            f'/api/v1/courses/{self.course.id}/transfer-ownership/', {'owner': self.editor.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 403, resp.content)
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.owner_id, self.owner.id)
+
+        # Only the super-super-user can actually do it.
+        superuser = User.objects.create_user(username='own_superuser', password='pw', is_superuser=True)
+        superuser_client = self.auth('own_superuser', 'pw')
+        resp = superuser_client.post(
+            f'/api/v1/courses/{self.course.id}/transfer-ownership/', {'owner': self.editor.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.owner_id, self.editor.id)
+
+        # The old owner lost edit access; the new one (formerly just an
+        # editor) now has the stricter owner-only rights too. And can't
+        # transfer it back themselves either — not even to reclaim it.
+        old_owner_client = self.auth('own_owner', 'pw')
+        resp = old_owner_client.patch(f'/api/v1/courses/{self.course.id}/', {'name': 'x'}, format='json')
+        self.assertEqual(resp.status_code, 403, resp.content)
+        resp = old_owner_client.post(
+            f'/api/v1/courses/{self.course.id}/transfer-ownership/', {'owner': self.owner.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 403, resp.content)
+
+    def test_only_owner_or_admin_can_set_editors(self):
+        editor_client = self.auth('own_editor', 'pw')
+        resp = editor_client.post(
+            f'/api/v1/courses/{self.course.id}/set-editors/', {'editors': [self.outsider.id]}, format='json',
+        )
+        self.assertEqual(resp.status_code, 403, resp.content)
+
+        owner_client = self.auth('own_owner', 'pw')
+        resp = owner_client.post(
+            f'/api/v1/courses/{self.course.id}/set-editors/', {'editors': [self.outsider.id]}, format='json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(set(self.course.editors.values_list('id', flat=True)), {self.outsider.id})
+
+        # Outsider is now an editor, the old editor is not (full replace).
+        outsider_client = self.auth('own_outsider', 'pw')
+        resp = outsider_client.patch(f'/api/v1/courses/{self.course.id}/', {'name': 'x'}, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+
+
+class DemotedOwnerLockoutTests(APIAuthTestCase):
+    """The owner/editor bypass in user_can_edit_content, IsContentOwnerOrAdmin,
+    and HasArchiveTabAccessOrIsOwner is deliberately walled off from a
+    role=='member' (operative) account, even one that's still the actual
+    owner/editor of a course — see each of those three's own comment on
+    why. Demoting a content owner back to a plain operative must NOT
+    delete or reassign their ownership (that's the whole point — it's
+    ready to resume the instant real access is restored), but it DOES
+    have to fully revoke their ability to act on it in the meantime,
+    including through a bookmarked builder URL discovered after their
+    "Courses" nav link is gone."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username='demoted_owner', password='pw', role=User.Role.MEMBER)
+        self.course = Course.objects.create(name='Demoted Owner Course', created_by=self.owner, owner=self.owner)
+        self.course.editors.add(
+            User.objects.create_user(username='demoted_editor', password='pw', role=User.Role.MEMBER),
+        )
+
+    def test_demoted_operative_owner_cannot_edit_their_own_course(self):
+        client = self.auth('demoted_owner', 'pw')
+        resp = client.patch(f'/api/v1/courses/{self.course.id}/', {'name': 'Hijacked'}, format='json')
+        self.assertEqual(resp.status_code, 403, resp.content)
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.name, 'Demoted Owner Course')
+
+    def test_demoted_operative_editor_cannot_edit_the_course(self):
+        client = self.auth('demoted_editor', 'pw')
+        resp = client.patch(f'/api/v1/courses/{self.course.id}/', {'name': 'Hijacked'}, format='json')
+        self.assertEqual(resp.status_code, 403, resp.content)
+
+    def test_demoted_operative_owner_cannot_transfer_ownership_or_set_editors(self):
+        client = self.auth('demoted_owner', 'pw')
+        other = User.objects.create_user(username='demoted_other', password='pw', role=User.Role.MEMBER)
+        resp = client.post(
+            f'/api/v1/courses/{self.course.id}/transfer-ownership/', {'owner': other.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 403, resp.content)
+        resp = client.post(f'/api/v1/courses/{self.course.id}/set-editors/', {'editors': [other.id]}, format='json')
+        self.assertEqual(resp.status_code, 403, resp.content)
+
+    def test_demoted_operative_owner_cannot_archive_or_purge_their_own_course(self):
+        client = self.auth('demoted_owner', 'pw')
+        resp = client.delete(f'/api/v1/courses/{self.course.id}/')
+        self.assertEqual(resp.status_code, 403, resp.content)
+        self.course.refresh_from_db()
+        self.assertFalse(self.course.is_archived)
+
+    def test_ownership_survives_demotion_untouched_and_resumes_on_regrant(self):
+        # The data-preservation half: demotion itself (already true before
+        # any of this session's lockout changes — owner/editor rows are
+        # never touched by a role/permission_set/is_platform_admin change)
+        # plus the UI/access half: a courses-tab grant immediately restores
+        # full editing, with nothing about the Course row needing to
+        # change for that to work.
+        self.assertEqual(self.course.owner_id, self.owner.id)
+        self.owner.permission_set = PermissionSet.objects.create(name='Re-granted', can_access_courses=True)
+        self.owner.save(update_fields=['permission_set'])
+        client = self.auth('demoted_owner', 'pw')
+        resp = client.patch(f'/api/v1/courses/{self.course.id}/', {'name': 'Resumed'}, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)

@@ -17,6 +17,7 @@ import { useIsClient } from "@/lib/use-is-client";
 import { cn, stripHtml } from "@/lib/utils";
 import { useActiveEditorContext } from "../active-editor-context";
 import { EditableImage } from "./image-field";
+import { FreeformContentSlide } from "./freeform-content-slide";
 import type { SlideFaceProps } from "./index";
 import { PositionableBox } from "./positionable-box";
 import { EditableTable } from "./table-field";
@@ -30,9 +31,9 @@ import { EditableTable } from "./table-field";
 // key={slide.id} (see slide-canvas.tsx), so switching slides fully remounts
 // it — any pending debounced call from the previously selected slide is
 // cancelled by the hook's unmount cleanup rather than firing stale.
-const CHANGE_DEBOUNCE_MS = 500;
+export const CHANGE_DEBOUNCE_MS = 500;
 
-const FIELD_CLASSES =
+export const FIELD_CLASSES =
   "w-full resize-none border-none bg-transparent p-0 text-foreground outline-none placeholder:text-muted-foreground/50 focus:rounded focus:outline-none focus:ring-1 focus:ring-primary/40";
 
 // Every field's edit/static render now always sits inside a definite-size
@@ -43,7 +44,7 @@ const FIELD_CLASSES =
 // <EditorContent> inside RichTextBody for the fuller explanation of why an
 // *outer* wrapper needing this isn't automatic just because the box has a
 // real size.
-const FILL_BOX = "h-full w-full";
+export const FILL_BOX = "h-full w-full";
 
 // Title/subtitle are meant to stay genuinely one visual line — that's the
 // whole point of suppressing Enter in useSingleLineSlideEditor below — but
@@ -68,13 +69,45 @@ const FILL_BOX = "h-full w-full";
 // race instead of depending on stylesheet load order.
 const SINGLE_LINE_TYPOGRAPHY = "overflow-hidden text-ellipsis !whitespace-nowrap";
 
-export function ContentSlideFace({
-  slide,
-  mode,
-  courseVersionId,
-  onTitleChange,
-  onConfigChange,
-}: SlideFaceProps) {
+// A content slide renders via exactly ONE of two systems, branched on
+// whether `slide.config.layout` is set at all (see SlideConfig.layout's own
+// comment in course-types.ts for the full rationale — short version: no
+// migration, zero regression risk for every slide that already existed
+// before the freeform system was introduced).
+//
+//  - `layout` set -> everything below this check, the ORIGINAL fixed-field
+//    system (title/subtitle/body/body2, nine hardcoded ContentSlideLayout
+//    presets, box_transforms keyed by field NAME). Untouched by the
+//    freeform work — every pre-existing slide keeps rendering exactly as
+//    it always has.
+//  - `layout` unset -> FreeformContentSlide (freeform-content-slide.tsx):
+//    author-placed text_boxes[], ordered/stacked via object_order, a
+//    single generic text-box component with none of this file's title-
+//    specific special-casing (forced bold, single-line/nowrap, suppressed
+//    Enter). This is what a brand-new content slide gets by default
+//    (app/actions/courses.ts's defaultSlideConfig) and what a "Templates"
+//    preset seeds into (properties-panel.tsx) — picking a template does
+//    NOT set `layout` (that would re-enter the legacy branch below); it
+//    just pre-populates text_boxes/object_order with a starting
+//    arrangement that's ordinary, freely-editable freeform content from
+//    that point on.
+// Thin dispatcher, no hooks of its own — a condition picking between two
+// sibling components, each with its own unconditional hooks, same pattern
+// this file already uses for EditableBody/EditableTitle's mode dispatch
+// just below (see that pair's own comment on why a condition has to select
+// a whole component rather than branch mid-component: a hook can never be
+// called conditionally, and LegacyContentSlide's box_transforms-syncing
+// ref/effect below has no meaning for — and must never run for — a
+// freeform slide).
+export function ContentSlideFace(props: SlideFaceProps) {
+  if (props.slide.config.layout == null) {
+    return <FreeformContentSlide {...props} />;
+  }
+  return <LegacyContentSlide {...props} />;
+}
+
+function LegacyContentSlide(props: SlideFaceProps) {
+  const { slide, mode, courseVersionId, onTitleChange, onConfigChange } = props;
   const layout: ContentSlideLayout = slide.config.layout ?? "title-body";
   // The percentage basis for every PositionableBox on this slide — the
   // slide's own top-level box below (whichever layout branch is active),
@@ -465,7 +498,7 @@ function EditableSubtitle({
 // the current, deliberately-unrestricted title extension set) a title could
 // in principle contain a list, in which case it should look like whatever a
 // bare, unstyled list looks like rather than adopting body copy's spacing.
-const BODY_TYPOGRAPHY =
+export const BODY_TYPOGRAPHY =
   "h-full overflow-y-auto text-lg leading-relaxed [&_p]:my-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-6 [&_ol]:pl-6 [&_li]:my-0.5";
 
 // Non-interactive render path for any sanitized-HTML field on this face —
@@ -479,7 +512,7 @@ const BODY_TYPOGRAPHY =
 // BODY_TYPOGRAPHY + "Click to add text", EditableTitle passes
 // "text-4xl font-bold" + "Click to add title") rather than this component
 // assuming either one.
-function StaticField({
+export function StaticField({
   value,
   className,
   placeholder,

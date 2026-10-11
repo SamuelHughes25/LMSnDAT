@@ -8,14 +8,33 @@ from .constants import QuestionType
 class Template(BaseModel):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
-    created_by = models.ForeignKey('accounts.User', on_delete=models.PROTECT, related_name='templates_created')
+    # Mirrors Course.created_by exactly (SET_NULL, not PROTECT) — see that
+    # model's comment.
+    created_by = models.ForeignKey(
+        'accounts.User', null=True, blank=True, on_delete=models.SET_NULL, related_name='templates_created'
+    )
+    # Mirrors Course.owner/editors exactly — see that model's comments.
+    owner = models.ForeignKey('accounts.User', on_delete=models.PROTECT, related_name='templates_owned')
+    editors = models.ManyToManyField('accounts.User', blank=True, related_name='templates_editing')
     is_archived = models.BooleanField(default=False)
+    # Mirrors Course.archived_by/archived_at exactly — see that model's
+    # comment for why SET_NULL, not PROTECT.
+    archived_by = models.ForeignKey(
+        'accounts.User', null=True, blank=True, on_delete=models.SET_NULL, related_name='+'
+    )
+    archived_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['name']
 
     def __str__(self):
         return self.name
+
+    def save(self, *args, **kwargs):
+        # Mirrors Course.save's identical fallback — see its comment.
+        if self.owner_id is None and self.created_by_id is not None:
+            self.owner_id = self.created_by_id
+        super().save(*args, **kwargs)
 
     @property
     def published_version(self):

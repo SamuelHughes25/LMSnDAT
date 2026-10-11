@@ -3,9 +3,10 @@
 import { X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import type { Slide, SlideConfig } from "@/lib/course-types";
+import type { Slide, SlideConfig, SlideObjectRef } from "@/lib/course-types";
 import { ObjectPositionFields } from "./object-position-fields";
 import { CANVAS_H, CANVAS_W } from "./slide-canvas";
+import { useSlideSelection } from "./slide-selection-context";
 import {
   DEFAULT_POSITION_PCT,
   DEFAULT_SIZE_PCT,
@@ -41,6 +42,7 @@ export type ImageObjectPropertiesProps =
 // that point), unlike a text box's top-left-anchored position fields.
 export function ImageObjectProperties(props: ImageObjectPropertiesProps) {
   const { slide, courseVersionId, onConfigChange } = props;
+  const { deselect } = useSlideSelection();
 
   if (props.kind === "background") {
     const imageUrl = slide.config.background_image_url;
@@ -73,7 +75,10 @@ export function ImageObjectProperties(props: ImageObjectPropertiesProps) {
             ...(sized ? { background_image_width_pct: sized.widthPct, background_image_height_pct: sized.heightPct } : {}),
           })
         }
-        onRemove={() => onConfigChange({ background_image_url: null })}
+        onRemove={() => {
+          deselect(`${slide.id}:background-image`);
+          onConfigChange({ background_image_url: null });
+        }}
         removeLabel="Remove background image"
       />
     );
@@ -105,8 +110,26 @@ export function ImageObjectProperties(props: ImageObjectPropertiesProps) {
           ),
         })
       }
-      onRemove={() =>
-        onConfigChange({ extra_images: (slide.config.extra_images ?? []).filter((img) => img.id !== props.imageId) })
+      onRemove={() => {
+        deselect(`${slide.id}:extra-image:${props.imageId}`);
+        // Found during a review pass: this used to only drop the entry
+        // from extra_images, leaving a dangling reference to it sitting in
+        // object_order — normalizeObjectOrder (course-types.ts) already
+        // filters those out on every read, so nothing actually broke
+        // visibly, but the persisted object_order stayed subtly wrong
+        // until some unrelated reorder/add/delete happened to rewrite it.
+        // Removing it from both right here, same as slide-layers-panel.tsx's
+        // own deleteRef and free-text-box-properties.tsx's handleDelete
+        // already do, fixes it at the source instead of leaning on the
+        // self-heal for something this cheap to just get right.
+        const nextOrder = (slide.config.object_order ?? []).filter(
+          (ref: SlideObjectRef) => !(ref.type === "image" && ref.id === props.imageId),
+        );
+        onConfigChange({
+          extra_images: (slide.config.extra_images ?? []).filter((img) => img.id !== props.imageId),
+          object_order: nextOrder,
+        });
+      }
       }
       removeLabel="Remove image"
     />

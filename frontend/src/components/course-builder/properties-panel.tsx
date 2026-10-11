@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Trash2 } from "lucide-react";
+import { ChevronDown, Plus, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,11 +14,22 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { DEFAULT_SLIDE_TITLE, SLIDE_TYPE_LABELS } from "@/lib/course-types";
-import type { ContentSlideLayout, Lesson, PositionableField, Slide, SlideConfig } from "@/lib/course-types";
+import type {
+  ContentSlideLayout,
+  FreeTextBox,
+  Lesson,
+  PositionableField,
+  Slide,
+  SlideConfig,
+  SlideObjectRef,
+} from "@/lib/course-types";
 import { cn, stripHtml } from "@/lib/utils";
+import { FreeTextBoxProperties } from "./free-text-box-properties";
 import { ImageObjectProperties } from "./image-object-properties";
 import { LessonProperties } from "./lesson-properties";
-import { SlideBackgroundPanel } from "./slide-background-panel";
+import { FreeformAddImageControl, SlideBackgroundPanel } from "./slide-background-panel";
+import { SlideLayersPanel } from "./slide-layers-panel";
+import { useTextBoxPlacement } from "./text-box-placement-context";
 import { TextObjectProperties } from "./text-object-properties";
 
 // What's currently selected WITHIN a slide (see slide-selection-context.tsx's
@@ -28,7 +39,16 @@ import { TextObjectProperties } from "./text-object-properties";
 export type SelectedObject =
   | { type: "text"; field: PositionableField }
   | { type: "background-image" }
-  | { type: "extra-image"; imageId: string };
+  | { type: "extra-image"; imageId: string }
+  // A freeform content slide's own text_boxes[] entry (see course-types.ts's
+  // FreeTextBox) — deliberately a distinct variant from `{type:"text"}`
+  // above rather than reusing it with a widened `field` type: the legacy
+  // variant addresses one of a CLOSED set of named fields
+  // (title/subtitle/body/body2), this one addresses an open-ended,
+  // user-created id, and the two selection-id schemes
+  // (`${slideId}:${field}` vs `${slideId}:text:${boxId}`) are genuinely
+  // different shapes, not just a type-level widening.
+  | { type: "free-text"; boxId: string };
 
 export type PropertiesPanelProps =
   | { kind: "empty" }
@@ -97,6 +117,11 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
   if (props.kind === "object") {
     if (props.object.type === "text") {
       return <TextObjectProperties slide={props.slide} field={props.object.field} onConfigChange={props.onConfigChange} />;
+    }
+    if (props.object.type === "free-text") {
+      return (
+        <FreeTextBoxProperties slide={props.slide} boxId={props.object.boxId} onConfigChange={props.onConfigChange} />
+      );
     }
     if (props.object.type === "background-image") {
       return (
@@ -171,6 +196,116 @@ function hasSlideContent(slide: Slide): boolean {
   return false;
 }
 
+// Freeform-mode twin of hasSlideContent above — gates the "Templates"
+// preset's own destructive-replace confirmation the same way, just checking
+// the freeform fields (text_boxes/extra_images/background image) instead
+// of the legacy named fields. Deliberately NOT the same function: the two
+// systems' "has content" question is genuinely about different fields (see
+// SlideConfig.layout's comment in course-types.ts for why a slide is never
+// in both systems at once, so there's no case where both checks would ever
+// need to run against the same slide).
+function hasFreeformContent(slide: Slide): boolean {
+  const hasText = (box: FreeTextBox) => stripHtml(box.html).trim().length > 0;
+  if ((slide.config.text_boxes ?? []).some(hasText)) return true;
+  if ((slide.config.extra_images ?? []).length > 0) return true;
+  if (slide.config.background_image_url) return true;
+  return false;
+}
+
+// The subset of ContentSlideLayout presets that make sense as a freeform
+// "quick-start" seed — title-table/image-left/image-right are deliberately
+// excluded: they rely on mechanisms (a structured table, a dedicated
+// upload-into-this-slot image box) that don't exist in the generic
+// text-box+extra-image freeform object model, so there's no honest way to
+// "seed" them as ordinary, freely-editable objects. A real, stated scope
+// boundary for this pass, not an oversight.
+const FREEFORM_TEMPLATE_OPTIONS: { value: ContentSlideLayout; label: string }[] = [
+  { value: "title-only", label: "Title only" },
+  { value: "title-subtitle", label: "Title & subtitle" },
+  { value: "title-top", label: "Title top" },
+  { value: "title-bottom", label: "Title bottom" },
+  { value: "title-body", label: "Title & body" },
+  { value: "two-column", label: "Two column" },
+];
+
+function makeTextBoxId(): string {
+  return `text_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+// A plain `<strong>` wrap — the real Bold mark's own universally-recognized
+// default HTML (StarterKit's Bold.renderHTML/parseHTML), not a CSS class
+// and not a guessed font-size markup shape. Loading this into the SAME
+// extension set free-text-box.tsx's editor uses parses it back out as a
+// genuinely active, toggleable Bold mark (shown as "active" in the Text
+// panel, same as if the author had selected the text and clicked Bold
+// themselves) — this is the literal mechanism behind "seeded boxes start
+// pre-formatted via real marks, not a hardcoded style," see this file's own
+// top-of-section comment on the Templates dropdown.
+function titleHtml(text: string, align?: "center"): string {
+  const style = align ? ` style="text-align: ${align}"` : "";
+  return `<p${style}><strong>${text}</strong></p>`;
+}
+
+// Produces a one-time starting arrangement for a freeform slide — called
+// only from the "Templates" dropdown below, never automatically. Positions
+// are deliberately approximate visual equivalents of the legacy layout's
+// own arrangement (see content-slide-face.tsx's layout branches), not
+// pixel-exact — the whole point is that these are just a convenient
+// starting point, freely moved/resized/deleted afterward like any other
+// freeform object.
+function seedFreeformFromTemplate(layout: ContentSlideLayout): {
+  text_boxes: FreeTextBox[];
+  object_order: SlideObjectRef[];
+} {
+  const title: FreeTextBox = { id: makeTextBoxId(), html: titleHtml("New slide"), xPct: 10, yPct: 8, widthPct: 80, heightPct: 15 };
+
+  function withBoxes(...boxes: FreeTextBox[]) {
+    return { text_boxes: boxes, object_order: boxes.map((b): SlideObjectRef => ({ type: "text", id: b.id })) };
+  }
+
+  switch (layout) {
+    case "title-only":
+      return withBoxes({ ...title, yPct: 40, heightPct: 20 });
+    case "title-subtitle": {
+      // Both boxes span a wide chunk of the slide (same symmetric-margin
+      // geometry every other template here uses) but default to
+      // LEFT-aligned text — confirmed as the actual cause of "the title
+      // and subtitle look off-center": the BOX itself is centered on the
+      // slide, but short left-aligned text inside a wide box sits flush
+      // near the box's own left edge, nowhere near the slide's visual
+      // center. Centering the text (not narrowing the box — a centered
+      // box with centered text lands at the slide's midpoint regardless
+      // of how wide the box is) is what actually fixes that; title-only/
+      // title-bottom/etc. use the same wide-box geometry but weren't
+      // reported as looking wrong, so left unchanged.
+      const centeredTitle = { ...title, yPct: 35, heightPct: 15, html: titleHtml("New slide", "center") };
+      const subtitle: FreeTextBox = {
+        id: makeTextBoxId(),
+        html: '<p style="text-align: center">Subtitle</p>',
+        xPct: 15,
+        yPct: 52,
+        widthPct: 70,
+        heightPct: 10,
+      };
+      return withBoxes(centeredTitle, subtitle);
+    }
+    case "title-bottom":
+      return withBoxes({ ...title, yPct: 77 });
+    case "two-column": {
+      const body1: FreeTextBox = { id: makeTextBoxId(), html: "", xPct: 10, yPct: 26, widthPct: 38, heightPct: 66 };
+      const body2: FreeTextBox = { id: makeTextBoxId(), html: "", xPct: 52, yPct: 26, widthPct: 38, heightPct: 66 };
+      return withBoxes(title, body1, body2);
+    }
+    case "title-top":
+      return withBoxes(title);
+    case "title-body":
+    default: {
+      const body: FreeTextBox = { id: makeTextBoxId(), html: "", xPct: 10, yPct: 26, widthPct: 80, heightPct: 66 };
+      return withBoxes(title, body);
+    }
+  }
+}
+
 function SlideProperties({
   slide,
   courseVersionId,
@@ -188,6 +323,13 @@ function SlideProperties({
   // means the dialog is closed. Only ever set when hasSlideContent(slide)
   // is true at click time; see handleLayoutChangeRequest.
   const [pendingLayout, setPendingLayout] = useState<ContentSlideLayout | null>(null);
+  // Same idea, for the freeform system's own "Templates" preset — see
+  // handleTemplateRequest below. Independent state: the two confirmation
+  // flows can never both be relevant for the same slide at once (see
+  // SlideConfig.layout's comment on why a slide is always in exactly one
+  // system), so there's no reason to unify them into one piece of state.
+  const [pendingTemplate, setPendingTemplate] = useState<ContentSlideLayout | null>(null);
+  const { startPlacing } = useTextBoxPlacement();
 
   // The actual switch: resets every layout-scoped field to its blank state
   // (not just box_transforms, which the picker always cleared even before
@@ -228,9 +370,27 @@ function SlideProperties({
     setPendingLayout(layout);
   }
 
+  // Deliberately does NOT set `config.layout` — that would re-enter the
+  // legacy render branch (content-slide-face.tsx's own top-of-file
+  // comment). This seeds text_boxes/object_order with a one-time starting
+  // arrangement and leaves the slide in freeform mode, so the result is
+  // ordinary, freely-editable objects, not a locked structural layout.
+  function applyTemplate(layout: ContentSlideLayout) {
+    onConfigChange(seedFreeformFromTemplate(layout));
+  }
+
+  function handleTemplateRequest(layout: ContentSlideLayout) {
+    if (!hasFreeformContent(slide)) {
+      applyTemplate(layout);
+      return;
+    }
+    setPendingTemplate(layout);
+  }
+
   const isImageLayout =
     slide.slide_type === "content" &&
     (slide.config.layout === "image-left" || slide.config.layout === "image-right");
+  const isFreeformContent = slide.slide_type === "content" && slide.config.layout == null;
 
   return (
     <div className="space-y-4 p-4">
@@ -241,11 +401,39 @@ function SlideProperties({
         </Badge>
       </div>
 
-      {/* Dispatches on slide_type — only "content" has a layout picker
-          this stage. A later stage can grow this into a per-type lookup
-          without disturbing this component's shape. */}
-      {slide.slide_type === "content" && (
+      {/* Legacy content slides (config.layout set — every slide that
+          existed before the freeform system) keep this exact picker,
+          unchanged. Freeform content slides (the default for anything
+          created from here on) get the "Add text box" + layers panel +
+          Templates dropdown block below instead. Other slide_types get
+          neither — only "content" has ever had a layout concept. */}
+      {slide.slide_type === "content" && !isFreeformContent && (
         <ContentLayoutPicker layout={slide.config.layout ?? "title-body"} onChange={handleLayoutChangeRequest} />
+      )}
+
+      {isFreeformContent && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Content</div>
+            {/* A small icon button, not the old full-width labeled one —
+                this panel is meant to grow more add-object buttons over
+                time (shapes, etc.), and a full-width button per object
+                type would eat the whole panel's height before that even
+                starts. */}
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-sm"
+              onClick={startPlacing}
+              aria-label="Add text box"
+              title="Add text box"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+          <SlideLayersPanel slide={slide} onConfigChange={onConfigChange} />
+          <TemplatesDropdown onSelect={handleTemplateRequest} />
+        </div>
       )}
 
       {/* Only ever open when a layout switch was requested on a slide that
@@ -280,6 +468,35 @@ function SlideProperties({
         </DialogContent>
       </Dialog>
 
+      {/* Freeform twin of the dialog above — same shape, gated by
+          hasFreeformContent instead of hasSlideContent (see
+          handleTemplateRequest). */}
+      <Dialog open={pendingTemplate !== null} onOpenChange={(open) => !open && setPendingTemplate(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Apply template?</DialogTitle>
+            <DialogDescription>
+              This slide already has content. Applying a template will replace everything on it with the new
+              template&apos;s starting text boxes. This can&apos;t be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingTemplate(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (pendingTemplate) applyTemplate(pendingTemplate);
+                setPendingTemplate(null);
+              }}
+            >
+              Apply and replace content
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Unlike the layout picker above, this section applies to every
           slide_type — a background image (and, planned next, a background
           color) is cross-cutting styling, not something specific to
@@ -298,19 +515,78 @@ function SlideProperties({
           want box sitting right there in the canvas. Every other layout
           has no on-canvas picture of its own, so this stays the only way
           to add an image there. */}
-      {!isImageLayout && (
+      {/* A freeform content slide gets the small, bottom-of-panel add-image
+          control instead — see FreeformAddImageControl's own comment for
+          why SlideBackgroundPanel's per-image list isn't reused for it
+          (every image it adds is an ordinary layer from the start, managed
+          via the Layers panel above, not a second list of its own here). */}
+      {!isImageLayout && (isFreeformContent ? (
+        <FreeformAddImageControl slide={slide} courseVersionId={courseVersionId} onConfigChange={onConfigChange} />
+      ) : (
         <SlideBackgroundPanel
           imageUrl={slide.config.background_image_url}
           extraImages={slide.config.extra_images ?? []}
           courseVersionId={courseVersionId}
           onConfigChange={onConfigChange}
         />
-      )}
+      ))}
 
       <Button variant="outline" className="w-full text-destructive hover:text-destructive" onClick={onDelete}>
         <Trash2 className="mr-1.5 h-4 w-4" />
         Delete slide
       </Button>
+    </div>
+  );
+}
+
+// What used to be THE layout picker, inline and shown by default, for a
+// freeform content slide — now an explicit, opt-in list of starting
+// presets rather than the default experience (see course-types.ts's
+// SlideConfig.layout comment: the default for a new content slide is now a
+// blank canvas, not title-body). An inline expand/collapse section, not a
+// popup DropdownMenu (the previous version) — a floating overlay in this
+// narrow side panel looked out of place and could overlap neighboring
+// panel content; this instead pushes the option list into the panel's own
+// flow when opened, same collapsed-header/expanded-body shape as the
+// Accordion slide type's own learner-facing render (see
+// accordion-slide-face.tsx's AccordionPresent). Reuses LayoutGlyph for the
+// same small visual icon per option, just one row each instead of a grid.
+function TemplatesDropdown({ onSelect }: { onSelect: (layout: ContentSlideLayout) => void }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-border">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm font-medium hover:bg-muted"
+        aria-expanded={open}
+      >
+        Templates
+        <ChevronDown
+          className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")}
+        />
+      </button>
+      {open && (
+        <div className="space-y-0.5 border-t border-border p-1.5">
+          {FREEFORM_TEMPLATE_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => {
+                onSelect(option.value);
+                setOpen(false);
+              }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
+            >
+              <span className="flex h-5 w-7 items-center justify-center text-muted-foreground">
+                <LayoutGlyph value={option.value} />
+              </span>
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -13,7 +13,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { UsersSearchBar } from "@/components/users-search-bar";
-import type { AccountUser, Group } from "@/lib/accounts-types";
+import type { AccountUser, Group, PermissionSet } from "@/lib/accounts-types";
+import { getUserKindLabel } from "@/lib/accounts-types";
+import { getCurrentUser } from "@/lib/dal";
 import { djangoFetch } from "@/lib/django";
 import type { Paginated } from "@/lib/types";
 
@@ -34,9 +36,11 @@ export default async function UsersPage({
   if (groupFilter) query.set("group", groupFilter);
   const queryString = query.toString();
 
-  const [users, groups] = await Promise.all([
+  const [users, groups, permissionSets, currentUser] = await Promise.all([
     djangoFetch<Paginated<AccountUser>>(`/users/${queryString ? `?${queryString}` : ""}`),
     djangoFetch<Paginated<Group>>("/groups/"),
+    djangoFetch<Paginated<PermissionSet>>("/permission-sets/"),
+    getCurrentUser(),
   ]);
 
   const groupById = new Map(groups.results.map((g) => [g.id, g]));
@@ -45,7 +49,7 @@ export default async function UsersPage({
     <div>
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Users</h1>
-        <NewUserDialog />
+        <NewUserDialog permissionSets={permissionSets.results} />
       </div>
 
       <div className="mt-4 flex items-center gap-2">
@@ -59,7 +63,8 @@ export default async function UsersPage({
             <TableRow>
               <TableHead>Username</TableHead>
               <TableHead>Groups</TableHead>
-              <TableHead>Permission</TableHead>
+              <TableHead>Type</TableHead>
+              <TableHead>Permissions</TableHead>
               <TableHead>Created</TableHead>
               <TableHead className="w-10" />
             </TableRow>
@@ -94,20 +99,41 @@ export default async function UsersPage({
                     )}
                   </TableCell>
                   <TableCell>
-                    <Badge variant="outline" className="capitalize">
-                      {user.role}
-                    </Badge>
+                    <Badge variant="outline">{getUserKindLabel(user)}</Badge>
+                  </TableCell>
+                  <TableCell>
+                    {/* Checked regardless of role now, not just for a
+                        non-operative — an operative CAN be granted
+                        is_superuser/is_platform_admin/a permission set same
+                        as anyone else (see app-shell.tsx's unified nav,
+                        which is what actually makes that grant DO
+                        something now), so hiding it behind a role check
+                        here was silently making a real grant look like it
+                        hadn't taken effect. */}
+                    {user.is_superuser ? (
+                      <Badge>Super-super-user</Badge>
+                    ) : user.is_platform_admin ? (
+                      <Badge>Super user</Badge>
+                    ) : user.permission_set_name ? (
+                      <Badge variant="secondary">{user.permission_set_name}</Badge>
+                    ) : (
+                      <span className="text-muted-foreground">No access</span>
+                    )}
                   </TableCell>
                   <TableCell>{new Date(user.date_joined).toLocaleDateString()}</TableCell>
                   <TableCell>
-                    <DeleteUserButton userId={user.id} username={user.username} />
+                    <DeleteUserButton
+                      userId={user.id}
+                      username={user.username}
+                      disableSelf={user.id === currentUser.id}
+                    />
                   </TableCell>
                 </TableRow>
               );
             })}
             {users.results.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-muted-foreground">
+                <TableCell colSpan={6} className="text-center text-muted-foreground">
                   No users found.
                 </TableCell>
               </TableRow>

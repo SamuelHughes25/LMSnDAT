@@ -10,7 +10,14 @@ class SubmissionFlowTests(APIAuthTestCase):
     to a corrective action — the exact flow from the project brief."""
 
     def setUp(self):
-        self.admin = User.objects.create_user(username='admin', password='pw', role=User.Role.ADMIN)
+        # role=ADMIN for apps.assignments.AssignmentViewSet's still-old
+        # role-based IsAdminOrManager check (POSTs to /assignments/ below)
+        # — that app wasn't part of the permission-sets rework. is_platform_admin
+        # additionally covers the new tab-gated /templates/, /sections/,
+        # /questions/ endpoints used earlier in the same flow.
+        self.admin = User.objects.create_user(
+            username='admin', password='pw', role=User.Role.ADMIN, is_platform_admin=True,
+        )
         self.team = Team.objects.create(name='Ops Team')
         self.member = User.objects.create_user(
             username='member', password='pw', role=User.Role.MEMBER, team=self.team

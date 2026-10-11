@@ -3,7 +3,6 @@ import { notFound } from "next/navigation";
 import { CourseAssessmentSettings } from "@/components/course-assessment-settings";
 import { CourseDeadlineSettings } from "@/components/course-deadline-settings";
 import { CourseThumbnailSettings } from "@/components/course-thumbnail-settings";
-import { DeleteCourseButton } from "@/components/delete-course-button";
 import type { Course } from "@/lib/course-types";
 import { DjangoApiError, djangoFetch } from "@/lib/django";
 
@@ -27,19 +26,6 @@ export default async function CourseSettingsPage({ params }: { params: Promise<{
       <CourseThumbnailSettings course={course} />
       <CourseAssessmentSettings course={course} />
       <CourseDeadlineSettings course={course} />
-
-      <div className="rounded-lg border-2 border-destructive/30 bg-card p-4 shadow-sm">
-        <div className="font-medium text-destructive">Danger zone</div>
-        <p className="mt-1 mb-3 text-sm text-muted-foreground">
-          Permanently delete this course and all of its content. This cannot be undone.
-        </p>
-        <DeleteCourseButton
-          courseId={course.id}
-          courseName={course.name}
-          redirectAfter="/courses"
-          label="Delete course"
-        />
-      </div>
     </div>
   );
 }

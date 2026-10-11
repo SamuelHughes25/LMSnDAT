@@ -354,14 +354,47 @@ class CourseSerializer(serializers.ModelSerializer):
     # that endpoint at all. None for an unauthenticated request or a course
     # with no deadline.
     my_deadline = serializers.SerializerMethodField()
+    archived_by_username = serializers.ReadOnlyField(source='archived_by.username')
+    owner_username = serializers.ReadOnlyField(source='owner.username')
+    # The permanent record of who originally owned this course — see
+    # `owner`'s own transfer-ownership behavior and Course.created_by's
+    # own comment on the model for why these two fields answer genuinely
+    # different questions now that ownership is transferable:
+    # created_by never changes once set (not even transfer_ownership
+    # touches it), so this is the one durable "who made this" fact a
+    # chain of transfers can never erase — exposed here specifically so
+    # the frontend's Ownership card can show it. None if that account was
+    # later permanently deleted (created_by is on_delete=SET_NULL) — a
+    # plain ReadOnlyField on a null relation just resolves to None, no
+    # special-casing needed here.
+    created_by_username = serializers.ReadOnlyField(source='created_by.username')
+    # len(...all()) not .count() — same reasoning as GroupSerializer's own
+    # member_count: CourseViewSet.queryset already does
+    # .prefetch_related('editors'), so this reuses that cache instead of a
+    # fresh COUNT/SELECT per course.
+    editor_usernames = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
         fields = [
-            'id', 'name', 'description', 'thumbnail', 'created_by', 'is_archived',
+            'id', 'name', 'description', 'thumbnail', 'created_by', 'created_by_username', 'is_archived',
+            'archived_by', 'archived_by_username', 'archived_at',
+            'owner', 'owner_username', 'editors', 'editor_usernames',
             'is_assessment', 'passing_score', 'deadline', 'my_deadline', 'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
+        # is_archived/archived_by/archived_at/owner/editors are all
+        # read-only here — they only ever change together with their own
+        # audit trail, via CourseViewSet's destroy/restore/purge/
+        # transfer_ownership/set_editors actions, never a raw PATCH (same
+        # reasoning as UserSerializer's equivalent fields).
+        read_only_fields = [
+            'id', 'created_by', 'created_by_username', 'created_at', 'updated_at',
+            'is_archived', 'archived_by', 'archived_by_username', 'archived_at',
+            'owner', 'owner_username', 'editors', 'editor_usernames',
+        ]
+
+    def get_editor_usernames(self, obj):
+        return [u.username for u in obj.editors.all()]
 
     def get_my_deadline(self, obj):
         request = self.context.get('request')

@@ -58,7 +58,7 @@ export default async function PortalCoursePlayerPage({ params }: { params: Promi
     // stage's fixed 960px canvas, is exactly what previously made the canvas
     // overflow this column and visually bleed into the sidebar. See the
     // fix's commit message for the full "960 > 896" arithmetic. The sidebar
-    // itself also auto-collapses on this route (see portal-shell.tsx's
+    // itself also auto-collapses on this route (see app-shell.tsx's
     // COURSE_PLAYER_PATH) so this column gets the extra width to grow into
     // in the first place.
     //
@@ -74,7 +74,7 @@ export default async function PortalCoursePlayerPage({ params }: { params: Promi
           page's much larger, presentation-style player — every pixel here
           is a pixel the canvas below doesn't get. gap-1 (was gap-3, and
           main's own padding around this whole page shrinks too — see
-          portal-shell.tsx) for the same reason, trimmed further after the
+          app-shell.tsx) for the same reason, trimmed further after the
           page still felt cramped for room at gap-3. py-2 (re-added after
           trimming everything else down) gives this row its own small band
           of vertical breathing room instead of sitting flush against the

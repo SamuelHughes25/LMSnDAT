@@ -45,7 +45,7 @@ export function SaveLessonDialog({
   // an earlier version of this component did) silently never ran. Instead,
   // reset during render by noticing `open` changed — this project's
   // sanctioned alternative to setState-in-an-effect for "reset this state
-  // when a prop changes" (see portal-shell.tsx's own use of the same
+  // when a prop changes" (see app-shell.tsx's own use of the same
   // pattern for its course-player route reset).
   const [prevOpen, setPrevOpen] = useState(open);
   if (open !== prevOpen) {

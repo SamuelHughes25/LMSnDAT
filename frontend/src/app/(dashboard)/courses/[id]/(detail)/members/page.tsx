@@ -11,9 +11,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { CourseAccessCell } from "@/components/course-access-cell";
+import { ContentOwnershipCard } from "@/components/content-ownership-card";
 import { UsersSearchBar } from "@/components/users-search-bar";
 import type { AccountUser, Group } from "@/lib/accounts-types";
 import type { Course, CourseAssignment } from "@/lib/course-types";
+import { getCurrentUser } from "@/lib/dal";
 import { DjangoApiError, djangoFetch } from "@/lib/django";
 import type { Paginated } from "@/lib/types";
 
@@ -56,17 +58,47 @@ export default async function CourseMembersPage({
   const usersQuery = new URLSearchParams({ page_size: "200" });
   if (q) usersQuery.set("search", q);
 
-  const [assignments, allGroups, users] = await Promise.all([
+  const [assignments, allGroups, users, allUsers, viewer] = await Promise.all([
     djangoFetch<Paginated<CourseAssignment>>(`/course-assignments/?course=${id}&page_size=200`),
     // Resolves each listed user's own full group badge set — same
     // "always show everything, never filtered down" convention
     // groups/[id]/page.tsx already established.
     djangoFetch<Paginated<Group>>("/groups/?page_size=200"),
     djangoFetch<Paginated<AccountUser>>(`/users/?${usersQuery.toString()}`),
+    // Unfiltered — separate from `users` above (which is search-narrowed
+    // for the member table) since the Ownership card's transfer/add-editor
+    // pickers need every user as a candidate regardless of whatever's
+    // typed into the member-table search box.
+    djangoFetch<Paginated<AccountUser>>("/users/?page_size=200"),
+    // Whether to even show the transfer-ownership control at all — see
+    // ContentOwnershipCard's own comment: that action is is_superuser-only
+    // server-side now, so showing it to anyone else would just be a
+    // control that always 403s.
+    getCurrentUser(),
   ]);
 
   const assignmentByUserId = new Map(assignments.results.map((a) => [a.user, a.id]));
   const groupById = new Map(allGroups.results.map((g) => [g.id, g]));
+  // The super-super-user is deliberately excluded from every plain
+  // /users/ list (UserViewSet.get_queryset's own `list`-action exclusion —
+  // they don't belong in the regular Users table, and shouldn't be a
+  // selectable target for group membership/assignments/editors either).
+  // But transfer-ownership is now THEIR action alone to take (see
+  // ContentOwnershipCard's own comment), which has to include being able
+  // to take ownership for themselves — otherwise the one account allowed
+  // to use this control could never appear in its own candidate list.
+  // Reported directly as a real bug: with no other eligible user in a
+  // small dev database, the control disappeared entirely (zero
+  // candidates), reading as "I can't transfer ownership at all" rather
+  // than "there's no one to transfer it to but me."
+  const ownershipCandidates =
+    viewer.is_superuser && !allUsers.results.some((u) => u.id === viewer.id)
+      ? [...allUsers.results, viewer]
+      : allUsers.results;
+  // editors/editor_usernames come from the same obj.editors.all() queryset
+  // on the backend (CourseSerializer), ordered identically (User.Meta
+  // .ordering = ['username']) — safe to zip by index.
+  const editors = course.editors.map((editorId, i) => ({ id: editorId, username: course.editor_usernames[i] }));
 
   return (
     <div className="space-y-4">
@@ -76,6 +108,17 @@ export default async function CourseMembersPage({
           Who can see and take this course — through a Group, directly assigned, or both.
         </p>
       </div>
+
+      <ContentOwnershipCard
+        kind="course"
+        contentId={id}
+        owner={{ id: course.owner, username: course.owner_username }}
+        originalOwnerUsername={course.created_by_username}
+        editors={editors}
+        candidateUsers={allUsers.results.map((u) => ({ id: u.id, username: u.username }))}
+        ownershipCandidateUsers={ownershipCandidates.map((u) => ({ id: u.id, username: u.username }))}
+        viewerIsSuperuser={viewer.is_superuser}
+      />
 
       <div className="flex items-center justify-between">
         <Link href={`/courses/${id}/roles`} className="text-sm text-muted-foreground hover:text-foreground">

@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 // Escape-to-exit is reflected too, not just clicks on this button).
 //
 // Generic — not course-preview-specific despite where it was first added
-// — so it's reused as-is in every app header (portal-shell.tsx,
+// — so it's reused as-is in every app header (app-shell.tsx,
 // (dashboard)/layout.tsx) next to the Log out button, not just the course
 // player's own header row.
 export function FullscreenToggle() {

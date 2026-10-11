@@ -177,7 +177,14 @@ export function ExtraImagesLayer({
   );
 }
 
-function BackgroundImagePixels({
+// Exported alongside BackgroundImageEditLayer below (both otherwise
+// module-private) specifically for freeform-content-slide.tsx, which
+// needs to render ONE image at a time, interleaved with text boxes per
+// object_order — ExtraImagesLayer's own map-the-whole-list shape doesn't
+// fit that; these two per-image primitives are what it's already built
+// out of, so reusing them directly (rather than duplicating their
+// contents) keeps both callers' rendering in exact lockstep.
+export function BackgroundImagePixels({
   value,
   xPct,
   yPct,
@@ -200,7 +207,7 @@ function BackgroundImagePixels({
   );
 }
 
-function BackgroundImageEditLayer({
+export function BackgroundImageEditLayer({
   value,
   selectionId,
   xPct,

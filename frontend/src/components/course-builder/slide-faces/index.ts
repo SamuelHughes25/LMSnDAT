@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import type { ComponentType, RefObject } from "react";
 
 import type { Slide, SlideConfig, SlideType } from "@/lib/course-types";
 import type { SlideInteractionResult } from "@/lib/slide-interaction";
@@ -77,6 +77,19 @@ export type SlideFaceProps = {
   // isAssessment's own comment) — this prop exists specifically to make
   // permanence in assessment mode actually permanent.
   priorResult?: SlideInteractionResult;
+  // Only read by content-slide-face.tsx's freeform branch
+  // (freeform-content-slide.tsx), and only in "edit" mode — every other
+  // slide type/mode ignores these entirely. Lets that component portal
+  // its own per-image drag/resize controls into the SAME unclipped
+  // overlay slide-canvas.tsx already set up for the universal background
+  // image (see background-image-field.tsx's own comment on why those
+  // controls can't render inline next to the clipped pixels), which is
+  // what makes it possible for extra_images to render INTERLEAVED with
+  // text boxes in actual object_order — each as a sibling in one real
+  // DOM stack — instead of the two being two separate, independently
+  // fixed-order layers the way they used to be.
+  containerRef?: RefObject<HTMLElement | null>;
+  imageOverlayRef?: RefObject<HTMLElement | null>;
 };
 
 // "content", "multiple_choice", "missing_word", "match_pairs", "accordion",

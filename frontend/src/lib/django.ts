@@ -21,6 +21,30 @@ export class DjangoApiError extends Error {
   }
 }
 
+// Pulls DRF's `{"detail": "..."}` body out of a failed request so a Server
+// Action can show it in ConfirmActionDialog's own failure state instead of
+// letting the error propagate to the dashboard's generic error boundary —
+// used for both a 400 (a business-rule rejection, e.g. "can't be archived
+// right now") and a 403 (a permission denial, e.g.
+// HasArchiveTabAccessOrIsOwner's own dynamic "ask the owner" message in
+// apps/core/permissions.py) — DRF puts the same `detail` key in both
+// response shapes, so one extraction routine covers either. Returns null
+// (never the fallback) for any other status, or a non-DjangoApiError,
+// since those are genuinely unexpected and should keep propagating to the
+// error boundary rather than being silently swallowed into a plain string.
+export function extractErrorDetail(err: unknown, fallback: string): string | null {
+  if (!(err instanceof DjangoApiError) || (err.status !== 400 && err.status !== 403)) return null;
+  try {
+    const body: unknown = JSON.parse(err.message);
+    if (body && typeof body === "object" && "detail" in body && typeof body.detail === "string") {
+      return body.detail;
+    }
+  } catch {
+    // Not JSON — fall back below.
+  }
+  return fallback;
+}
+
 // Access tokens only live 15 minutes (see auth-cookies.ts); proxy.ts renews
 // them on every page navigation, but a client component calling a Server
 // Action directly (e.g. useImageUpload's uploadCourseAsset call, fired from

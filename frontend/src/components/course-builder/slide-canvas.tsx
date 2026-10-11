@@ -29,6 +29,14 @@ export function SlideCanvas({
   // it must NOT be a locally-declared function component, which React would
   // treat as a new type every render and force an unwanted remount.
   const Face = slide ? SLIDE_TYPE_FACES[slide.slide_type] : null;
+  // A freeform content slide renders its OWN background/extra images now
+  // (interleaved with text per object_order — see freeform-content-slide.tsx's
+  // own top-of-file comment), so the universal layers just below must be
+  // skipped for it specifically to avoid rendering every image twice.
+  // Every other slide_type/layout is unaffected — this is the exact same
+  // flag properties-panel.tsx already uses to decide whether to show the
+  // Layers panel at all.
+  const isFreeformContent = slide?.slide_type === "content" && slide.config.layout == null;
   // The universal background image's drag/resize math measures against
   // this — the slide's own outer box, not anything inside the Face — so it
   // works the same regardless of slide_type. See background-image-field.tsx.
@@ -64,40 +72,46 @@ export function SlideCanvas({
           >
             {/* Renders nothing at all if no background image is set — see
                 background-image-field.tsx. z-0 pixels; the Face below sits
-                at z-10, above them. */}
-            <SlideBackgroundLayer
-              value={slide.config.background_image_url}
-              mode="edit"
-              slideId={slide.id}
-              xPct={slide.config.background_image_x_pct}
-              yPct={slide.config.background_image_y_pct}
-              widthPct={slide.config.background_image_width_pct}
-              heightPct={slide.config.background_image_height_pct}
-              onTransform={({ xPct, yPct, widthPct, heightPct }) =>
-                onConfigChange({
-                  background_image_x_pct: xPct,
-                  background_image_y_pct: yPct,
-                  background_image_width_pct: widthPct,
-                  background_image_height_pct: heightPct,
-                })
-              }
-              containerRef={slideRef}
-              overlayRef={overlayRef}
-            />
-            <ExtraImagesLayer
-              images={slide.config.extra_images ?? []}
-              mode="edit"
-              slideId={slide.id}
-              onTransform={(id, t) =>
-                onConfigChange({
-                  extra_images: (slide.config.extra_images ?? []).map((img) =>
-                    img.id === id ? { ...img, ...t } : img,
-                  ),
-                })
-              }
-              containerRef={slideRef}
-              overlayRef={overlayRef}
-            />
+                at z-10, above them. Skipped for a freeform content slide —
+                its own Face renders these (interleaved with text) instead,
+                see isFreeformContent's own comment above. */}
+            {!isFreeformContent && (
+              <>
+                <SlideBackgroundLayer
+                  value={slide.config.background_image_url}
+                  mode="edit"
+                  slideId={slide.id}
+                  xPct={slide.config.background_image_x_pct}
+                  yPct={slide.config.background_image_y_pct}
+                  widthPct={slide.config.background_image_width_pct}
+                  heightPct={slide.config.background_image_height_pct}
+                  onTransform={({ xPct, yPct, widthPct, heightPct }) =>
+                    onConfigChange({
+                      background_image_x_pct: xPct,
+                      background_image_y_pct: yPct,
+                      background_image_width_pct: widthPct,
+                      background_image_height_pct: heightPct,
+                    })
+                  }
+                  containerRef={slideRef}
+                  overlayRef={overlayRef}
+                />
+                <ExtraImagesLayer
+                  images={slide.config.extra_images ?? []}
+                  mode="edit"
+                  slideId={slide.id}
+                  onTransform={(id, t) =>
+                    onConfigChange({
+                      extra_images: (slide.config.extra_images ?? []).map((img) =>
+                        img.id === id ? { ...img, ...t } : img,
+                      ),
+                    })
+                  }
+                  containerRef={slideRef}
+                  overlayRef={overlayRef}
+                />
+              </>
+            )}
             <div className="relative z-10 h-full w-full">
               <Face
                 // Remount on slide change: resets the face's local title/body
@@ -111,6 +125,8 @@ export function SlideCanvas({
                 courseVersionId={courseVersionId}
                 onTitleChange={onTitleChange}
                 onConfigChange={onConfigChange}
+                containerRef={slideRef}
+                imageOverlayRef={overlayRef}
               />
             </div>
           </div>

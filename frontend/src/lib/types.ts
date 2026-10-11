@@ -73,8 +73,19 @@ export type Template = {
   id: string;
   name: string;
   description: string;
-  created_by: number;
+  // See Course.created_by's identical comment in course-types.ts.
+  created_by: number | null;
+  created_by_username: string | null;
   is_archived: boolean;
+  // See Course.archived_by's identical comment in course-types.ts.
+  archived_by: number | null;
+  archived_by_username: string | null;
+  archived_at: string | null;
+  // See Course.owner's identical comment in course-types.ts.
+  owner: number;
+  owner_username: string;
+  editors: number[];
+  editor_usernames: string[];
   created_at: string;
   updated_at: string;
 };

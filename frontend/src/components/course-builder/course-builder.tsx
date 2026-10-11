@@ -29,6 +29,7 @@ import { SlideCanvas } from "./slide-canvas";
 import { SlideRail } from "./slide-rail";
 import { SlideSelectionProvider, useSlideSelection } from "./slide-selection-context";
 import { SnapGuideProvider } from "./snap-guide-context";
+import { TextBoxPlacementProvider } from "./text-box-placement-context";
 
 type Selection =
   | { type: "lesson"; lessonId: string }
@@ -54,6 +55,13 @@ function parseSelectedObject(selectedId: string | null, slideId: string | undefi
   if (suffix.startsWith("extra-image:")) {
     return { type: "extra-image", imageId: suffix.slice("extra-image:".length) };
   }
+  // A freeform content slide's own text_boxes[] entry — see
+  // free-text-box.tsx/free-text-box-properties.tsx, which both namespace
+  // their own PositionableBox/ActiveEditorContext ids this same way
+  // (`${slideId}:text:${boxId}`).
+  if (suffix.startsWith("text:")) {
+    return { type: "free-text", boxId: suffix.slice("text:".length) };
+  }
   return null;
 }
 
@@ -71,7 +79,9 @@ export function CourseBuilder(props: { course: Course; initialVersion: CourseVer
     <ActiveEditorProvider>
       <SlideSelectionProvider>
         <SnapGuideProvider>
-          <CourseBuilderInner {...props} />
+          <TextBoxPlacementProvider>
+            <CourseBuilderInner {...props} />
+          </TextBoxPlacementProvider>
         </SnapGuideProvider>
       </SlideSelectionProvider>
     </ActiveEditorProvider>

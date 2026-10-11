@@ -1,19 +1,19 @@
-import { PortalShell } from "@/components/portal-shell";
+import { AppShell } from "@/components/app-shell";
+import { getUserTierLabel } from "@/lib/accounts-types";
 import { getCurrentUser } from "@/lib/dal";
 
-// The collapsible-sidebar shell (state, localStorage, the toggle tab) lives
-// in portal-shell.tsx as a Client Component; this file stays a Server
-// Component that fetches the user. No role redirect the other way:
-// admins/managers are allowed to view the portal too (useful for previewing
-// what an operative sees), only members are bounced *out* of the admin
-// dashboard (see (dashboard)/layout.tsx).
+// Mirrors (dashboard)/layout.tsx exactly — both route groups render the
+// SAME shared shell now (see app-shell.tsx), so an office user browsing
+// here (e.g. to preview what an operative sees) and an operative browsing
+// here get identical chrome, just with different Manage-section visibility
+// depending on accessible_tabs.
 export default async function PortalLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
   const displayName = `${user.first_name} ${user.last_name}`.trim() || user.username;
 
   return (
-    <PortalShell displayName={displayName} role={user.role}>
+    <AppShell displayName={displayName} tierLabel={getUserTierLabel(user)} accessibleTabs={user.accessible_tabs}>
       {children}
-    </PortalShell>
+    </AppShell>
   );
 }

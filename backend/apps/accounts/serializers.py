@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
-from .models import Group, Team, User
+from apps.core.permissions import DASHBOARD_TABS, user_can_access_tab
+from .models import Group, PermissionSet, Team, User
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -11,14 +12,44 @@ class UserSerializer(serializers.ModelSerializer):
     # AbstractUser needs set_password() to actually hash it, so both are
     # overridden below.
     password = serializers.CharField(write_only=True, required=False, allow_blank=False)
+    archived_by_username = serializers.ReadOnlyField(source='archived_by.username')
+    permission_set_name = serializers.ReadOnlyField(source='permission_set.name')
+    # Computed, not a real field — which dashboard tabs this user can
+    # currently reach, already accounting for is_superuser/is_platform_admin
+    # bypassing tab checks entirely (same logic as
+    # apps.core.permissions.user_can_access_tab, just precomputed here so
+    # the frontend doesn't need a second round-trip to the user's
+    # permission_set to build its own sidebar/page gating).
+    accessible_tabs = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = [
             'id', 'username', 'email', 'first_name', 'last_name', 'role', 'team',
-            'content_groups', 'password', 'date_joined',
+            'content_groups', 'password', 'date_joined', 'is_active',
+            'archived_by', 'archived_by_username', 'archived_at',
+            'permission_set', 'permission_set_name', 'is_platform_admin', 'is_superuser', 'accessible_tabs',
         ]
-        read_only_fields = ['id', 'date_joined']
+        # is_active/archived_by/archived_at are read-only here on purpose —
+        # they should only ever change together, via UserViewSet's destroy/
+        # restore actions, never through a raw PATCH that could drift them
+        # out of sync with each other. is_platform_admin is read-only for
+        # the identical reason — only UserViewSet's grant_platform_admin/
+        # revoke_platform_admin actions touch it (and only an is_superuser
+        # caller can even reach those). is_superuser is readable — the
+        # frontend needs to know "is the CURRENT viewer the superuser" to
+        # decide whether to show the grant/revoke-platform-admin control at
+        # all (see /users/me/) — but it's unconditionally read-only, set
+        # only once via a one-off shell command, never through this
+        # serializer's create()/update() (both below are never even
+        # given the chance to touch it, since it's in read_only_fields).
+        read_only_fields = [
+            'id', 'date_joined', 'is_active', 'archived_by', 'archived_by_username', 'archived_at', 'is_superuser',
+            'permission_set_name', 'is_platform_admin', 'accessible_tabs',
+        ]
+
+    def get_accessible_tabs(self, obj):
+        return [tab for tab in DASHBOARD_TABS if user_can_access_tab(obj, tab)]
 
     def create(self, validated_data):
         password = validated_data.pop('password', None)
@@ -46,6 +77,16 @@ class UserSerializer(serializers.ModelSerializer):
             user.set_password(password)
             user.save(update_fields=['password'])
         return user
+
+
+class PermissionSetSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PermissionSet
+        fields = [
+            'id', 'name', 'can_access_templates', 'can_access_courses', 'can_access_users',
+            'can_access_groups', 'can_access_permissions', 'can_access_archive', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 
 class TeamSerializer(serializers.ModelSerializer):

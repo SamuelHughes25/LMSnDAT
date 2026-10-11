@@ -3,7 +3,8 @@
 import { ImagePlus, Loader2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import type { ExtraImage, SlideConfig } from "@/lib/course-types";
+import type { ExtraImage, Slide, SlideConfig, SlideObjectRef } from "@/lib/course-types";
+import { normalizeObjectOrder } from "@/lib/course-types";
 import { CANVAS_H, CANVAS_W } from "./slide-canvas";
 import {
   clampPositionPct,
@@ -163,16 +164,6 @@ export function SlideBackgroundPanel({
     <div className="space-y-1.5">
       <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Edit</div>
       <div className="text-[11px] font-medium text-muted-foreground/70">Images</div>
-      {/* Confirmed via a real browser to be a genuine point of confusion:
-          these free-floating images and the "Image left"/"Image right"
-          layout's own on-canvas picture box both look like "the place to
-          paste an image" (near-identical "Paste (Ctrl+V) or browse"
-          wording), but they're independent fields — these sit behind the
-          whole slide, that one is the layout's own dedicated content
-          image. This caption exists to head that off before it happens. */}
-      <p className="text-[10px] text-muted-foreground/60">
-        Behind the whole slide — separate from the picture in an Image left/right layout.
-      </p>
 
       {/* The background image, if set, always renders first — it's still
           the same background_image_url field underneath (see the comment
@@ -325,6 +316,82 @@ function AddImageRow({
     courseVersionId,
     handleUploadedUrl,
   );
+
+  return (
+    <ImageSlotControl
+      imageUrl={null}
+      courseVersionId={courseVersionId}
+      uploading={uploading}
+      error={error}
+      inputRef={inputRef}
+      handleFileChange={handleFileChange}
+      handlePaste={handlePaste}
+      onReplace={() => {}}
+      onRemove={() => {}}
+      removeLabel=""
+    />
+  );
+}
+
+// The freeform system's own, much smaller, add-image control — properties-
+// panel.tsx uses this instead of the full SlideBackgroundPanel above for a
+// freeform content slide. SlideBackgroundPanel's per-image list (the
+// Replace/Remove row for every already-added image) is deliberately NOT
+// reused here: once an image's reorder/rename/delete all live in
+// slide-layers-panel.tsx and its own on-canvas selection already opens
+// image-object-properties.tsx for replace/resize, keeping a SECOND,
+// separate list of the same images in the properties panel was reported
+// back directly as confusing — "why are my images shown twice." This is
+// just the one persistent "add a new one" dropbox, always empty, same
+// paste-or-browse affordance as AddImageRow above.
+//
+// Every image added here becomes a brand-new extra_images entry that's
+// ALSO immediately pushed into object_order — unlike AddImageRow's
+// "first image becomes the universal background" branching, there's no
+// such special case for a freeform slide's own added images: every one of
+// them is an ordinary, reorderable, deletable layer from the moment it's
+// added. A slide's background_image_url can still exist from before this
+// control existed (rendered by freeform-content-slide.tsx as the one
+// non-stackable exception — see SlideObjectRef's own comment), but nothing
+// here ever writes a NEW one.
+export function FreeformAddImageControl({
+  slide,
+  courseVersionId,
+  onConfigChange,
+}: {
+  slide: Slide;
+  courseVersionId: string | undefined;
+  onConfigChange: (config: Partial<SlideConfig>) => void;
+}) {
+  const extraImages = slide.config.extra_images ?? [];
+  const order = normalizeObjectOrder(slide.config);
+
+  async function handleUploadedUrl(url: string | null) {
+    if (!url) return;
+    const naturalSize = await loadNaturalSize(url);
+    const sized = naturalSize ? computeContainedSizePct(naturalSize.width, naturalSize.height, CANVAS_W, CANVAS_H) : null;
+    // Same staggered-diagonal placement as AddImageRow's own "every image
+    // after the first" branch above, for the same reason: a visibly new
+    // position so a second paste doesn't read as "did that just do
+    // nothing."
+    const offset = (extraImages.length % 4) * 6;
+    const image: ExtraImage = {
+      id: makeExtraImageId(extraImages.length + 1),
+      url,
+      xPct: clampPositionPct(50 + offset),
+      yPct: clampPositionPct(50 + offset),
+      ...(sized ?? { widthPct: 100, heightPct: 100 }),
+    };
+    const ref: SlideObjectRef = { type: "image", id: image.id };
+    onConfigChange({ extra_images: [...extraImages, image], object_order: [...order, ref] });
+  }
+
+  const { uploading, error, inputRef, handleFileChange, handlePaste } = useImageUpload(
+    courseVersionId,
+    handleUploadedUrl,
+  );
+
+  if (extraImages.length >= MAX_IMAGES || !courseVersionId) return null;
 
   return (
     <ImageSlotControl

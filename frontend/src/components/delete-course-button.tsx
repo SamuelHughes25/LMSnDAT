@@ -1,66 +1,43 @@
 "use client";
 
-import { useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { Trash2 } from "lucide-react";
 
 import { deleteCourse } from "@/app/actions/courses";
 import { Button } from "@/components/ui/button";
+import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 
-// Two call sites need different post-delete behavior: the course list just
-// needs the row to disappear (revalidatePath + router.refresh handles that
-// in place), while a course's own page (builder header, settings) would 404
-// after its own deletion, so it needs to navigate away first.
-export function DeleteCourseButton({
-  courseId,
-  courseName,
-  redirectAfter,
-  label,
-}: {
-  courseId: string;
-  courseName: string;
-  redirectAfter?: string;
-  label?: string;
-}) {
-  const [pending, startTransition] = useTransition();
-  const router = useRouter();
-
-  function handleClick() {
-    if (!window.confirm(`Delete "${courseName}"? This cannot be undone.`)) return;
-    startTransition(async () => {
-      await deleteCourse(courseId);
-      if (redirectAfter) {
-        router.push(redirectAfter);
-      } else {
-        router.refresh();
-      }
-    });
-  }
-
-  if (label) {
-    return (
-      <Button
-        variant="outline"
-        disabled={pending}
-        onClick={handleClick}
-        className="text-destructive hover:text-destructive"
-      >
-        <Trash2 className="mr-1.5 h-4 w-4" />
-        {pending ? "Deleting…" : label}
-      </Button>
-    );
-  }
+// Used only from the Courses list now (admin-courses-view.tsx) — the
+// course's own Settings page used to have a second, labeled copy of this
+// in its "Danger zone" card, redundant with the list's own trash icon
+// plus the dedicated Archive page, so it was removed there.
+export function DeleteCourseButton({ courseId, courseName }: { courseId: string; courseName: string }) {
+  const [open, setOpen] = useState(false);
 
   return (
-    <Button
-      variant="ghost"
-      size="icon-sm"
-      disabled={pending}
-      onClick={handleClick}
-      aria-label={`Delete ${courseName}`}
-      className="text-muted-foreground hover:text-destructive"
-    >
-      <Trash2 className="h-4 w-4" />
-    </Button>
+    <>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        onClick={() => setOpen(true)}
+        aria-label={`Delete ${courseName}`}
+        className="text-muted-foreground hover:text-destructive"
+      >
+        <Trash2 className="h-4 w-4" />
+      </Button>
+      <ConfirmActionDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={`Archive "${courseName}"?`}
+        // "Archive," not "delete" — this now hides the course from the
+        // Courses list and everyone's portal, but keeps all its data/
+        // attempts/analytics intact; see deleteCourse's own comment in
+        // actions/courses.ts.
+        description="It'll be hidden from the course list and the portal, but you can restore it anytime from the Archive section."
+        confirmLabel="Archive"
+        pendingLabel="Archiving…"
+        action={() => deleteCourse(courseId)}
+      />
+    </>
   );
 }

@@ -48,9 +48,10 @@ function CompactTable({ courses }: { courses: Course[] }) {
       <Table className="table-fixed">
         <TableHeader>
           <TableRow>
-            <TableHead className="w-[22%]">Name</TableHead>
-            <TableHead className="w-[48%]">Description</TableHead>
-            <TableHead className="w-[20%]">Created</TableHead>
+            <TableHead className="w-[20%]">Name</TableHead>
+            <TableHead className="w-[38%]">Description</TableHead>
+            <TableHead className="w-[14%]">Owner</TableHead>
+            <TableHead className="w-[18%]">Created</TableHead>
             <TableHead className="w-10" />
           </TableRow>
         </TableHeader>
@@ -63,6 +64,11 @@ function CompactTable({ courses }: { courses: Course[] }) {
                 </Link>
               </TableCell>
               <TableCell className="truncate text-muted-foreground">{course.description || "—"}</TableCell>
+              <TableCell className="truncate">
+                <Link href={`/courses/${course.id}/members`} className="hover:underline">
+                  {course.owner_username}
+                </Link>
+              </TableCell>
               <TableCell>{new Date(course.created_at).toLocaleDateString()}</TableCell>
               <TableCell>
                 <DeleteCourseButton courseId={course.id} courseName={course.name} />
@@ -71,7 +77,7 @@ function CompactTable({ courses }: { courses: Course[] }) {
           ))}
           {courses.length === 0 && (
             <TableRow>
-              <TableCell colSpan={4} className="text-center text-muted-foreground">
+              <TableCell colSpan={5} className="text-center text-muted-foreground">
                 No courses yet.
               </TableCell>
             </TableRow>
@@ -110,6 +116,11 @@ function NormalList({ courses }: { courses: Course[] }) {
             </Link>
             <p className="mt-0.5 line-clamp-1 text-sm text-muted-foreground">{course.description || "—"}</p>
             <p className="mt-1 text-xs text-muted-foreground">
+              Owner{" "}
+              <Link href={`/courses/${course.id}/members`} className="hover:underline">
+                {course.owner_username}
+              </Link>
+              {" · "}
               Created {new Date(course.created_at).toLocaleDateString()}
             </p>
           </div>

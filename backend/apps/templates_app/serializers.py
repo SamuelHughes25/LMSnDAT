@@ -68,7 +68,28 @@ class TemplateVersionSerializer(serializers.ModelSerializer):
 
 
 class TemplateSerializer(serializers.ModelSerializer):
+    archived_by_username = serializers.ReadOnlyField(source='archived_by.username')
+    owner_username = serializers.ReadOnlyField(source='owner.username')
+    # See CourseSerializer's identical field for the full reasoning — the
+    # one durable "who made this" record transfer_ownership never touches.
+    created_by_username = serializers.ReadOnlyField(source='created_by.username')
+    editor_usernames = serializers.SerializerMethodField()
+
     class Meta:
         model = Template
-        fields = ['id', 'name', 'description', 'created_by', 'is_archived', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
+        fields = [
+            'id', 'name', 'description', 'created_by', 'created_by_username', 'is_archived',
+            'archived_by', 'archived_by_username', 'archived_at',
+            'owner', 'owner_username', 'editors', 'editor_usernames', 'created_at', 'updated_at',
+        ]
+        # See CourseSerializer's identical comment: these only ever change
+        # together, via TemplateViewSet's destroy/restore/purge/
+        # transfer_ownership/set_editors actions.
+        read_only_fields = [
+            'id', 'created_by', 'created_by_username', 'created_at', 'updated_at',
+            'is_archived', 'archived_by', 'archived_by_username', 'archived_at',
+            'owner', 'owner_username', 'editors', 'editor_usernames',
+        ]
+
+    def get_editor_usernames(self, obj):
+        return [u.username for u in obj.editors.all()]

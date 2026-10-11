@@ -11,6 +11,7 @@ import { SLIDE_TYPE_FACES } from "@/components/course-builder/slide-faces";
 import { ExtraImagesLayer, SlideBackgroundLayer } from "@/components/course-builder/slide-faces/background-image-field";
 import { SlideSelectionProvider } from "@/components/course-builder/slide-selection-context";
 import { SnapGuideProvider } from "@/components/course-builder/snap-guide-context";
+import { TextBoxPlacementProvider } from "@/components/course-builder/text-box-placement-context";
 import { Button } from "@/components/ui/button";
 import type { CourseAttempt } from "@/lib/attempt-types";
 import type { Slide } from "@/lib/course-types";
@@ -281,6 +282,11 @@ export function CoursePreviewViewer({
 
   const current = slides[clampedIndex];
   const Face = SLIDE_TYPE_FACES[current.slide.slide_type];
+  // See slide-canvas.tsx's own isFreeformContent comment — a freeform
+  // content slide's Face renders its own background/extra images
+  // (interleaved with text per object_order), so the universal layers
+  // below must be skipped for it here too, same reasoning.
+  const isFreeformContent = current.slide.slide_type === "content" && current.slide.config.layout == null;
 
   return (
     // PositionableBox (used by content-slide-face.tsx's title/subtitle/
@@ -288,25 +294,30 @@ export function CoursePreviewViewer({
     // useSlideSelection(), useActiveEditorContext(), AND useSnapGuides()
     // unconditionally — hooks, so they have to run on every render
     // regardless of mode, even though "present" mode's own early-return
-    // path never actually reads any of the three. All three throw if their
-    // provider isn't anywhere above them in the tree. course-builder.tsx
-    // already wraps its own tree in all three, but this viewer is a
-    // genuinely separate top-level component tree — its own route/page,
-    // never nested inside course-builder.tsx — so it never inherited any
-    // of them. Confirmed via a real browser: previewing ANY course
-    // containing a "content" slide 500'd the whole page — first on the
-    // missing SlideSelectionProvider, then (after fixing just that) on the
-    // missing ActiveEditorProvider, then — missed in both of those earlier
-    // fixes, since it only throws once a learner actually plays a course
-    // with a positioned text box rather than just opening the admin
-    // preview tab — the missing SnapGuideProvider, which is why "can't
-    // take a course" could still surface as a fresh outage even after the
-    // first two were fixed. Same nesting order as course-builder.tsx, for
-    // no particular reason beyond consistency — the three providers don't
+    // path never actually reads any of the three. All four (now including
+    // useTextBoxPlacement, called unconditionally by
+    // freeform-content-slide.tsx's FreeformContentSlide — a FREEFORM
+    // content slide's own present/static render path, not just "edit")
+    // throw if their provider isn't anywhere above them in the tree.
+    // course-builder.tsx already wraps its own tree in all four, but this
+    // viewer is a genuinely separate top-level component tree — its own
+    // route/page, never nested inside course-builder.tsx — so it never
+    // inherited any of them. Confirmed via a real browser: previewing ANY
+    // course containing a "content" slide 500'd the whole page — first on
+    // the missing SlideSelectionProvider, then (after fixing just that) on
+    // the missing ActiveEditorProvider, then the missing SnapGuideProvider
+    // (missed in both of those earlier fixes, since it only throws once a
+    // learner actually plays a course with a positioned text box rather
+    // than just opening the admin preview tab) — TextBoxPlacementProvider
+    // added proactively alongside the other three this time, specifically
+    // because of that exact history, rather than waiting to hit the same
+    // crash a fourth time. Same nesting order as course-builder.tsx, for
+    // no particular reason beyond consistency — the providers don't
     // interact.
     <ActiveEditorProvider>
       <SlideSelectionProvider>
         <SnapGuideProvider>
+          <TextBoxPlacementProvider>
           {/* h-full flex column: the caller (either the admin preview tab's
               self-stretch content slot, or the portal player's min-h-0
               flex-1 wrapper) is expected to hand this a genuinely bounded
@@ -342,15 +353,19 @@ export function CoursePreviewViewer({
                     className="slide-surface relative overflow-hidden rounded-sm bg-white shadow-lg"
                     style={{ width: CANVAS_W, height: CANVAS_H, zoom: scale }}
                   >
-                    <SlideBackgroundLayer
-                      value={current.slide.config.background_image_url}
-                      mode="present"
-                      xPct={current.slide.config.background_image_x_pct}
-                      yPct={current.slide.config.background_image_y_pct}
-                      widthPct={current.slide.config.background_image_width_pct}
-                      heightPct={current.slide.config.background_image_height_pct}
-                    />
-                    <ExtraImagesLayer images={current.slide.config.extra_images ?? []} mode="present" />
+                    {!isFreeformContent && (
+                      <>
+                        <SlideBackgroundLayer
+                          value={current.slide.config.background_image_url}
+                          mode="present"
+                          xPct={current.slide.config.background_image_x_pct}
+                          yPct={current.slide.config.background_image_y_pct}
+                          widthPct={current.slide.config.background_image_width_pct}
+                          heightPct={current.slide.config.background_image_height_pct}
+                        />
+                        <ExtraImagesLayer images={current.slide.config.extra_images ?? []} mode="present" />
+                      </>
+                    )}
                     <div className="relative z-10 h-full w-full">
                       <Face
                         key={current.slide.id}
@@ -367,10 +382,20 @@ export function CoursePreviewViewer({
             </div>
   
             {/* Running tally, not a full end-of-deck summary screen — shows once
-                at least one interactive slide has been answered. Later stages
+                at least one interactive slide has been answered AND the
+                course is actually flagged as an assessment. A non-assessment
+                course has no pass/fail concept at all (see Course.is_assessment's
+                own comment on the backend) — surfacing a live "X/Y correct"
+                tally there read as a hidden test the learner never agreed to,
+                for content that was only ever meant to be informational/
+                practice. Admin preview (attemptTracking undefined — no real
+                attempt is ever tracked there) keeps showing it regardless,
+                same as before this changed: this is specifically about what a
+                real learner sees while taking a non-assessment course, not a
+                change to what the preview tab shows its author. Later stages
                 (Missing Word, Match the Pair) need no changes here: they report
                 through the same onInteraction/results shape.
-  
+
                 Always rendered (never conditionally mounted) — this row sits
                 below the stage's own flex-1 min-h-0 region, so mounting it
                 only once an answer comes in used to shrink the stage's
@@ -388,7 +413,10 @@ export function CoursePreviewViewer({
                 changes mid-interaction. */}
             <div
               className="mt-1 shrink-0 text-sm text-muted-foreground"
-              style={{ visibility: answeredCount > 0 ? "visible" : "hidden" }}
+              style={{
+                visibility:
+                  answeredCount > 0 && (!attemptTracking || attemptTracking.isAssessment) ? "visible" : "hidden",
+              }}
             >
               Score so far: {correctCount}/{answeredCount}
             </div>
@@ -406,7 +434,17 @@ export function CoursePreviewViewer({
               // own local `results` tally) has returned a graded score.
               <div className="flex shrink-0 items-center gap-4 py-2">
                 <span className="text-sm font-medium">
-                  {completedAttempt.score !== null ? `You scored ${completedAttempt.score}%` : "Course completed"}
+                  {/* Backend grading.py still computes/stores a numeric
+                      score for EVERY completed attempt regardless of
+                      is_assessment (only `passed` is gated on it) — this
+                      used to surface that raw number here even for a
+                      non-assessment course, the same score-leak as the
+                      running tally above, just at the end instead of
+                      during. Gated the same way: only an assessment
+                      course ever shows a number here. */}
+                  {attemptTracking?.isAssessment && completedAttempt.score !== null
+                    ? `You scored ${completedAttempt.score}%`
+                    : "Course completed"}
                   {attemptTracking?.isAssessment && completedAttempt.passed !== null && (
                     <span className={completedAttempt.passed ? "text-primary" : "text-destructive"}>
                       {" — "}
@@ -462,6 +500,7 @@ export function CoursePreviewViewer({
               </div>
             )}
           </div>
+          </TextBoxPlacementProvider>
         </SnapGuideProvider>
       </SlideSelectionProvider>
     </ActiveEditorProvider>
