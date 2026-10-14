@@ -151,6 +151,19 @@ if STORAGE_BACKEND == 's3':
     AWS_DEFAULT_ACL = 'private'
     AWS_QUERYSTRING_AUTH = True
     AWS_QUERYSTRING_EXPIRE = 3600
+    # django-storages' S3Storage OVERWRITES an existing object with the
+    # same key by default (AWS_S3_FILE_OVERWRITE defaults to True) —
+    # unlike Django's own FileSystemStorage, which always appends a
+    # unique suffix on a name collision. Confirmed as a real, serious
+    # production bug this default caused: every pasted image's clipboard
+    # filename is the browser's own generic "image.png", so five
+    # completely different pasted images across five different courses
+    # all silently overwrote the exact same S3 object — the only one
+    # whose actual pixels survived was whichever was uploaded last; the
+    # other four's stored URLs kept pointing at that same key, now
+    # showing the wrong picture entirely once their signed-URL expiry
+    # (the separate bug fixed above) stopped masking it as "blank."
+    AWS_S3_FILE_OVERWRITE = False
     # A second, PUBLIC storage for course images/thumbnails — see
     # apps/core/storage.py's own comment for the bug this exists to fix.
     # Same bucket/credentials as 'default' (still one shared bucket, see
@@ -160,7 +173,7 @@ if STORAGE_BACKEND == 's3':
     # private/signed backups and learner-submitted attachment evidence.
     STORAGES['public'] = {
         'BACKEND': 'storages.backends.s3.S3Storage',
-        'OPTIONS': {'default_acl': 'public-read', 'querystring_auth': False},
+        'OPTIONS': {'default_acl': 'public-read', 'querystring_auth': False, 'file_overwrite': False},
     }
 else:
     # Explicit, not just relying on Django's implicit built-in default —
