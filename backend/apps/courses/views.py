@@ -25,7 +25,7 @@ from .serializers import (
 
 
 class CourseViewSet(viewsets.ModelViewSet):
-    queryset = Course.objects.all().prefetch_related('editors')
+    queryset = Course.objects.all().select_related('editing_user').prefetch_related('editors')
     serializer_class = CourseSerializer
     required_tab = 'courses'
 
@@ -54,6 +54,11 @@ class CourseViewSet(viewsets.ModelViewSet):
             return [IsSuperuser()]
         if self.action == 'set_editors':
             return [IsContentOwnerOrAdmin()]
+        if self.action in ('claim_edit', 'release_edit'):
+            # Same tier as actually editing the course — claiming the lock
+            # is meaningless for someone who couldn't open the builder in
+            # the first place.
+            return [IsContentOwnerEditorOrAdmin()]
         if self.action in ('destroy', 'restore', 'purge'):
             # Owner can always archive/restore/purge their own course too,
             # even with no Archive tab granted — see
@@ -162,6 +167,43 @@ class CourseViewSet(viewsets.ModelViewSet):
         course = self.get_object()
         version = services.create_draft_version(course, request.user)
         return Response(CourseVersionSerializer(version).data, status=201)
+
+    @action(detail=True, methods=['post'], url_path='claim-edit')
+    def claim_edit(self, request, pk=None):
+        # A genuine hard lock — no override. An earlier version of this
+        # accepted a `force` flag to let a second editor in anyway after a
+        # warning; removed outright once it became clear what that
+        # actually led to: course-builder.tsx's handleSlideConfigChange
+        # PATCHes a slide's ENTIRE config JSON blob on every save, built
+        # from whatever that one browser's own (potentially stale) copy
+        # currently holds — so two people in the same slide at once doesn't
+        # just risk clobbering the one field they both touched, it risks
+        # one of them silently erasing the other's unrelated edits
+        # elsewhere on the same slide the instant either one saves. A
+        # warning the user can click past doesn't prevent that; only
+        # actually keeping the second person out does.
+        course = self.get_object()
+        if course.is_being_edited() and course.editing_user_id != request.user.id:
+            return Response(
+                {'detail': f'{course.editing_user.username} is currently editing this course.',
+                 'editing_by': course.editing_user.username},
+                status=409,
+            )
+        course.editing_user = request.user
+        course.editing_heartbeat_at = timezone.now()
+        course.save(update_fields=['editing_user', 'editing_heartbeat_at'])
+        return Response(CourseSerializer(course, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'], url_path='release-edit')
+    def release_edit(self, request, pk=None):
+        # Only clears the lock if it's still this user's own — a late-
+        # arriving release call must never clobber whoever holds it now.
+        course = self.get_object()
+        if course.editing_user_id == request.user.id:
+            course.editing_user = None
+            course.editing_heartbeat_at = None
+            course.save(update_fields=['editing_user', 'editing_heartbeat_at'])
+        return Response(status=204)
 
 
 class CourseVersionViewSet(viewsets.ModelViewSet):

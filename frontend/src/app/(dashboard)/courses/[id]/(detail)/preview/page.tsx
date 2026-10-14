@@ -13,7 +13,14 @@ export default async function CoursePreviewPage({ params }: { params: Promise<{ 
   // page_size=200 — see builder/page.tsx's identical fetch for why.
   const versions = await djangoFetch<Paginated<CourseVersion>>(`/course-versions/?course=${id}&page_size=200`);
   const sorted = [...versions.results].sort((a, b) => b.version_number - a.version_number);
-  const version = sorted.find((v) => v.status === "published") ?? sorted.find((v) => v.status === "draft");
+  // Draft takes priority over published, not the other way around — this
+  // page is reached from inside the builder's own course-detail nav, so
+  // the author is almost always checking the thing they're ACTIVELY
+  // working on. Falls back to the published version only when there's no
+  // draft at all (nothing to preview instead). Reported directly: Preview
+  // used to always show the last published version even mid-edit, which
+  // made it look like changes weren't taking effect.
+  const version = sorted.find((v) => v.status === "draft") ?? sorted.find((v) => v.status === "published");
 
   if (!version) {
     return (

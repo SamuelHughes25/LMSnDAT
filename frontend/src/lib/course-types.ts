@@ -572,6 +572,14 @@ export type Course = {
   owner_username: string;
   editors: number[];
   editor_usernames: string[];
+  // Null whenever nobody currently has the builder open for this course,
+  // or the last person to have it open went quiet long enough for the
+  // backend to consider the lock stale (Course.is_being_edited() on the
+  // backend — see its own comment for the full reasoning: a soft lock,
+  // not real-time collaborative editing). Read-only, display-only — set
+  // via claimCourseEdit/releaseCourseEdit in actions/courses.ts, never a
+  // plain PATCH.
+  currently_editing_by: string | null;
   // Marks this course as a scored assessment rather than free-form
   // training content. passing_score (0-100) is only meaningful when this
   // is true — see backend/apps/courses/models.py's Course model and

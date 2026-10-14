@@ -216,7 +216,23 @@ export function FreeformContentSlide({
           object_order — see this file's own top-of-file comment for why
           that's the fix for images' layer position never actually
           affecting the canvas. */}
-      {order.map((ref) => {
+      {order.map((ref, index) => {
+        // A freeform slide's whole premise is "object_order IS the
+        // stacking order" (see this file's own top-of-file comment) — but
+        // PositionableBox/BackgroundImagePixels each carry their OWN
+        // hardcoded z-index baseline for an unrelated reason (an
+        // untransformed-vs-dragged sibling conflict in the legacy system;
+        // never clipping an image's resize handles), and those two
+        // baselines disagree with each other (text boxes always above
+        // images, regardless of DOM order) — confirmed as the actual cause
+        // of a reported "layers panel reorder does nothing when an image
+        // is involved" bug: reordering two TEXT boxes worked (same
+        // baseline either way, so DOM order decided it), reordering an
+        // image past a text box never could. Passing this index explicitly
+        // as `zIndex` to both makes stacking order literally equal to
+        // object_order position for every object on this slide, text and
+        // image alike.
+        const zIndex = index + 1;
         if (ref.type === "text") {
           const box = textBoxes.find((b) => b.id === ref.id);
           if (!box) return null;
@@ -229,6 +245,7 @@ export function FreeformContentSlide({
               onTransform={(t) => updateBox(box.id, t)}
               mode={mode}
               slideRef={slideRef}
+              zIndex={zIndex}
             >
               <EditableFreeTextBox
                 fieldId={`${slide.id}:text:${box.id}`}
@@ -255,6 +272,7 @@ export function FreeformContentSlide({
               onTransform={(t) => updateExtraImage(image.id, t)}
               containerRef={editRefs.containerRef}
               overlayRef={editRefs.overlayRef}
+              zIndex={zIndex}
             />
           );
         }
@@ -266,6 +284,7 @@ export function FreeformContentSlide({
             yPct={image.yPct}
             widthPct={image.widthPct}
             heightPct={image.heightPct}
+            zIndex={zIndex}
           />
         );
       })}

@@ -1,8 +1,21 @@
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 
 from apps.core.models import BaseModel
+from apps.core.storage import public_media_storage
 from .constants import AssetKind, SlideType, TransitionStyle
+
+# How often the builder's client-side heartbeat refreshes the edit lock,
+# and how long a lock survives with no heartbeat before it's treated as
+# free again — see Course.editing_user's own comment for the full
+# reasoning. The stale window is several heartbeats wide on purpose: a
+# single slow/dropped request (one bad network blip) should never
+# prematurely free a lock out from under someone who's still actively
+# working, but a genuinely closed tab should still clear within well
+# under a minute of real wall-clock time.
+EDIT_LOCK_HEARTBEAT_SECONDS = 20
+EDIT_LOCK_STALE_SECONDS = 60
 
 
 class Course(BaseModel):
@@ -83,7 +96,32 @@ class Course(BaseModel):
     # FileField, not ImageField, matching CourseAsset.file below — ImageField
     # would need Pillow, an otherwise-unneeded dependency for this project;
     # the frontend picker already restricts the file input to `accept="image/*"`.
-    thumbnail = models.FileField(upload_to='course-thumbnails/%Y/%m/', null=True, blank=True)
+    thumbnail = models.FileField(
+        upload_to='course-thumbnails/%Y/%m/', null=True, blank=True, storage=public_media_storage
+    )
+
+    # Soft "someone's already in the builder for this course" lock — NOT
+    # real-time collaborative editing (two people's changes merging live).
+    # That's explicitly out of scope: it's a lot of ongoing complexity
+    # (conflict resolution, live cursors, offline merge) this app has no
+    # real need for with a handful of internal authors, and it's easy to
+    # get subtly wrong in ways that corrupt content. This is the much
+    # simpler, much more robust alternative: whoever opens the builder
+    # claims the lock (CourseViewSet.claim_edit), a client-side heartbeat
+    # (every EDIT_LOCK_HEARTBEAT_SECONDS) keeps it fresh while they're
+    # still there, and it's considered free again once
+    # EDIT_LOCK_STALE_SECONDS passes with no heartbeat — see
+    # is_being_edited() below. That staleness window is what makes this
+    # safe against someone just closing the tab/losing their connection
+    # instead of cleanly releasing it (CourseViewSet.release_edit): no
+    # heartbeat ever arrives again, so the lock expires on its own rather
+    # than permanently locking the course. SET_NULL, not PROTECT — losing
+    # track of who was last editing is not a reason to block deleting that
+    # user.
+    editing_user = models.ForeignKey(
+        'accounts.User', null=True, blank=True, on_delete=models.SET_NULL, related_name='+'
+    )
+    editing_heartbeat_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['name']
@@ -108,6 +146,17 @@ class Course(BaseModel):
     @property
     def published_version(self):
         return self.versions.filter(status=CourseVersion.Status.PUBLISHED).order_by('-version_number').first()
+
+    def is_being_edited(self):
+        # The one place that actually interprets the raw editing_user/
+        # editing_heartbeat_at fields against EDIT_LOCK_STALE_SECONDS —
+        # every other reader (the serializer, claim_edit) goes through
+        # this rather than re-deriving the same staleness check, so there
+        # is exactly one definition of "is this lock still good."
+        if self.editing_user_id is None or self.editing_heartbeat_at is None:
+            return False
+        age = (timezone.now() - self.editing_heartbeat_at).total_seconds()
+        return age < EDIT_LOCK_STALE_SECONDS
 
     def effective_deadline_for(self, user):
         """This course's real due date for a specific user — their own
@@ -392,7 +441,7 @@ class CourseAsset(BaseModel):
     # cleanup — same style as the existing shared-bucket tradeoffs already
     # noted in docs/PROJECT_LOG.md.
     course_version = models.ForeignKey(CourseVersion, on_delete=models.CASCADE, related_name='assets')
-    file = models.FileField(upload_to='course-assets/%Y/%m/')
+    file = models.FileField(upload_to='course-assets/%Y/%m/', storage=public_media_storage)
     kind = models.CharField(max_length=20, choices=AssetKind.choices, default=AssetKind.OTHER)
     uploaded_by = models.ForeignKey('accounts.User', on_delete=models.PROTECT, related_name='course_assets_uploaded')
 

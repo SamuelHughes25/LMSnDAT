@@ -77,6 +77,99 @@ export async function publishVersion(courseId: string, versionId: string): Promi
   return version;
 }
 
+// Hard-deletes a DRAFT version outright — not the same two-stage archive/
+// restore path deleteCourse below uses for a whole Course. A draft isn't
+// independently meaningful content the way a course is (nothing links to
+// it from outside its own course — no CourseAttempt, no assignment, none
+// of the PROTECT relationships a published version can accumulate), so
+// there's nothing here worth keeping recoverable in the Archive the way
+// an accidentally-deleted course is. CourseVersionViewSet has no custom
+// destroy() override — this is the plain DRF ModelViewSet delete,
+// cascading to the draft's own lessons/slides/assets via their ordinary
+// on_delete=CASCADE. Only ever called with a DRAFT version's id — the
+// one caller (delete-course-draft-button.tsx) only ever renders next to
+// an existing draft, never a published one.
+export async function deleteCourseDraft(
+  courseId: string,
+  versionId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await djangoFetch<void>(`/course-versions/${versionId}/`, { method: "DELETE" });
+    revalidatePath(`/courses/${courseId}`);
+    return { ok: true };
+  } catch (err) {
+    if (err instanceof DjangoApiError) {
+      const detail = extractErrorDetail(err, "This draft can't be deleted right now.");
+      return { ok: false, error: detail ?? "This draft can't be deleted right now." };
+    }
+    throw err;
+  }
+}
+
+// --- Hard edit lock ("someone's already in the builder") ---
+//
+// NOT real-time collaborative editing — see Course.editing_user's own
+// comment on the backend for the full reasoning (deliberately out of
+// scope: a lot of ongoing complexity for little real benefit with this
+// app's handful of internal authors). This is the much simpler
+// claim/heartbeat/release lock instead: course-builder.tsx claims it on
+// mount, re-claims it on an interval to keep it fresh, and releases it on
+// unmount; the courses list reads `currently_editing_by` (course-types.ts)
+// to grey out a card someone else is already in.
+//
+// A genuine hard lock — there is no override. An earlier version let the
+// frontend pass `force` to take over anyway after a warning; removed
+// outright (frontend and backend both — see claim_edit's own comment) once
+// it became clear what that actually permitted: two people in the same
+// slide at once, where every save PATCHes that slide's ENTIRE config as a
+// full overwrite built from whichever browser's own (possibly stale) copy
+// last saved — not a per-field merge, so the second editor's save could
+// silently erase the first editor's unrelated changes on the same slide
+// the instant either one saved. A warning the user can click past doesn't
+// prevent that; only actually keeping the second person out does.
+export type ClaimCourseEditResult =
+  | { ok: true }
+  | { ok: false; conflict: true; editingBy: string }
+  | { ok: false; conflict: false; error: string };
+
+export async function claimCourseEdit(courseId: string): Promise<ClaimCourseEditResult> {
+  try {
+    await djangoFetch<Course>(`/courses/${courseId}/claim-edit/`, { method: "POST" });
+    return { ok: true };
+  } catch (err) {
+    if (err instanceof DjangoApiError && err.status === 409) {
+      try {
+        const body: unknown = JSON.parse(err.message);
+        const editingBy =
+          body && typeof body === "object" && "editing_by" in body && typeof body.editing_by === "string"
+            ? body.editing_by
+            : "someone else";
+        return { ok: false, conflict: true, editingBy };
+      } catch {
+        return { ok: false, conflict: true, editingBy: "someone else" };
+      }
+    }
+    if (err instanceof DjangoApiError) {
+      return { ok: false, conflict: false, error: err.message };
+    }
+    throw err;
+  }
+}
+
+// Best-effort, deliberately silent on failure — this fires from a client-
+// side unmount/beforeunload cleanup, where the network may already be
+// going away (the tab closing) and there is nothing a Server Action could
+// usefully show the user at that point anyway. A release that never
+// arrives isn't a correctness problem either way: EDIT_LOCK_STALE_SECONDS
+// on the backend frees the lock on its own once the heartbeat stops.
+export async function releaseCourseEdit(courseId: string): Promise<void> {
+  try {
+    await djangoFetch<void>(`/courses/${courseId}/release-edit/`, { method: "POST" });
+  } catch {
+    // Swallowed deliberately — see comment above.
+  }
+}
+
 // DELETE now archives rather than hard-deleting (see the backend's
 // CourseViewSet.destroy) — the course disappears from this list and from
 // everyone's portal, but all its data/attempts/analytics stay fully

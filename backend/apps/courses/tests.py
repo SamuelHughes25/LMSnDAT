@@ -1563,3 +1563,83 @@ class DemotedOwnerLockoutTests(APIAuthTestCase):
         client = self.auth('demoted_owner', 'pw')
         resp = client.patch(f'/api/v1/courses/{self.course.id}/', {'name': 'Resumed'}, format='json')
         self.assertEqual(resp.status_code, 200, resp.content)
+
+
+class CourseEditLockTests(APIAuthTestCase):
+    """The soft "someone's already in the builder" lock — claim/release/
+    force-takeover and the staleness window that frees an abandoned lock
+    without anyone explicitly releasing it. See Course.editing_user's own
+    comment for why this is deliberately NOT real-time collaborative
+    editing."""
+
+    def setUp(self):
+        self.alice = User.objects.create_user(username='alice', password='pw', is_platform_admin=True)
+        self.bob = User.objects.create_user(username='bob', password='pw', is_platform_admin=True)
+        self.course = Course.objects.create(name='Lockable Course', owner=self.alice, created_by=self.alice)
+
+    def test_claiming_a_free_course_succeeds_and_is_visible_on_the_course(self):
+        client = self.auth('alice', 'pw')
+        resp = client.post(f'/api/v1/courses/{self.course.id}/claim-edit/', format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.data['currently_editing_by'], 'alice')
+
+        resp = client.get(f'/api/v1/courses/{self.course.id}/')
+        self.assertEqual(resp.data['currently_editing_by'], 'alice')
+
+    def test_second_claim_by_a_different_user_is_refused_with_409(self):
+        self.auth('alice', 'pw').post(f'/api/v1/courses/{self.course.id}/claim-edit/', format='json')
+        resp = self.auth('bob', 'pw').post(f'/api/v1/courses/{self.course.id}/claim-edit/', format='json')
+        self.assertEqual(resp.status_code, 409, resp.content)
+        self.assertEqual(resp.data['editing_by'], 'alice')
+
+    def test_same_user_reclaiming_their_own_lock_is_fine(self):
+        client = self.auth('alice', 'pw')
+        client.post(f'/api/v1/courses/{self.course.id}/claim-edit/', format='json')
+        # This is what the heartbeat actually does every
+        # EDIT_LOCK_HEARTBEAT_SECONDS — re-claiming your own lock must
+        # never be treated as a conflict.
+        resp = client.post(f'/api/v1/courses/{self.course.id}/claim-edit/', format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+
+    def test_claim_cannot_be_forced_even_if_the_flag_is_sent(self):
+        # A genuine hard lock, no override — see claim_edit's own comment
+        # for why the earlier `force` escape hatch was removed outright
+        # rather than just hidden from the UI: still honoring it here
+        # would leave the exact same silent-data-loss risk reachable by
+        # anyone who could still POST it directly.
+        self.auth('alice', 'pw').post(f'/api/v1/courses/{self.course.id}/claim-edit/', format='json')
+        resp = self.auth('bob', 'pw').post(
+            f'/api/v1/courses/{self.course.id}/claim-edit/', {'force': True}, format='json',
+        )
+        self.assertEqual(resp.status_code, 409, resp.content)
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.editing_user_id, self.alice.id)
+
+    def test_release_clears_the_lock(self):
+        client = self.auth('alice', 'pw')
+        client.post(f'/api/v1/courses/{self.course.id}/claim-edit/', format='json')
+        resp = client.post(f'/api/v1/courses/{self.course.id}/release-edit/', format='json')
+        self.assertEqual(resp.status_code, 204, resp.content)
+        self.course.refresh_from_db()
+        self.assertIsNone(self.course.editing_user_id)
+        self.assertFalse(self.course.is_being_edited())
+
+    def test_release_by_a_non_holder_does_not_clobber_the_real_holder(self):
+        self.auth('alice', 'pw').post(f'/api/v1/courses/{self.course.id}/claim-edit/', format='json')
+        # Bob never held the lock (his own claim would have 409'd) — a
+        # stray/late release call from him must be a no-op, not something
+        # that frees alice's active lock out from under her.
+        resp = self.auth('bob', 'pw').post(f'/api/v1/courses/{self.course.id}/release-edit/', format='json')
+        self.assertEqual(resp.status_code, 204, resp.content)
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.editing_user_id, self.alice.id)
+
+    def test_stale_lock_can_be_claimed_without_force(self):
+        from django.utils import timezone
+
+        self.course.editing_user = self.alice
+        self.course.editing_heartbeat_at = timezone.now() - datetime.timedelta(seconds=120)
+        self.course.save(update_fields=['editing_user', 'editing_heartbeat_at'])
+        resp = self.auth('bob', 'pw').post(f'/api/v1/courses/{self.course.id}/claim-edit/', format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.data['currently_editing_by'], 'bob')

@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { BoxTransform } from "@/lib/course-types";
 import { cn } from "@/lib/utils";
@@ -122,6 +122,7 @@ export function PositionableBox({
   mode,
   slideRef,
   flexClassName,
+  zIndex,
   children,
 }: {
   fieldKey: string;
@@ -136,6 +137,14 @@ export function PositionableBox({
   mode: SlideFaceProps["mode"];
   slideRef: React.RefObject<HTMLElement | null> | undefined;
   flexClassName?: string;
+  // Explicit stacking order, set only by freeform-content-slide.tsx (one
+  // object_order entry's own index) — see BackgroundImagePixels' matching
+  // prop/comment in background-image-field.tsx for the bug this fixes.
+  // Every other (legacy, box_transforms-based) caller leaves this unset and
+  // keeps the z-10/z-30 scheme below exactly as before — that scheme solves
+  // a different problem (an untransformed flex sibling vs. a dragged one)
+  // with no "stacking order" array of its own to defer to.
+  zIndex?: number;
   children: React.ReactNode;
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -167,7 +176,7 @@ export function PositionableBox({
   const selectionId = `${slideId}:${fieldKey}`;
   const { selectedId, select, deselect } = useSlideSelection();
   const isSelected = selectedId === selectionId;
-  const { panelRef, panelInteractingRef } = useActiveEditorContext();
+  const { panelRef, panelInteractingRef, panelPointerDownRef, activeEditor, activeEditorId } = useActiveEditorContext();
   const { setGuides, clearGuides } = useSnapGuides();
 
   // Runs after the DOM commits, before paint — the one-time measurement
@@ -226,6 +235,62 @@ export function PositionableBox({
     // key={`${field}-${layout}`} — see content-slide-face.tsx).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, transform]);
+
+  // A second, independent deselect path alongside handleBlur below — NOT a
+  // replacement for it (that one still matters for keyboard-driven focus
+  // changes, e.g. Tab, which involve no pointerdown at all), but the one
+  // that actually fires reliably for clicking away with a pointer. Mirrors
+  // BackgroundImageEditLayer's own handlePointerDownOutside in
+  // background-image-field.tsx exactly, for the same reason that one was
+  // built pointerdown-first instead of blur-first: blur only ever fires
+  // when something that currently HAS focus loses it, but clicking inert,
+  // non-focusable panel content (plain text, headings, padding) already
+  // blurs this box's editor via the browser's own default behavior WITHOUT
+  // moving focus anywhere else — and panelPointerDownRef (see
+  // active-editor-context.tsx) deliberately suppresses handleBlur's
+  // deselect for exactly that click, so the box's text editing correctly
+  // continues to feel "still selected." The gap that leaves: once that
+  // native blur has already happened, nothing is focused anymore, so NO
+  // later click — anywhere, panel or canvas — ever produces another blur
+  // event for this box to react to. `selectedId` is then permanently
+  // orphaned at this box's id until the user clicks back into it and away
+  // again, re-arming a real focus/blur pair. Confirmed as a real,
+  // reported bug: click a text box, click blank panel space (not a
+  // control), and every subsequent click anywhere stopped unselecting it.
+  // A capture-phase pointerdown listener has no such dependency — it fires
+  // for literally every click, focus or no focus, so it can't get
+  // orphaned the same way. Declared here (before the mode !== "edit" early
+  // return just below) because every hook in this component has to run
+  // unconditionally on every render, same reasoning as the layout effect
+  // just above.
+  //
+  // Also checks panelInteractingRef, same as handleBlur above — a real
+  // regression caught immediately after this effect first shipped: the
+  // panel's font-SIZE control (and the color picker) open straight into a
+  // PORTAL-rendered listbox/menu outside panelRef's own DOM subtree (see
+  // active-editor-context.tsx's panelPointerDownRef comment, and
+  // content-slide-face.tsx's identical note on its own onBlur guard, for
+  // the fuller story), so clicking an actual size option landed outside
+  // BOTH `wrapper` and `panel` by this check's reckoning — deselecting the
+  // box mid-click, before the size change could even register. Every panel
+  // control that manages its own portal already sets this ref directly
+  // while open (text-formatting-controls.tsx), which is the one signal
+  // that's accurate regardless of where in the DOM the portal landed.
+  useEffect(() => {
+    if (mode !== "edit" || !isSelected) return;
+    function handlePointerDownOutside(e: PointerEvent) {
+      if (panelInteractingRef.current) return;
+      const wrapper = wrapperRef.current;
+      const panel = panelRef.current;
+      if (!(e.target instanceof Node)) return;
+      if (panel && panel.contains(e.target)) return;
+      if (wrapper && !wrapper.contains(e.target)) {
+        deselect(selectionId);
+      }
+    }
+    document.addEventListener("pointerdown", handlePointerDownOutside, true);
+    return () => document.removeEventListener("pointerdown", handlePointerDownOutside, true);
+  }, [mode, isSelected, deselect, selectionId, panelRef, panelInteractingRef]);
 
   // The box's position/size to actually START a drag from — measured FRESH
   // right now, not read from `measuredBaseline` state. `measuredBaseline`
@@ -296,9 +361,17 @@ export function PositionableBox({
     // fall back to DOM order, which isn't necessarily what was intended.
     // overflow-hidden lives on the INNER wrapper (around just the
     // content), not this outer positioned box — see the identical note on
-    // the edit-mode return below for why that split matters.
+    // the edit-mode return below for why that split matters. `zIndex`
+    // (freeform callers only) overrides the z-10 default — see this
+    // component's own prop comment.
     return (
-      <div className="absolute z-10" style={topLeftBoxStyle(transform.xPct, transform.yPct, transform.widthPct, transform.heightPct)}>
+      <div
+        className={cn("absolute", zIndex == null && "z-10")}
+        style={{
+          ...topLeftBoxStyle(transform.xPct, transform.yPct, transform.widthPct, transform.heightPct),
+          ...(zIndex != null ? { zIndex } : {}),
+        }}
+      >
         <div className="h-full w-full overflow-hidden">{children}</div>
       </div>
     );
@@ -311,9 +384,30 @@ export function PositionableBox({
     onTransform(next);
   }
 
+  // The move band and resize handles both preventDefault() on pointerdown
+  // (see handleMovePointerDown's own comment on why), which as a side
+  // effect suppresses the native blur that would otherwise fire on
+  // whichever OTHER box's editor currently has real DOM focus — select()
+  // below updates the shared SELECTION slot just fine regardless, but
+  // without this, that other editor's own onBlur (and the
+  // active-editor-context cleanup it drives) never runs at all. Confirmed
+  // as a real, reported bug: clicking box B's move band while box A's text
+  // was focused moved the border/selection outline to B, but the actual
+  // text CURSOR silently stayed in A — typing kept landing in A even
+  // though it no longer looked selected. Only relevant when the
+  // previously-active editor belongs to a DIFFERENT box than the one being
+  // selected now — grabbing a box's own move band while ITS OWN text is
+  // already focused must never blur it out from under the user.
+  function blurStaleEditor() {
+    if (activeEditor && activeEditorId && activeEditorId !== selectionId) {
+      activeEditor.commands.blur();
+    }
+  }
+
   function handleMovePointerDown(e: React.PointerEvent) {
     e.preventDefault();
     select(selectionId);
+    blurStaleEditor();
     const slide = slideRef?.current;
     const startMaybe = measureFreshBaseline();
     if (!slide || !startMaybe) return;
@@ -379,6 +473,7 @@ export function PositionableBox({
     e.preventDefault();
     e.stopPropagation();
     select(selectionId);
+    blurStaleEditor();
     const slide = slideRef?.current;
     const startMaybe = measureFreshBaseline();
     if (!slide || !startMaybe) return;
@@ -470,7 +565,7 @@ export function PositionableBox({
     const panelEl = panelRef.current;
     const focusMovedIntoPanel = !!(panelEl && nextFocus instanceof Node && panelEl.contains(nextFocus));
     const focusStayedInBox = !!(nextFocus && e.currentTarget.contains(nextFocus as Node));
-    if (focusMovedIntoPanel || panelInteractingRef.current || focusStayedInBox) {
+    if (focusMovedIntoPanel || panelInteractingRef.current || panelPointerDownRef.current || focusStayedInBox) {
       return;
     }
     deselect(selectionId);
@@ -522,13 +617,27 @@ export function PositionableBox({
       // the much more common partial-overlap case, since z-30 applies to
       // the box's ENTIRE bounds (including any portion that was previously
       // hidden) the moment any exposed sliver of it is clicked.
+      //
+      // `zIndex` (freeform callers only — see this component's own prop
+      // comment) overrides the z-10/z-30 scheme with an explicit value
+      // instead, but the "selected jumps to front" behavior still applies:
+      // 1000 is comfortably above any plausible object_order-derived value
+      // (a handful of objects on one slide), so the selected box still
+      // visibly wins every overlap regardless of its own stacking index.
       className={cn(
         "relative",
         !isPositioned && flexClassName,
         isPositioned && "absolute",
-        isPositioned && (isSelected ? "z-30" : "z-10"),
+        isPositioned && zIndex == null && (isSelected ? "z-30" : "z-10"),
       )}
-      style={isPositioned && effective ? topLeftBoxStyle(effective.xPct, effective.yPct, effective.widthPct, effective.heightPct) : undefined}
+      style={
+        isPositioned && effective
+          ? {
+              ...topLeftBoxStyle(effective.xPct, effective.yPct, effective.widthPct, effective.heightPct),
+              ...(zIndex != null ? { zIndex: isSelected ? 1000 : zIndex } : {}),
+            }
+          : undefined
+      }
     >
       {/* overflow-hidden lives HERE, on the inner content wrapper, not on
           the outer positioned box above — it used to sit on the outer box,
@@ -546,19 +655,25 @@ export function PositionableBox({
           as before — clipping just moved to the element that's supposed
           to own it.
 
-          Also carries a faint border, always visible in edit mode —
-          before this, a box had NO visible boundary at all until clicked
-          (the move band is invisible, only a cursor change; resize
-          handles only appear once selected), making it hard to tell at a
-          glance where one box ends and another begins, or how much empty
-          space is actually inside an unselected one. border-border/50
-          (not a stronger/dashed treatment) stays subtle enough not to
-          compete with the box's own content — a boundary hint, not a
-          selection indicator (that's still the resize handles/z-index
-          treatment above). This whole branch only runs in edit mode
-          (mode !== "edit" returns early, well above), so no extra mode
-          check is needed here. */}
-      <div className="h-full w-full overflow-hidden border border-border/50">{children}</div>
+          The border itself only renders once selected — rendering it at
+          all times (an earlier version of this, meant as a boundary hint
+          for an otherwise invisible box) was reported as visual clutter:
+          every box on a slide showed a permanent faint outline regardless
+          of whether it was actually being worked on, competing with the
+          slide's own content. Selected-only matches the resize handles/
+          z-index treatment above — border, handles, and front-of-stack
+          z-index all now turn on together as one "this is the thing I'm
+          editing" signal, off together otherwise. This whole branch only
+          runs in edit mode (mode !== "edit" returns early, well above), so
+          no extra mode check is needed here. */}
+      <div
+        className={cn(
+          "h-full w-full overflow-hidden border",
+          isSelected ? "border-primary/70" : "border-transparent",
+        )}
+      >
+        {children}
+      </div>
 
       {baseline && slideRef && (
         <>

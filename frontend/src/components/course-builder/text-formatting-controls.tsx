@@ -25,12 +25,19 @@ import { cn } from "@/lib/utils";
 // field-agnostic already — takes only an `Editor` and nothing else — so no
 // changes were needed here to make it reusable, just a new home.
 
+// 8-34 in single-px steps (fine control for ordinary body/title text),
+// plus a handful of larger presets for display/headline-sized text —
+// reported as a real gap, not just "a few more options": 34px was the
+// hard ceiling before, with no way to go bigger at all. Sub-8 sizes
+// (previously 1-7) are gone entirely — uselessly small on this app's
+// fixed 960x540 canvas, never a legitimate choice.
 const FONT_SIZE_OPTIONS: { key: string; label: string; value: string | null }[] = [
   { key: "default", label: "Default", value: null },
-  ...Array.from({ length: 34 }, (_, i) => {
-    const size = i + 1;
+  ...Array.from({ length: 27 }, (_, i) => {
+    const size = i + 8;
     return { key: String(size), label: String(size), value: `${size}px` };
   }),
+  ...[40, 48, 60, 72, 96].map((size) => ({ key: String(size), label: String(size), value: `${size}px` })),
 ];
 
 const TEXT_COLOR_PRESETS: { label: string; value: string | null }[] = [
@@ -55,6 +62,31 @@ const FONT_FAMILY_OPTIONS: { key: string; label: string; value: string | null }[
   { key: "trebuchet", label: "Trebuchet MS", value: "'Trebuchet MS', sans-serif" },
   { key: "comic-sans", label: "Comic Sans MS", value: "'Comic Sans MS', 'Comic Sans', cursive" },
 ];
+
+// What the Size trigger shows while no explicit size mark is set —
+// reported directly as confusing: the word "Default" told the author
+// nothing about what size the selected text actually IS, just that
+// nobody had overridden it yet. Reads the real rendered size straight off
+// the DOM at the selection's own position (not a fixed guess per field
+// type) so it's correct regardless of which field this selection sits in
+// (title/body/a freeform box all carry different base sizes via Tailwind
+// classes, not an inline style this component could otherwise read off
+// the mark). Falls back to an em dash if the selection can't resolve to a
+// real DOM node — a window right after a slide switch, before React has
+// re-rendered this box's own content, confirmed as the only time this
+// can happen.
+function currentComputedFontSizeLabel(editor: Editor): string {
+  try {
+    const { from } = editor.state.selection;
+    const pos = editor.view.domAtPos(from);
+    const el = pos.node.nodeType === Node.TEXT_NODE ? pos.node.parentElement : (pos.node as HTMLElement);
+    if (!el) return "—";
+    const px = Math.round(Number.parseFloat(window.getComputedStyle(el).fontSize));
+    return Number.isFinite(px) ? String(px) : "—";
+  } catch {
+    return "—";
+  }
+}
 
 const TEXT_ALIGN_OPTIONS: { value: TextAlignValue; label: string; icon: typeof AlignLeft }[] = [
   { value: "left", label: "Align left", icon: AlignLeft },
@@ -211,7 +243,9 @@ export function TextFormattingControls({
                 panelInteractingRef.current = true;
               }}
             >
-              <SelectValue />
+              <SelectValue>
+                {() => (currentSizeOption.key === "default" ? currentComputedFontSizeLabel(editor) : currentSizeOption.label)}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {FONT_SIZE_OPTIONS.map((option) => (

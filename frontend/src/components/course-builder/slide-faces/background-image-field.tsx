@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { Move } from "lucide-react";
 
 import type { ExtraImage } from "@/lib/course-types";
+import { cn } from "@/lib/utils";
 import { useActiveEditorContext } from "../active-editor-context";
 import { CANVAS_H, CANVAS_W } from "../slide-canvas";
 import { useSlideSelection } from "../slide-selection-context";
@@ -190,15 +191,31 @@ export function BackgroundImagePixels({
   yPct,
   widthPct,
   heightPct,
+  zIndex,
 }: {
   value: string;
   xPct: number;
   yPct: number;
   widthPct: number;
   heightPct: number;
+  // Explicit stacking order for a freeform content slide's object_order —
+  // see freeform-content-slide.tsx's own comment for why a hardcoded z-0
+  // here was the actual bug behind "reordering an image relative to a text
+  // box in the Layers panel has no visible effect": every freeform text box
+  // renders via PositionableBox, which always carries its own z-10 (or
+  // z-30 once selected) regardless of DOM order, so a plain z-0 image could
+  // never out-rank ANY text box no matter where object_order put it.
+  // Undefined (every other caller — the single universal background image,
+  // and any non-freeform slide type's extra_images) keeps the old z-0
+  // default, which is still correct there: those callers have no
+  // interleaved text boxes to out-rank in the first place.
+  zIndex?: number;
 }) {
   return (
-    <div className="absolute z-0 overflow-hidden rounded-md" style={imageBoxStyle(xPct, yPct, widthPct, heightPct)}>
+    <div
+      className={cn("absolute overflow-hidden rounded-md", zIndex == null && "z-0")}
+      style={{ ...imageBoxStyle(xPct, yPct, widthPct, heightPct), ...(zIndex != null ? { zIndex } : {}) }}
+    >
       {/* eslint-disable-next-line @next/next/no-img-element -- see the note
           in image-field.tsx's ImageUploadField for why a plain <img> is
           used instead of next/image. */}
@@ -217,6 +234,7 @@ export function BackgroundImageEditLayer({
   onTransform,
   containerRef,
   overlayRef,
+  zIndex,
 }: {
   value: string;
   // Identifies this specific image in the shared slide-selection-context —
@@ -232,6 +250,9 @@ export function BackgroundImageEditLayer({
   onTransform: (t: { xPct: number; yPct: number; widthPct: number; heightPct: number }) => void;
   containerRef: React.RefObject<HTMLElement | null>;
   overlayRef: React.RefObject<HTMLElement | null>;
+  // Forwarded straight through to the pixels below — see
+  // BackgroundImagePixels' own comment on this same prop.
+  zIndex?: number;
 }) {
   // The controls (band/border/grip/handles) portal into overlayRef's DOM
   // node — an unclipped sibling of the slide's own clipped content
@@ -293,7 +314,7 @@ export function BackgroundImageEditLayer({
   // treat as "clicked away," reverting the panel back to its normal slide
   // view mid-edit. Same panelRef the text-box selection/blur guards already
   // use (see positionable-box.tsx and content-slide-face.tsx).
-  const { panelRef } = useActiveEditorContext();
+  const { panelRef, activeEditor, activeEditorId } = useActiveEditorContext();
   const { setGuides, clearGuides } = useSnapGuides();
 
   useEffect(() => {
@@ -327,6 +348,17 @@ export function BackgroundImageEditLayer({
   function handleMovePointerDown(e: React.PointerEvent) {
     e.preventDefault();
     select(selectionId);
+    // See positionable-box.tsx's identical blurStaleEditor for the bug this
+    // fixes — preventDefault() above suppresses the native blur a text
+    // box's editor would otherwise get when this image's band is clicked,
+    // so without this, dragging/selecting an image while some text box was
+    // focused left the text cursor behind in that box (even though the
+    // selection outline correctly moved to the image) — an image never
+    // legitimately owns the active editor, so any currently-active one is
+    // always stale the moment an image is being selected.
+    if (activeEditor && activeEditorId) {
+      activeEditor.commands.blur();
+    }
     const container = containerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
@@ -370,7 +402,14 @@ export function BackgroundImageEditLayer({
 
   return (
     <>
-      <BackgroundImagePixels value={value} xPct={effective.x} yPct={effective.y} widthPct={effective.w} heightPct={effective.h} />
+      <BackgroundImagePixels
+        value={value}
+        xPct={effective.x}
+        yPct={effective.y}
+        widthPct={effective.w}
+        heightPct={effective.h}
+        zIndex={zIndex}
+      />
 
       {/* Control frame: same bounds as the pixels above, but portaled into
           overlayRef's unclipped node (see this component's opening

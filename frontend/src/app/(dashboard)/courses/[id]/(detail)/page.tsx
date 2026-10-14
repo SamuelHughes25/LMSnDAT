@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CreateCourseDraftButton } from "@/components/create-course-draft-button";
+import { DeleteCourseDraftButton } from "@/components/delete-course-draft-button";
 import { PublishCourseButton } from "@/components/publish-course-button";
 import type { CourseVersion } from "@/lib/course-types";
 import { djangoFetch } from "@/lib/django";
@@ -40,6 +41,7 @@ export default async function CourseOverviewPage({ params }: { params: Promise<{
               <Button variant="outline" size="sm" render={<Link href={`/courses/${id}/builder`} />}>
                 Open builder
               </Button>
+              <DeleteCourseDraftButton courseId={id} versionId={draft.id} versionNumber={draft.version_number} />
               <PublishCourseButton courseId={id} versionId={draft.id} />
             </>
           ) : (

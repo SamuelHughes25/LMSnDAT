@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import type { Editor } from "@tiptap/react";
 
@@ -60,6 +60,26 @@ type ActiveEditorContextValue = {
   // be read synchronously inside a blur/outside-click handler, never to
   // drive a render itself.
   panelInteractingRef: RefObject<boolean>;
+  // True iff the most recent pointerdown anywhere on the page landed inside
+  // panelRef's own DOM subtree — kept fresh by a single document-level
+  // capture-phase listener below, read synchronously by every editor's
+  // onBlur guard (positionable-box.tsx, content-slide-face.tsx,
+  // free-text-box.tsx) alongside focusMovedIntoPanel/panelInteractingRef.
+  // Exists because `e.relatedTarget` (what focusMovedIntoPanel checks) is
+  // only ever non-null when the click landed on something natively
+  // FOCUSABLE — a plain click on a <label>/<div>/heading/whitespace inside
+  // the panel (e.g. the "X"/"Y" position-field labels, which have no
+  // for/id pairing to their <input>) never moves real DOM focus anywhere,
+  // so relatedTarget is null and the existing guard wrongly concludes focus
+  // left the panel entirely, firing a deselect mid-interaction. Confirmed
+  // via a real browser to be the actual mechanism behind a reported "can't
+  // click around in the side panel without the box losing its highlight
+  // and the panel jumping back to the generic slide view" bug — pointerdown
+  // fires (and this ref updates) strictly before the resulting blur, so by
+  // the time any onBlur handler runs, it already reflects where the CLICK
+  // actually started, regardless of whether that landed on something
+  // focusable.
+  panelPointerDownRef: RefObject<boolean>;
 };
 
 const ActiveEditorContext = createContext<ActiveEditorContextValue | null>(null);
@@ -68,6 +88,24 @@ export function ActiveEditorProvider({ children }: { children: ReactNode }) {
   const [active, setActive] = useState<{ id: string; editor: Editor } | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const panelInteractingRef = useRef(false);
+  const panelPointerDownRef = useRef(false);
+
+  // Capture phase, document-wide: this is the one thing that reliably runs
+  // BEFORE the blur a pointerdown is about to cause, for every single click
+  // anywhere on the page, focusable target or not — see
+  // panelPointerDownRef's own comment on the type above for why that's
+  // exactly what the existing relatedTarget-based checks can't provide.
+  useEffect(() => {
+    function handlePointerDownCapture(e: PointerEvent) {
+      panelPointerDownRef.current = !!(
+        panelRef.current &&
+        e.target instanceof Node &&
+        panelRef.current.contains(e.target)
+      );
+    }
+    document.addEventListener("pointerdown", handlePointerDownCapture, true);
+    return () => document.removeEventListener("pointerdown", handlePointerDownCapture, true);
+  }, []);
 
   const value = useMemo<ActiveEditorContextValue>(
     () => ({
@@ -85,6 +123,7 @@ export function ActiveEditorProvider({ children }: { children: ReactNode }) {
         setActive((current) => (current?.editor === editor ? null : current)),
       panelRef,
       panelInteractingRef,
+      panelPointerDownRef,
     }),
     [active],
   );

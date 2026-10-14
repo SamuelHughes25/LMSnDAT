@@ -373,13 +373,23 @@ class CourseSerializer(serializers.ModelSerializer):
     # .prefetch_related('editors'), so this reuses that cache instead of a
     # fresh COUNT/SELECT per course.
     editor_usernames = serializers.SerializerMethodField()
+    # Null whenever the lock is free OR stale — obj.is_being_edited()
+    # (Course's own model method) is the one place that interprets
+    # editing_heartbeat_at against EDIT_LOCK_STALE_SECONDS, so the frontend
+    # never has to do that staleness math itself or risk it drifting out
+    # of sync with the backend's own definition of "still being edited."
+    # A plain username string (not editing_user's raw id) since the only
+    # use is display — the courses list greying out a card and showing
+    # "Being edited by X" (see CourseViewSet.claim_edit/release_edit for
+    # how this actually gets set/cleared).
+    currently_editing_by = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
         fields = [
             'id', 'name', 'description', 'thumbnail', 'created_by', 'created_by_username', 'is_archived',
             'archived_by', 'archived_by_username', 'archived_at',
-            'owner', 'owner_username', 'editors', 'editor_usernames',
+            'owner', 'owner_username', 'editors', 'editor_usernames', 'currently_editing_by',
             'is_assessment', 'passing_score', 'deadline', 'my_deadline', 'created_at', 'updated_at',
         ]
         # is_archived/archived_by/archived_at/owner/editors are all
@@ -390,11 +400,14 @@ class CourseSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'id', 'created_by', 'created_by_username', 'created_at', 'updated_at',
             'is_archived', 'archived_by', 'archived_by_username', 'archived_at',
-            'owner', 'owner_username', 'editors', 'editor_usernames',
+            'owner', 'owner_username', 'editors', 'editor_usernames', 'currently_editing_by',
         ]
 
     def get_editor_usernames(self, obj):
         return [u.username for u in obj.editors.all()]
+
+    def get_currently_editing_by(self, obj):
+        return obj.editing_user.username if obj.is_being_edited() else None
 
     def get_my_deadline(self, obj):
         request = self.context.get('request')

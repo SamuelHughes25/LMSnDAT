@@ -257,15 +257,54 @@ function seedFreeformFromTemplate(layout: ContentSlideLayout): {
   text_boxes: FreeTextBox[];
   object_order: SlideObjectRef[];
 } {
-  const title: FreeTextBox = { id: makeTextBoxId(), html: titleHtml("New slide"), xPct: 10, yPct: 8, widthPct: 80, heightPct: 15 };
+  // 9% of the 540px-tall canvas is ~49px — a close, slightly-generous match
+  // for one line of 4xl/bold text's own ~40px natural line-height, not the
+  // old 15% (~81px) every title box used to spawn at. That extra ~40px was
+  // reported directly: title boxes spawned noticeably taller than the one
+  // line of text they'd ever actually hold, reading as a box with a lot of
+  // empty room inside it rather than one sized to its own content. Shared
+  // by every template below (not just the base `title` object) so "every
+  // title box spawns one line tall" holds everywhere, not just title-top/
+  // title-bottom/title-body/two-column, which inherit it from `title`
+  // directly.
+  const TITLE_HEIGHT_PCT = 9;
+  const title: FreeTextBox = {
+    id: makeTextBoxId(),
+    html: titleHtml("New slide"),
+    xPct: 10,
+    yPct: 8,
+    widthPct: 80,
+    heightPct: TITLE_HEIGHT_PCT,
+  };
 
   function withBoxes(...boxes: FreeTextBox[]) {
     return { text_boxes: boxes, object_order: boxes.map((b): SlideObjectRef => ({ type: "text", id: b.id })) };
   }
 
+  // Shared symmetric left/right margin for the two layouts reported as
+  // having "way too big" horizontal padding (title-body, two-column) — 6%
+  // of the 960px-wide canvas is ~58px a side, close to the legacy system's
+  // own `px-16` (64px) rather than the old 10% (~96px) margin, which read
+  // as noticeably wider than the fixed-layout equivalent it's standing in
+  // for. title-only/title-subtitle/title-top/title-bottom weren't reported
+  // as having a horizontal-margin problem, so they keep the base `title`
+  // box's own 10%/80% geometry untouched.
+  const BODY_MARGIN_PCT = 6;
+  const BODY_WIDTH_PCT = 100 - BODY_MARGIN_PCT * 2;
+
   switch (layout) {
     case "title-only":
-      return withBoxes({ ...title, yPct: 40, heightPct: 20 });
+      // Previously yPct: 40/heightPct: 20 with the base (left-aligned)
+      // title html — two confirmed bugs at once: a 20%-tall box is far
+      // taller than one line of 4xl text actually needs, so the text sat
+      // near the box's own top edge, reading as "too high" even though the
+      // BOX itself was roughly centered; and with no text-align, that
+      // oversized box's text also sat flush left instead of centered.
+      // yPct: 45 against TITLE_HEIGHT_PCT (9) keeps the box itself truly
+      // vertically centered (45 + 9/2 = ~50), and centering the text is
+      // the same fix title-subtitle's own box already needed for the
+      // identical reason.
+      return withBoxes({ ...title, yPct: 45, html: titleHtml("New slide", "center") });
     case "title-subtitle": {
       // Both boxes span a wide chunk of the slide (same symmetric-margin
       // geometry every other template here uses) but default to
@@ -278,12 +317,22 @@ function seedFreeformFromTemplate(layout: ContentSlideLayout): {
       // of how wide the box is) is what actually fixes that; title-only/
       // title-bottom/etc. use the same wide-box geometry but weren't
       // reported as looking wrong, so left unchanged.
-      const centeredTitle = { ...title, yPct: 35, heightPct: 15, html: titleHtml("New slide", "center") };
+      //
+      // yPct shifted down from 35/52 to 42/60 (title/subtitle respectively)
+      // — reported as spawning "a little too high": the pair's old 35-62%
+      // span centered at ~48.5%, visibly above the slide's true 50%
+      // midpoint; 42-70% centers at ~56%, which reads as vertically
+      // centered once the title's own larger font weight is accounted for.
+      // Nudged to 45 (from 42) when the title box itself shrank to
+      // TITLE_HEIGHT_PCT — keeps the gap between title and subtitle
+      // looking the same as before rather than growing by the height
+      // reduction.
+      const centeredTitle = { ...title, yPct: 45, html: titleHtml("New slide", "center") };
       const subtitle: FreeTextBox = {
         id: makeTextBoxId(),
         html: '<p style="text-align: center">Subtitle</p>',
         xPct: 15,
-        yPct: 52,
+        yPct: 60,
         widthPct: 70,
         heightPct: 10,
       };
@@ -292,16 +341,43 @@ function seedFreeformFromTemplate(layout: ContentSlideLayout): {
     case "title-bottom":
       return withBoxes({ ...title, yPct: 77 });
     case "two-column": {
-      const body1: FreeTextBox = { id: makeTextBoxId(), html: "", xPct: 10, yPct: 26, widthPct: 38, heightPct: 66 };
-      const body2: FreeTextBox = { id: makeTextBoxId(), html: "", xPct: 52, yPct: 26, widthPct: 38, heightPct: 66 };
-      return withBoxes(title, body1, body2);
+      // Columns split BODY_WIDTH_PCT in half with the same BODY_MARGIN_PCT
+      // gap between them as on either outer edge, so the two columns and
+      // the gap between them all read as evenly spaced — not just each
+      // column's own outer margin shrinking while the gap between them
+      // stayed at its old (also too wide) value.
+      const columnWidth = (BODY_WIDTH_PCT - BODY_MARGIN_PCT) / 2;
+      const body1: FreeTextBox = {
+        id: makeTextBoxId(),
+        html: "",
+        xPct: BODY_MARGIN_PCT,
+        yPct: 26,
+        widthPct: columnWidth,
+        heightPct: 66,
+      };
+      const body2: FreeTextBox = {
+        id: makeTextBoxId(),
+        html: "",
+        xPct: BODY_MARGIN_PCT + columnWidth + BODY_MARGIN_PCT,
+        yPct: 26,
+        widthPct: columnWidth,
+        heightPct: 66,
+      };
+      return withBoxes({ ...title, xPct: BODY_MARGIN_PCT, widthPct: BODY_WIDTH_PCT }, body1, body2);
     }
     case "title-top":
       return withBoxes(title);
     case "title-body":
     default: {
-      const body: FreeTextBox = { id: makeTextBoxId(), html: "", xPct: 10, yPct: 26, widthPct: 80, heightPct: 66 };
-      return withBoxes(title, body);
+      const body: FreeTextBox = {
+        id: makeTextBoxId(),
+        html: "",
+        xPct: BODY_MARGIN_PCT,
+        yPct: 26,
+        widthPct: BODY_WIDTH_PCT,
+        heightPct: 66,
+      };
+      return withBoxes({ ...title, xPct: BODY_MARGIN_PCT, widthPct: BODY_WIDTH_PCT }, body);
     }
   }
 }

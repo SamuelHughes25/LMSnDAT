@@ -498,8 +498,93 @@ function EditableSubtitle({
 // the current, deliberately-unrestricted title extension set) a title could
 // in principle contain a list, in which case it should look like whatever a
 // bare, unstyled list looks like rather than adopting body copy's spacing.
+// The p:empty:before rule below fixes a real, reported bug: a
+// blank line (an author pressing Enter with nothing typed on it, used to
+// put visual space between two blocks — e.g. two separate bullet lists)
+// shows up as a genuinely empty `<p></p>` once saved — ProseMirror's own
+// EDITOR rendering gives every empty paragraph a synthetic
+// `<br class="ProseMirror-trailingBreak">` so it still occupies a real
+// line's height on screen, but that `<br>` is a live rendering artifact,
+// never part of `editor.getHTML()`'s output. The static render path
+// (this class's other user — thumbnails, Preview, the actual learner-
+// facing viewer) has no equivalent trick, so the exact same stored HTML
+// collapses that blank line to zero height there: confirmed via a real
+// side-by-side comparison, a blank line between two bullet lists was
+// clearly visible in the builder and completely gone in Preview. A
+// non-breaking space in a `::before` pseudo-element is the standard,
+// long-supported fix for "give an empty block real line-height" — same
+// idea as a literal `&nbsp;` character, without needing to rewrite any
+// already-saved content.
 export const BODY_TYPOGRAPHY =
-  "h-full overflow-y-auto text-lg leading-relaxed [&_p]:my-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-6 [&_ol]:pl-6 [&_li]:my-0.5";
+  "h-full overflow-y-auto text-lg leading-relaxed [&_p]:my-0 [&_p:empty]:before:content-['\\00a0'] [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-6 [&_ol]:pl-6 [&_li]:my-0.5";
+
+// A second, genuinely different bug behind the same user-visible report
+// ("blank lines don't survive") — this one has nothing to do with
+// rendering (BODY_TYPOGRAPHY's own `:empty` fix above already handles a
+// blank line the author creates by pressing Enter twice while typing).
+// This one is about PASTING multi-line text (drafted elsewhere — Word,
+// an email, a text file — then pasted in, a completely ordinary way to
+// author course content). Confirmed by reading prosemirror-view's own
+// default plain-text clipboard parser directly
+// (node_modules/prosemirror-view/dist/index.js, parseFromClipboard):
+// it splits pasted text on `/(?:\r\n?|\n)+/` — ANY run of one or more
+// line breaks collapses to a SINGLE split point. That means "A\n\nB"
+// (one blank line) and "A\n\n\nB" (two blank lines) both produce the
+// exact same two paragraphs, "A" and "B" — the blank line is consumed
+// entirely as a paragraph separator and never becomes a paragraph (empty
+// or otherwise) at all. No amount of fixing *rendering* can help here —
+// the blank line is already gone before a single paragraph node exists.
+//
+// The fix: a `transformPastedText` hook (a real ProseMirror EditorProps
+// hook, confirmed against prosemirror-view's own .d.ts) runs on the raw
+// pasted string BEFORE that default splitter does. For every run of 2+
+// line breaks (i.e. at least one genuine blank line), this re-inserts a
+// lone non-breaking-space "line" in place of each blank line — turning
+// "A\n\nB" into "A\n \nB" before the default splitter ever sees it,
+// which now produces THREE paragraphs ("A", " ", "B") since none of
+// those three gaps collapses into another. The middle paragraph isn't
+// technically :empty (it holds one nbsp character), but that's exactly
+// the point — a visible character gives it real height on its own, no
+// extra CSS needed, and it reads identically to an author-typed blank
+// line either way.
+export function preserveBlankLinesInPastedText(text: string): string {
+  return text.replace(/(?:\r\n|\r|\n){2,}/g, (run) => {
+    const lineBreakCount = (run.match(/\r\n|\r|\n/g) ?? []).length;
+    return "\n" + " \n".repeat(lineBreakCount - 1);
+  });
+}
+
+// A THIRD, again genuinely different cause behind the same "blank lines
+// don't survive outside the builder" report — found by inspecting a
+// real author's actual saved content rather than another synthetic
+// test case. Real authored paragraphs there looked like
+// `<p>Some text<br></p>` — a trailing `<br>` as a paragraph's LAST
+// child, not a separate empty `<p>`. Confirmed via a side-by-side
+// screenshot: the builder's own contenteditable rendering visibly
+// shows that trailing `<br>` as a second, blank line within the same
+// paragraph (a well-known contenteditable browser quirk — effectively
+// the same phenomenon as the synthetic ProseMirror-trailingBreak an
+// EMPTY paragraph gets, just triggered by a real, saved `<br>` instead
+// of a live-only rendering artifact this time). Plain static HTML has
+// no such accommodation: a `<br>` with nothing after it inside a block
+// contributes zero extra height there, by ordinary browser convention
+// — so the exact same markup that visibly took two lines in the
+// builder collapses to one line the moment it's rendered via
+// dangerouslySetInnerHTML anywhere else (thumbnails, Preview, the
+// learner-facing viewer).
+//
+// The fix splits each trailing `<br>` (or run of them) off into its
+// own paragraph holding a non-breaking space, which — same as the
+// paste fix's placeholder line above — gets real visible height on
+// its own with no further CSS needed. Runs only on the SANITIZED
+// string (after DOMPurify), so it can't itself introduce anything
+// DOMPurify would have stripped.
+function expandTrailingBreaks(html: string): string {
+  return html.replace(/(?:<br\s*\/?>\s*)+<\/p>/gi, (match) => {
+    const breakCount = (match.match(/<br\s*\/?>/gi) ?? []).length;
+    return "</p>" + "<p> </p>".repeat(breakCount);
+  });
+}
 
 // Non-interactive render path for any sanitized-HTML field on this face —
 // title and body/body2 alike (thumbnails, the learner-facing preview in
@@ -534,7 +619,7 @@ export function StaticField({
   // effectively imperceptible flash — an acceptable cost for never letting
   // unsanitized HTML reach the DOM.
   const isClient = useIsClient();
-  const sanitized = isClient ? DOMPurify.sanitize(value ?? "") : "";
+  const sanitized = isClient ? expandTrailingBreaks(DOMPurify.sanitize(value ?? "")) : "";
   const classes = cn(FIELD_CLASSES, "pointer-events-none", className);
 
   // A field that was typed into and then fully cleared out doesn't
@@ -580,7 +665,7 @@ function RichTextBody({
   onCommit: (value: string) => void;
   className?: string;
 }) {
-  const { focusEditor, blurEditor, panelRef, panelInteractingRef } = useActiveEditorContext();
+  const { focusEditor, blurEditor, panelRef, panelInteractingRef, panelPointerDownRef } = useActiveEditorContext();
   const debouncedCommit = useDebouncedCallback(onCommit, CHANGE_DEBOUNCE_MS);
 
   const editor = useEditor({
@@ -611,7 +696,13 @@ function RichTextBody({
       FontFamily,
       TextAlign,
       Color,
-      Placeholder.configure({ placeholder: "Click to add text" }),
+      // See free-text-box.tsx's identical fix for why this checks
+      // `editor.isEmpty` rather than passing a plain string — a plain
+      // string placeholder decorates whichever paragraph the cursor is
+      // CURRENTLY in whenever that one's empty, so it kept showing on a
+      // freshly-created second line even after the box's first line had
+      // real text in it.
+      Placeholder.configure({ placeholder: ({ editor }) => (editor.isEmpty ? "Click to add text" : "") }),
     ],
     editorProps: {
       attributes: {
@@ -631,6 +722,11 @@ function RichTextBody({
           "[&_.is-empty]:before:pointer-events-none [&_.is-empty]:before:float-left [&_.is-empty]:before:h-0 [&_.is-empty]:before:text-muted-foreground/50 [&_.is-empty]:before:content-[attr(data-placeholder)]",
         ),
       },
+      // See preserveBlankLinesInPastedText's own comment for why this is
+      // needed — pasting multi-line content (not typing it) is the other
+      // half of "blank lines don't survive" that BODY_TYPOGRAPHY's :empty
+      // CSS rule alone can't fix.
+      transformPastedText: (text) => preserveBlankLinesInPastedText(text),
     },
     onUpdate: ({ editor }) => {
       debouncedCommit(editor.getHTML());
@@ -662,7 +758,7 @@ function RichTextBody({
       const panelEl = panelRef.current;
       const nextFocus = event.relatedTarget;
       const focusMovedIntoPanel = !!(panelEl && nextFocus instanceof Node && panelEl.contains(nextFocus));
-      if (focusMovedIntoPanel || panelInteractingRef.current) {
+      if (focusMovedIntoPanel || panelInteractingRef.current || panelPointerDownRef.current) {
         return;
       }
       blurEditor(fieldId, editor);
@@ -725,7 +821,7 @@ function useSingleLineSlideEditor({
   typographyClass: string;
   placeholder: string;
 }) {
-  const { focusEditor, blurEditor, panelRef, panelInteractingRef } = useActiveEditorContext();
+  const { focusEditor, blurEditor, panelRef, panelInteractingRef, panelPointerDownRef } = useActiveEditorContext();
   const debouncedCommit = useDebouncedCallback(onCommit, CHANGE_DEBOUNCE_MS);
 
   return useEditor({
@@ -784,7 +880,7 @@ function useSingleLineSlideEditor({
       const panelEl = panelRef.current;
       const nextFocus = event.relatedTarget;
       const focusMovedIntoPanel = !!(panelEl && nextFocus instanceof Node && panelEl.contains(nextFocus));
-      if (focusMovedIntoPanel || panelInteractingRef.current) {
+      if (focusMovedIntoPanel || panelInteractingRef.current || panelPointerDownRef.current) {
         return;
       }
       blurEditor(fieldId, editor);

@@ -24,6 +24,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Course, CourseVersion, Lesson, Slide, SlideConfig, SlideType } from "@/lib/course-types";
 import { ActiveEditorProvider, useActiveEditorContext } from "./active-editor-context";
+import { CourseEditLockGate } from "./course-edit-lock-gate";
 import { PropertiesPanel, type PropertiesPanelProps, type SelectedObject } from "./properties-panel";
 import { SlideCanvas } from "./slide-canvas";
 import { SlideRail } from "./slide-rail";
@@ -76,15 +77,17 @@ function parseSelectedObject(selectedId: string | null, slideId: string | undefi
 // below these providers, not alongside them.
 export function CourseBuilder(props: { course: Course; initialVersion: CourseVersion }) {
   return (
-    <ActiveEditorProvider>
-      <SlideSelectionProvider>
-        <SnapGuideProvider>
-          <TextBoxPlacementProvider>
-            <CourseBuilderInner {...props} />
-          </TextBoxPlacementProvider>
-        </SnapGuideProvider>
-      </SlideSelectionProvider>
-    </ActiveEditorProvider>
+    <CourseEditLockGate courseId={props.course.id} courseName={props.course.name}>
+      <ActiveEditorProvider>
+        <SlideSelectionProvider>
+          <SnapGuideProvider>
+            <TextBoxPlacementProvider>
+              <CourseBuilderInner {...props} />
+            </TextBoxPlacementProvider>
+          </SnapGuideProvider>
+        </SlideSelectionProvider>
+      </ActiveEditorProvider>
+    </CourseEditLockGate>
   );
 }
 

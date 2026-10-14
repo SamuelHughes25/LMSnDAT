@@ -151,6 +151,17 @@ if STORAGE_BACKEND == 's3':
     AWS_DEFAULT_ACL = 'private'
     AWS_QUERYSTRING_AUTH = True
     AWS_QUERYSTRING_EXPIRE = 3600
+    # A second, PUBLIC storage for course images/thumbnails — see
+    # apps/core/storage.py's own comment for the bug this exists to fix.
+    # Same bucket/credentials as 'default' (still one shared bucket, see
+    # CourseAsset's own comment on that tradeoff), just a different
+    # ACL/querystring-auth combination: public-read + no signing, so the
+    # URL this produces never expires, unlike 'default's deliberately
+    # private/signed backups and learner-submitted attachment evidence.
+    STORAGES['public'] = {
+        'BACKEND': 'storages.backends.s3.S3Storage',
+        'OPTIONS': {'default_acl': 'public-read', 'querystring_auth': False},
+    }
 else:
     # Explicit, not just relying on Django's implicit built-in default —
     # once STORAGES is set at all (it is, above, for 'staticfiles'), Django

@@ -12,7 +12,14 @@ import { Color } from "@/lib/tiptap-text-color";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { cn } from "@/lib/utils";
 import { useActiveEditorContext } from "../active-editor-context";
-import { BODY_TYPOGRAPHY, CHANGE_DEBOUNCE_MS, FIELD_CLASSES, FILL_BOX, StaticField } from "./content-slide-face";
+import {
+  BODY_TYPOGRAPHY,
+  CHANGE_DEBOUNCE_MS,
+  FIELD_CLASSES,
+  FILL_BOX,
+  StaticField,
+  preserveBlankLinesInPastedText,
+} from "./content-slide-face";
 import type { SlideFaceProps } from "./index";
 
 // The generic, un-specialized text box every freeform content slide uses
@@ -61,7 +68,7 @@ function RichTextFreeTextBox({
   value: string;
   onCommit: (value: string) => void;
 }) {
-  const { focusEditor, blurEditor, panelRef, panelInteractingRef } = useActiveEditorContext();
+  const { focusEditor, blurEditor, panelRef, panelInteractingRef, panelPointerDownRef } = useActiveEditorContext();
   const debouncedCommit = useDebouncedCallback(onCommit, CHANGE_DEBOUNCE_MS);
 
   const editor = useEditor({
@@ -82,7 +89,16 @@ function RichTextFreeTextBox({
       FontFamily,
       TextAlign,
       Color,
-      Placeholder.configure({ placeholder: "Click to add text" }),
+      // A plain string placeholder decorates whichever paragraph currently
+      // holds the cursor, whenever THAT paragraph is empty — so pressing
+      // Enter after typing a first line left "Click to add text" sitting on
+      // the new, still-empty second line even though the box as a whole
+      // plainly has content. Reported directly as a real bug. Checking
+      // `editor.isEmpty` instead means the placeholder text itself becomes
+      // "" the moment ANY paragraph in the document has content, regardless
+      // of which one the cursor is currently in — it only ever shows on a
+      // genuinely blank box.
+      Placeholder.configure({ placeholder: ({ editor }) => (editor.isEmpty ? "Click to add text" : "") }),
     ],
     editorProps: {
       attributes: {
@@ -92,6 +108,11 @@ function RichTextFreeTextBox({
           "[&_.is-empty]:before:pointer-events-none [&_.is-empty]:before:float-left [&_.is-empty]:before:h-0 [&_.is-empty]:before:text-muted-foreground/50 [&_.is-empty]:before:content-[attr(data-placeholder)]",
         ),
       },
+      // See preserveBlankLinesInPastedText's own comment (content-slide-
+      // face.tsx) for why this is needed — pasting multi-line content (not
+      // typing it) is the other half of "blank lines don't survive" that
+      // BODY_TYPOGRAPHY's :empty CSS rule alone can't fix.
+      transformPastedText: (text) => preserveBlankLinesInPastedText(text),
     },
     onUpdate: ({ editor }) => {
       debouncedCommit(editor.getHTML());
@@ -107,7 +128,7 @@ function RichTextFreeTextBox({
       const panelEl = panelRef.current;
       const nextFocus = event.relatedTarget;
       const focusMovedIntoPanel = !!(panelEl && nextFocus instanceof Node && panelEl.contains(nextFocus));
-      if (focusMovedIntoPanel || panelInteractingRef.current) {
+      if (focusMovedIntoPanel || panelInteractingRef.current || panelPointerDownRef.current) {
         return;
       }
       blurEditor(fieldId, editor);

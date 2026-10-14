@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { BookOpen } from "lucide-react";
+import { BookOpen, Pencil } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { DeleteCourseButton } from "@/components/delete-course-button";
 import {
   Table,
@@ -15,6 +16,22 @@ import {
 import { ViewToggle } from "@/components/view-toggle";
 import type { Course } from "@/lib/course-types";
 import { useViewMode } from "@/lib/use-view-mode";
+
+// Shared by both views below — see course-types.ts's own comment on
+// `currently_editing_by` for what it means (a soft "someone's already in
+// the builder" lock, not real-time collaborative editing) and
+// course-edit-lock-gate.tsx for the claim/heartbeat/release flow that
+// actually sets it. Purely informational here: this list never blocks
+// opening a course, it just signals that doing so right now risks
+// stepping on whoever's already in there.
+function EditingBadge({ username }: { username: string }) {
+  return (
+    <Badge variant="secondary" className="gap-1">
+      <Pencil className="h-3 w-3" />
+      {username} is editing
+    </Badge>
+  );
+}
 
 const VIEW_STORAGE_KEY = "admin-courses-view";
 
@@ -57,11 +74,14 @@ function CompactTable({ courses }: { courses: Course[] }) {
         </TableHeader>
         <TableBody>
           {courses.map((course) => (
-            <TableRow key={course.id}>
+            <TableRow key={course.id} className={course.currently_editing_by ? "opacity-60" : undefined}>
               <TableCell className="truncate">
-                <Link href={`/courses/${course.id}`} className="font-medium hover:underline">
-                  {course.name}
-                </Link>
+                <div className="flex items-center gap-2">
+                  <Link href={`/courses/${course.id}`} className="truncate font-medium hover:underline">
+                    {course.name}
+                  </Link>
+                  {course.currently_editing_by && <EditingBadge username={course.currently_editing_by} />}
+                </div>
               </TableCell>
               <TableCell className="truncate text-muted-foreground">{course.description || "—"}</TableCell>
               <TableCell className="truncate">
@@ -97,7 +117,7 @@ function NormalList({ courses }: { courses: Course[] }) {
       {courses.map((course) => (
         <div
           key={course.id}
-          className="flex items-center gap-4 rounded-lg border-2 border-border bg-card p-4 shadow-sm"
+          className={`flex items-center gap-4 rounded-lg border-2 border-border bg-card p-4 shadow-sm ${course.currently_editing_by ? "opacity-60" : ""}`}
         >
           <div className="h-20 w-32 shrink-0 overflow-hidden rounded-md bg-muted">
             {course.thumbnail ? (
@@ -111,9 +131,12 @@ function NormalList({ courses }: { courses: Course[] }) {
           </div>
 
           <div className="min-w-0 flex-1">
-            <Link href={`/courses/${course.id}`} className="truncate text-lg font-semibold hover:underline">
-              {course.name}
-            </Link>
+            <div className="flex items-center gap-2">
+              <Link href={`/courses/${course.id}`} className="truncate text-lg font-semibold hover:underline">
+                {course.name}
+              </Link>
+              {course.currently_editing_by && <EditingBadge username={course.currently_editing_by} />}
+            </div>
             <p className="mt-0.5 line-clamp-1 text-sm text-muted-foreground">{course.description || "—"}</p>
             <p className="mt-1 text-xs text-muted-foreground">
               Owner{" "}

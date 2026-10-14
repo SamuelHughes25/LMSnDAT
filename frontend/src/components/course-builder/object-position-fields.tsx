@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -88,6 +88,15 @@ function PixelField({
     setPrevPx(roundedPx);
     setText(String(roundedPx));
   }
+  // Without this pairing, clicking the label text did nothing at all (no
+  // `for`/`id` to connect them) — a real, confirmed bug: that plain-text
+  // click doesn't move DOM focus anywhere, so the box's own onBlur guard
+  // (positionable-box.tsx) sees a null relatedTarget and wrongly concludes
+  // focus left the panel entirely, deselecting the box mid-click. `useId`
+  // keeps each instance's pairing unique even though four of these render
+  // side by side (X/Y/Width/Height) with the same shared `label` prop
+  // shape.
+  const inputId = useId();
 
   function commit() {
     const parsed = Number.parseInt(text, 10);
@@ -100,8 +109,11 @@ function PixelField({
 
   return (
     <div className="space-y-1">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <Label htmlFor={inputId} className="text-xs text-muted-foreground">
+        {label}
+      </Label>
       <Input
+        id={inputId}
         type="number"
         value={text}
         onChange={(e) => setText(e.target.value)}
