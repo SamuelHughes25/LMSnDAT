@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { BoxTransform, FreeTextBox, Slide, SlideConfig, SlideObjectRef } from "@/lib/course-types";
-import { useActiveEditorContext } from "./active-editor-context";
+import { useActiveEditorContext, useForceRerenderOnEditorTransaction } from "./active-editor-context";
 import { ObjectPositionFields } from "./object-position-fields";
 import { useSlideSelection } from "./slide-selection-context";
 import { TextFormattingControls } from "./text-formatting-controls";
@@ -30,18 +29,7 @@ export function FreeTextBoxProperties({
   const { activeEditor, activeEditorId, panelInteractingRef } = useActiveEditorContext();
   const editor = activeEditorId === fieldId ? activeEditor : null;
   const { deselect } = useSlideSelection();
-
-  const [, forceUpdate] = useState(0);
-  useEffect(() => {
-    if (!editor) return;
-    function handleTransaction() {
-      forceUpdate((v) => v + 1);
-    }
-    editor.on("transaction", handleTransaction);
-    return () => {
-      editor.off("transaction", handleTransaction);
-    };
-  }, [editor]);
+  useForceRerenderOnEditorTransaction(editor);
 
   const textBoxes = slide.config.text_boxes ?? [];
   const index = textBoxes.findIndex((b) => b.id === boxId);

@@ -13,6 +13,7 @@ from apps.core.permissions import (
     HasArchiveTabAccessOrIsOwner, HasDashboardTabAccess, IsContentOwnerEditorOrAdmin, IsContentOwnerOrAdmin, IsSuperuser,
     user_can_edit_content,
 )
+from apps.core.utils import parse_int_pk
 from apps.submissions.models import Answer, Submission
 from . import services
 from .models import Question, Section, Template, TemplateVersion
@@ -22,7 +23,14 @@ from .serializers import (
 
 
 class TemplateViewSet(viewsets.ModelViewSet):
-    queryset = Template.objects.all().prefetch_related('editors')
+    # owner/created_by/archived_by select_related — same N+1 fix as
+    # CourseViewSet (apps/courses/views.py), mirrored here since
+    # TemplateSerializer has the exact same three ReadOnlyField(source=
+    # '<fk>.username') conveniences and this queryset previously had no
+    # select_related at all.
+    queryset = Template.objects.all().select_related('owner', 'created_by', 'archived_by').prefetch_related(
+        'editors',
+    )
     serializer_class = TemplateSerializer
     required_tab = 'templates'
 
@@ -65,7 +73,8 @@ class TemplateViewSet(viewsets.ModelViewSet):
     def transfer_ownership(self, request, pk=None):
         # Mirrors CourseViewSet.transfer_ownership exactly.
         template = self.get_object()
-        new_owner = User.objects.filter(pk=request.data.get('owner')).first()
+        new_owner_id = parse_int_pk(request.data.get('owner'))
+        new_owner = User.objects.filter(pk=new_owner_id).first() if new_owner_id is not None else None
         if not new_owner:
             return Response({'owner': 'Required and must reference an existing user.'}, status=400)
         template.owner = new_owner
@@ -79,7 +88,10 @@ class TemplateViewSet(viewsets.ModelViewSet):
         editor_ids = request.data.get('editors', [])
         if not isinstance(editor_ids, list):
             return Response({'editors': 'Must be a list of user ids.'}, status=400)
-        template.editors.set(User.objects.filter(pk__in=editor_ids))
+        parsed_ids = [parse_int_pk(v) for v in editor_ids]
+        if any(i is None for i in parsed_ids):
+            return Response({'editors': 'Must be a list of valid user ids.'}, status=400)
+        template.editors.set(User.objects.filter(pk__in=parsed_ids))
         return Response(TemplateSerializer(template).data)
 
     def destroy(self, request, *args, **kwargs):

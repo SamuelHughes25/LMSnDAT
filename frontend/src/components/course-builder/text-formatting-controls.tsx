@@ -14,6 +14,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { TextAlignValue } from "@/lib/tiptap-text-align";
 import { cn } from "@/lib/utils";
+import { useActiveEditorContext } from "./active-editor-context";
 
 // Extracted out of text-object-properties.tsx so free-text-box-properties.tsx
 // (the generic freeform text box's panel) can share the exact same
@@ -88,6 +89,77 @@ function currentComputedFontSizeLabel(editor: Editor): string {
   }
 }
 
+// editor.getAttributes("textStyle") — what this panel used to read
+// fontFamily/fontSize/color off of — is unreliable the instant the
+// selection is a RANGE rather than a collapsed cursor. TipTap's own
+// getMarkAttributes() (node_modules/@tiptap/core/src/helpers/
+// getMarkAttributes.ts) walks every node in the selection, collects ALL
+// their marks into one flat array, then does `marks.find(mark => mark
+// .type.name === 'textStyle')` — the first TEXTSTYLE MARK it meets,
+// regardless of which of ITS OWN attrs are actually set. fontFamily,
+// fontSize, and color all live on that same one shared mark (see
+// tiptap-font-family.ts/tiptap-font-size.ts/tiptap-text-color.ts's own
+// comments on why), so a selection that happens to start in text that
+// only ever had its COLOR or SIZE changed — a textStyle mark that exists
+// but carries fontFamily: null — reports "no font" for the whole
+// selection even when the rest of it genuinely has one, because `.find`
+// stops at the first mark of the right TYPE, not the first one that
+// actually carries this attribute. Confirmed as the actual mechanism
+// behind a reported bug: the Font dropdown would intermittently claim
+// "Default" for text that visibly wasn't rendering in the default font.
+// This walks the full selection itself and only trusts a value when
+// every character in it agrees — "mixed" means they don't (e.g. half the
+// selection is Georgia, half is untouched), which the caller renders as
+// an em dash rather than silently picking a side.
+function getUniformTextStyleAttr(
+  editor: Editor,
+  attr: "fontFamily" | "fontSize" | "color",
+): string | null | "mixed" {
+  const { state } = editor;
+  const { from, to, empty } = state.selection;
+  if (empty) {
+    const marks = state.storedMarks ?? state.selection.$from.marks();
+    const mark = marks.find((m) => m.type.name === "textStyle");
+    return (mark?.attrs[attr] as string | undefined) ?? null;
+  }
+  let seen = false;
+  let value: string | null = null;
+  let mixed = false;
+  state.doc.nodesBetween(from, to, (node) => {
+    if (mixed || !node.isText) return;
+    const mark = node.marks.find((m) => m.type.name === "textStyle");
+    const nodeValue = (mark?.attrs[attr] as string | undefined) ?? null;
+    if (!seen) {
+      seen = true;
+      value = nodeValue;
+    } else if (nodeValue !== value) {
+      mixed = true;
+    }
+  });
+  return mixed ? "mixed" : value;
+}
+
+// Same reasoning, and same approach, as currentComputedFontSizeLabel just
+// above — "Default" told the author nothing about what font the selected
+// text actually renders in. getComputedStyle's fontFamily is the full
+// resolved stack (e.g. the base theme font plus its generic-family
+// fallbacks); only the FIRST entry is the one actually being rendered, so
+// that's the only part shown here — quoted entries (multi-word font
+// names come back quoted) have their quotes stripped for a clean label.
+function currentComputedFontFamilyLabel(editor: Editor): string {
+  try {
+    const { from } = editor.state.selection;
+    const pos = editor.view.domAtPos(from);
+    const el = pos.node.nodeType === Node.TEXT_NODE ? pos.node.parentElement : (pos.node as HTMLElement);
+    if (!el) return "—";
+    const stack = window.getComputedStyle(el).fontFamily;
+    const first = stack.split(",")[0]?.trim().replace(/^["']|["']$/g, "");
+    return first || "—";
+  } catch {
+    return "—";
+  }
+}
+
 const TEXT_ALIGN_OPTIONS: { value: TextAlignValue; label: string; icon: typeof AlignLeft }[] = [
   { value: "left", label: "Align left", icon: AlignLeft },
   { value: "center", label: "Align center", icon: AlignCenter },
@@ -95,21 +167,47 @@ const TEXT_ALIGN_OPTIONS: { value: TextAlignValue; label: string; icon: typeof A
   { value: "justify", label: "Justify", icon: AlignJustify },
 ];
 
+// A Select `value` that deliberately matches none of a dropdown's real
+// option keys — used below whenever the selection's own attribute value
+// isn't uniform (see getUniformTextStyleAttr), so Base UI correctly shows
+// no checkmark on any item instead of falsely endorsing whichever one
+// happens to share a key with "mixed".
+const MIXED_KEY = "__mixed__";
+
 export function TextFormattingControls({
   editor,
   panelInteractingRef,
+  hideSize,
 }: {
   editor: Editor;
   panelInteractingRef: RefObject<boolean>;
+  // Omits the Size control — interactive/assessment widgets (multiple
+  // choice, accordion, flashcards, match pairs, sequencing, hotspot image)
+  // have fixed, structurally-sized layouts that a resized font could
+  // overflow or clip (an option row's fixed height, a flashcard's centered
+  // text, a hotspot marker's small popover) — explicitly requested as
+  // "edit everything I normally would apart from size" when the same
+  // formatting controls were extended to those widgets' text fields. Every
+  // other control (bold/italic/underline/lists/align/font/color) still
+  // applies there exactly as it does on an ordinary content slide.
+  hideSize?: boolean;
 }) {
-  const currentFontSize = (editor.getAttributes("textStyle").fontSize as string | undefined) ?? null;
-  const currentSizeOption = FONT_SIZE_OPTIONS.find((o) => o.value === currentFontSize) ?? FONT_SIZE_OPTIONS[0];
+  const currentFontSizeAttr = getUniformTextStyleAttr(editor, "fontSize");
+  const isMixedSize = currentFontSizeAttr === "mixed";
+  const currentSizeOption = isMixedSize
+    ? null
+    : (FONT_SIZE_OPTIONS.find((o) => o.value === currentFontSizeAttr) ?? FONT_SIZE_OPTIONS[0]);
 
-  const currentFontFamily = (editor.getAttributes("textStyle").fontFamily as string | undefined) ?? null;
-  const currentFamilyOption =
-    FONT_FAMILY_OPTIONS.find((o) => o.value === currentFontFamily) ?? FONT_FAMILY_OPTIONS[0];
+  const { lastFontFamilyRef } = useActiveEditorContext();
 
-  const currentColor = (editor.getAttributes("textStyle").color as string | undefined) ?? null;
+  const currentFontFamilyAttr = getUniformTextStyleAttr(editor, "fontFamily");
+  const isMixedFamily = currentFontFamilyAttr === "mixed";
+  const currentFamilyOption = isMixedFamily
+    ? null
+    : (FONT_FAMILY_OPTIONS.find((o) => o.value === currentFontFamilyAttr) ?? FONT_FAMILY_OPTIONS[0]);
+
+  const currentColorAttr = getUniformTextStyleAttr(editor, "color");
+  const currentColor = currentColorAttr === "mixed" ? null : currentColorAttr;
 
   function applyFontSize(key: string | null) {
     const option = FONT_SIZE_OPTIONS.find((o) => o.key === key);
@@ -124,6 +222,11 @@ export function TextFormattingControls({
   function applyFontFamily(key: string | null) {
     const option = FONT_FAMILY_OPTIONS.find((o) => o.key === key);
     if (!option) return;
+    // Remembered regardless of which option was picked, including
+    // "Default" itself — whatever the author most recently chose,
+    // deliberately, is what a brand-new text box should start with too.
+    // See lastFontFamilyRef's own comment in active-editor-context.tsx.
+    lastFontFamilyRef.current = option.value;
     if (option.value === null) {
       editor.chain().focus().unsetFontFamily().run();
     } else {
@@ -200,7 +303,7 @@ export function TextFormattingControls({
         <div className="text-xs text-muted-foreground">Font</div>
         <Select
           items={FONT_FAMILY_OPTIONS.map((o) => ({ value: o.key, label: o.label }))}
-          value={currentFamilyOption.key}
+          value={isMixedFamily ? MIXED_KEY : currentFamilyOption!.key}
           onValueChange={applyFontFamily}
           onOpenChange={(open) => {
             panelInteractingRef.current = open;
@@ -213,7 +316,15 @@ export function TextFormattingControls({
               panelInteractingRef.current = true;
             }}
           >
-            <SelectValue />
+            <SelectValue>
+              {() =>
+                isMixedFamily
+                  ? "—"
+                  : currentFamilyOption!.key === "default"
+                    ? currentComputedFontFamilyLabel(editor)
+                    : currentFamilyOption!.label
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {FONT_FAMILY_OPTIONS.map((option) => (
@@ -225,37 +336,45 @@ export function TextFormattingControls({
         </Select>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        <div className="space-y-1">
-          <div className="text-xs text-muted-foreground">Size</div>
-          <Select
-            items={FONT_SIZE_OPTIONS.map((o) => ({ value: o.key, label: o.label }))}
-            value={currentSizeOption.key}
-            onValueChange={applyFontSize}
-            onOpenChange={(open) => {
-              panelInteractingRef.current = open;
-            }}
-          >
-            <SelectTrigger
-              className="h-8 w-full"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                panelInteractingRef.current = true;
+      <div className={cn("grid gap-2", hideSize ? "grid-cols-1" : "grid-cols-2")}>
+        {!hideSize && (
+          <div className="space-y-1">
+            <div className="text-xs text-muted-foreground">Size</div>
+            <Select
+              items={FONT_SIZE_OPTIONS.map((o) => ({ value: o.key, label: o.label }))}
+              value={isMixedSize ? MIXED_KEY : currentSizeOption!.key}
+              onValueChange={applyFontSize}
+              onOpenChange={(open) => {
+                panelInteractingRef.current = open;
               }}
             >
-              <SelectValue>
-                {() => (currentSizeOption.key === "default" ? currentComputedFontSizeLabel(editor) : currentSizeOption.label)}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {FONT_SIZE_OPTIONS.map((option) => (
-                <SelectItem key={option.key} value={option.key}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+              <SelectTrigger
+                className="h-8 w-full"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  panelInteractingRef.current = true;
+                }}
+              >
+                <SelectValue>
+                  {() =>
+                    isMixedSize
+                      ? "—"
+                      : currentSizeOption!.key === "default"
+                        ? currentComputedFontSizeLabel(editor)
+                        : currentSizeOption!.label
+                  }
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {FONT_SIZE_OPTIONS.map((option) => (
+                  <SelectItem key={option.key} value={option.key}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         <div className="space-y-1">
           <div className="text-xs text-muted-foreground">Color</div>

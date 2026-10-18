@@ -22,15 +22,37 @@ import type {
   Slide,
   SlideConfig,
   SlideObjectRef,
+  SlideType,
 } from "@/lib/course-types";
 import { cn, stripHtml } from "@/lib/utils";
+import { useActiveEditorContext, useForceRerenderOnEditorTransaction } from "./active-editor-context";
 import { FreeTextBoxProperties } from "./free-text-box-properties";
 import { ImageObjectProperties } from "./image-object-properties";
 import { LessonProperties } from "./lesson-properties";
 import { FreeformAddImageControl, SlideBackgroundPanel } from "./slide-background-panel";
 import { SlideLayersPanel } from "./slide-layers-panel";
 import { useTextBoxPlacement } from "./text-box-placement-context";
+import { TextFormattingControls } from "./text-formatting-controls";
 import { TextObjectProperties } from "./text-object-properties";
+
+// Interactive/assessment slide types whose text fields were converted from
+// plain <input>/<textarea> to WidgetEditableText (widget-text-field.tsx) —
+// see that component's own top-of-file comment for which two slide types
+// (missing_word, and the plain-data table inside `content`) were
+// deliberately excluded and why. These slide types have no "selectable
+// object" concept at all (slide-selection-context never produces anything
+// but a bare `{kind:"slide"}` for them — no draggable/positionable boxes to
+// select), so the ONLY way the panel can know a text field is focused is by
+// watching activeEditorId, which is exactly what SlideProperties' own
+// widget-text branch below does.
+const WIDGET_TEXT_SLIDE_TYPES: ReadonlySet<SlideType> = new Set([
+  "multiple_choice",
+  "accordion",
+  "flashcards",
+  "match_pairs",
+  "sequencing",
+  "hotspot_image",
+]);
 
 // What's currently selected WITHIN a slide (see slide-selection-context.tsx's
 // selectedId, parsed by course-builder.tsx) — independent of which SLIDE is
@@ -407,6 +429,19 @@ function SlideProperties({
   const [pendingTemplate, setPendingTemplate] = useState<ContentSlideLayout | null>(null);
   const { startPlacing } = useTextBoxPlacement();
 
+  // Widget-type slides (see WIDGET_TEXT_SLIDE_TYPES above) have no
+  // "selectable object" concept — their text fields live directly in the
+  // widget's own fixed layout, never a draggable/positionable box — so the
+  // only way this panel can offer text formatting for them is by watching
+  // which editor currently has focus and checking it belongs to THIS slide
+  // (its fieldId starts with `${slide.id}:`, the same convention every
+  // other field id in this app already uses).
+  const isWidgetTextSlide = WIDGET_TEXT_SLIDE_TYPES.has(slide.slide_type);
+  const { activeEditor, activeEditorId, panelInteractingRef } = useActiveEditorContext();
+  const widgetFieldEditor =
+    isWidgetTextSlide && activeEditorId?.startsWith(`${slide.id}:`) ? activeEditor : null;
+  useForceRerenderOnEditorTransaction(widgetFieldEditor);
+
   // The actual switch: resets every layout-scoped field to its blank state
   // (not just box_transforms, which the picker always cleared even before
   // this confirmation existed) and applies the new layout, so the slide
@@ -509,6 +544,23 @@ function SlideProperties({
           </div>
           <SlideLayersPanel slide={slide} onConfigChange={onConfigChange} />
           <TemplatesDropdown onSelect={handleTemplateRequest} />
+        </div>
+      )}
+
+      {/* Multiple choice / accordion / flashcards / match pairs /
+          sequencing / hotspot image: no layout picker, no layers panel —
+          just whichever text field on this slide the author last clicked
+          into, exactly like the freeform system's own TextObjectProperties/
+          FreeTextBoxProperties above but driven by focus alone instead of a
+          selectable object (see isWidgetTextSlide's own comment). */}
+      {isWidgetTextSlide && (
+        <div className="space-y-2 border-t border-border pt-4">
+          <div className="text-[11px] font-medium text-muted-foreground/70">Text</div>
+          {widgetFieldEditor ? (
+            <TextFormattingControls editor={widgetFieldEditor} panelInteractingRef={panelInteractingRef} hideSize />
+          ) : (
+            <p className="text-xs text-muted-foreground">Click into a text field on the slide to format it.</p>
+          )}
         </div>
       )}
 

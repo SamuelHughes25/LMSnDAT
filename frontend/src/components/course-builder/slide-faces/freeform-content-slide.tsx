@@ -88,6 +88,10 @@ export function FreeformContentSlide({
   const textBoxes = slide.config.text_boxes ?? [];
   const extraImages = slide.config.extra_images ?? [];
   const order = normalizeObjectOrder(slide.config);
+  // A lookup, not a render order — see the big comment on the render below
+  // for why object_order drives each object's zIndex STYLE only, never the
+  // actual DOM/JSX iteration order those objects render in.
+  const zIndexById = new Map(order.map((ref, index) => [`${ref.type}:${ref.id}`, index + 1]));
 
   function updateBox(id: string, patch: Partial<FreeTextBox>) {
     onConfigChange?.({ text_boxes: textBoxes.map((b) => (b.id === id ? { ...b, ...patch } : b)) });
@@ -212,53 +216,67 @@ export function FreeformContentSlide({
         overlayRef={editRefs?.overlayRef}
       />
 
-      {/* Every text box AND extra image, in one real DOM stack ordered by
-          object_order — see this file's own top-of-file comment for why
-          that's the fix for images' layer position never actually
-          affecting the canvas. */}
-      {order.map((ref, index) => {
-        // A freeform slide's whole premise is "object_order IS the
-        // stacking order" (see this file's own top-of-file comment) — but
-        // PositionableBox/BackgroundImagePixels each carry their OWN
-        // hardcoded z-index baseline for an unrelated reason (an
-        // untransformed-vs-dragged sibling conflict in the legacy system;
-        // never clipping an image's resize handles), and those two
-        // baselines disagree with each other (text boxes always above
-        // images, regardless of DOM order) — confirmed as the actual cause
-        // of a reported "layers panel reorder does nothing when an image
-        // is involved" bug: reordering two TEXT boxes worked (same
-        // baseline either way, so DOM order decided it), reordering an
-        // image past a text box never could. Passing this index explicitly
-        // as `zIndex` to both makes stacking order literally equal to
-        // object_order position for every object on this slide, text and
-        // image alike.
-        const zIndex = index + 1;
-        if (ref.type === "text") {
-          const box = textBoxes.find((b) => b.id === ref.id);
-          if (!box) return null;
-          return (
-            <PositionableBox
-              key={`text:${box.id}`}
-              fieldKey={`text:${box.id}`}
-              slideId={slide.id}
-              transform={box}
-              onTransform={(t) => updateBox(box.id, t)}
-              mode={mode}
-              slideRef={slideRef}
-              zIndex={zIndex}
-            >
-              <EditableFreeTextBox
-                fieldId={`${slide.id}:text:${box.id}`}
-                value={box.html}
-                mode={mode}
-                onCommit={(html) => updateBox(box.id, { html })}
-              />
-            </PositionableBox>
-          );
-        }
+      {/* Every text box AND extra image, in one real DOM stack, VISUALLY
+          stacked by object_order via the zIndex prop each one gets below —
+          see this file's own top-of-file comment for why that's the fix
+          for images' layer position never actually affecting the canvas.
+          PositionableBox/BackgroundImagePixels each carry their OWN
+          hardcoded z-index baseline for an unrelated reason (an
+          untransformed-vs-dragged sibling conflict in the legacy system;
+          never clipping an image's resize handles), and those two
+          baselines disagree with each other (text boxes always above
+          images, regardless of DOM order) — confirmed as the actual cause
+          of a reported "layers panel reorder does nothing when an image is
+          involved" bug: reordering two TEXT boxes worked (same baseline
+          either way, so DOM order decided it), reordering an image past a
+          text box never could. Looking each one's zIndex up from `order`
+          (rather than literally rendering `order.map(...)`, which this
+          used to do) makes stacking order equal to object_order position
+          for every object on the slide, text and image alike — while
+          keeping the actual DOM/render ITERATION ORDER fixed to each
+          array's own stable order, never object_order's.
 
-        const image = extraImages.find((i) => i.id === ref.id);
-        if (!image) return null;
+          That fixed order is deliberate, not incidental: a CSS position
+          with z-index already fully determines visual stacking regardless
+          of DOM sibling order, so object_order changing never NEEDED to
+          reorder these elements in the DOM at all — and actually doing so
+          (the old order.map(...) shape) had a real, confirmed side effect
+          nothing about z-index would predict: reordering a box whose text
+          editor had auto-scrolled (content taller than the box, cursor
+          past the visible area) reset that scroll position back to the
+          top. Moving an element to a new sibling position — even via
+          React's own reconciliation, even though the component instance
+          itself never remounts — is a real DOM mutation Chromium treats
+          like a detach+reattach for scroll-offset purposes. Keeping
+          render order pinned to `textBoxes`/`extraImages`' own array order
+          (which object_order changes never touch) means a reorder is now
+          a pure prop update for every box's existing DOM node — nothing
+          ever needs to move — so there's nothing left to reset. */}
+      {textBoxes.map((box) => {
+        const zIndex = zIndexById.get(`text:${box.id}`) ?? 1;
+        return (
+          <PositionableBox
+            key={`text:${box.id}`}
+            fieldKey={`text:${box.id}`}
+            slideId={slide.id}
+            transform={box}
+            onTransform={(t) => updateBox(box.id, t)}
+            mode={mode}
+            slideRef={slideRef}
+            zIndex={zIndex}
+          >
+            <EditableFreeTextBox
+              fieldId={`${slide.id}:text:${box.id}`}
+              value={box.html}
+              mode={mode}
+              onCommit={(html) => updateBox(box.id, { html })}
+            />
+          </PositionableBox>
+        );
+      })}
+
+      {extraImages.map((image) => {
+        const zIndex = zIndexById.get(`image:${image.id}`) ?? 1;
         if (editRefs) {
           return (
             <BackgroundImageEditLayer

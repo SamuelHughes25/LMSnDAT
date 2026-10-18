@@ -2,6 +2,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from apps.accounts.models import User
@@ -36,11 +37,35 @@ class SubmissionViewSet(viewsets.ModelViewSet):
         submission = self.get_object()
         serializer = AnswerBulkUpsertSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        answers = serializer.validated_data['answers']
+
+        # Every submitted `question` id must actually belong to THIS
+        # submission's own template_version — Question.evaluate_flag() is
+        # already server-computed (tamper-proof for a GIVEN question), but
+        # without this check nothing stopped an Answer being created
+        # against a question from an entirely DIFFERENT template, and a
+        # bare `Question.objects.get()` on a well-formed-but-nonexistent
+        # id raised an unhandled DoesNotExist (a 500) instead of a clean
+        # 400 — same two-part fix as apps.courses's results() endpoint
+        # (see its own comment for the full reasoning). One query up
+        # front rather than a get() per item in the loop below.
+        question_ids = {item['question'] for item in answers}
+        valid_question_ids = set(
+            Question.objects.filter(
+                id__in=question_ids, section__template_version_id=submission.template_version_id,
+            ).values_list('id', flat=True)
+        )
+        invalid_ids = question_ids - valid_question_ids
+        if invalid_ids:
+            raise ValidationError({
+                'answers': f"Question(s) {', '.join(str(i) for i in invalid_ids)} are not part of this submission's template.",
+            })
 
         saved = []
         with transaction.atomic():
-            for item in serializer.validated_data['answers']:
-                question = Question.objects.get(pk=item['question'])
+            questions_by_id = {q.id: q for q in Question.objects.filter(id__in=question_ids)}
+            for item in answers:
+                question = questions_by_id[item['question']]
                 answer, _ = Answer.objects.update_or_create(
                     submission=submission,
                     question=question,

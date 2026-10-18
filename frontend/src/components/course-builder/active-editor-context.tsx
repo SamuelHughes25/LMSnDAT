@@ -80,6 +80,19 @@ type ActiveEditorContextValue = {
   // actually started, regardless of whether that landed on something
   // focusable.
   panelPointerDownRef: RefObject<boolean>;
+  // Whatever font-family value (TipTap's own CSS value string, e.g.
+  // `"Georgia, 'Times New Roman', serif"`, or null for "no override) the
+  // author most recently picked from ANY text field's Font dropdown in
+  // THIS course-builder session — reported directly as a real workflow
+  // annoyance: re-selecting the same font over and over for every new
+  // text box in one course. A ref, not state: it's only ever read once,
+  // at a fresh editor's own creation time (see free-text-box.tsx/
+  // content-slide-face.tsx), never something that should trigger a
+  // re-render when it changes. Lives here (not localStorage or the
+  // database) specifically because the request was "remembered during
+  // their session" — resets naturally on a fresh page load/different
+  // course, same lifetime as this whole provider.
+  lastFontFamilyRef: RefObject<string | null>;
 };
 
 const ActiveEditorContext = createContext<ActiveEditorContextValue | null>(null);
@@ -89,6 +102,7 @@ export function ActiveEditorProvider({ children }: { children: ReactNode }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const panelInteractingRef = useRef(false);
   const panelPointerDownRef = useRef(false);
+  const lastFontFamilyRef = useRef<string | null>(null);
 
   // Capture phase, document-wide: this is the one thing that reliably runs
   // BEFORE the blur a pointerdown is about to cause, for every single click
@@ -124,6 +138,7 @@ export function ActiveEditorProvider({ children }: { children: ReactNode }) {
       panelRef,
       panelInteractingRef,
       panelPointerDownRef,
+      lastFontFamilyRef,
     }),
     [active],
   );
@@ -137,4 +152,28 @@ export function useActiveEditorContext() {
     throw new Error("useActiveEditorContext must be used within an ActiveEditorProvider");
   }
   return ctx;
+}
+
+// Forces a re-render on every transaction of whichever editor a properties
+// panel is currently showing TextFormattingControls for (content change,
+// cursor move, mark toggle) — without this, the panel's own "current bold/
+// color/font" display goes stale the instant a mark is applied to an
+// already-selected range, since that doesn't move the selection itself (the
+// only thing React already re-renders on here). Shared by every panel that
+// renders TextFormattingControls against `activeEditor` — text-object-
+// properties.tsx, free-text-box-properties.tsx, and properties-panel.tsx's
+// own widget-text branch — rather than each re-implementing the same
+// editor.on("transaction", ...)/forceUpdate pair.
+export function useForceRerenderOnEditorTransaction(editor: Editor | null) {
+  const [, forceUpdate] = useState(0);
+  useEffect(() => {
+    if (!editor) return;
+    function handleTransaction() {
+      forceUpdate((v) => v + 1);
+    }
+    editor.on("transaction", handleTransaction);
+    return () => {
+      editor.off("transaction", handleTransaction);
+    };
+  }, [editor]);
 }

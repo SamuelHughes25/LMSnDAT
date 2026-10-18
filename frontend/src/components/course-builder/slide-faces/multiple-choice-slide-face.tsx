@@ -4,21 +4,12 @@ import { useEffect, useState } from "react";
 import { Check, Plus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import type { MultipleChoiceOption, Slide } from "@/lib/course-types";
 import type { SlideInteractionResult } from "@/lib/slide-interaction";
-import { useDebouncedCallback } from "@/lib/use-debounced-callback";
-import { cn } from "@/lib/utils";
+import { cn, stripHtml } from "@/lib/utils";
+import { StaticField } from "./content-slide-face";
 import type { SlideFaceProps } from "./index";
-
-// Same debounce budget as content-slide-face.tsx's TipTap fields — governs
-// how often a network PATCH fires while typing into the question/option/
-// explanation text fields, not how the field itself feels while typing
-// (each field also keeps its own local echo state, updated on every
-// keystroke, so there is never any input lag). Discrete actions (add/remove
-// option, mark-correct toggle) commit immediately below, no debounce — same
-// split already established for list edits elsewhere in this codebase.
-const CHANGE_DEBOUNCE_MS = 500;
+import { WIDGET_INPUT_CHROME, WidgetEditableText } from "./widget-text-field";
 
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 5;
@@ -30,9 +21,6 @@ const MAX_OPTIONS = 5;
 function makeOptionId(n: number) {
   return `option_${n}_${Date.now().toString(36)}`;
 }
-
-const FIELD_CLASSES =
-  "w-full border-none bg-transparent p-0 text-foreground outline-none placeholder:text-muted-foreground/50 focus:rounded focus:outline-none focus:ring-1 focus:ring-primary/40";
 
 export function MultipleChoiceSlideFace({
   slide,
@@ -49,6 +37,7 @@ export function MultipleChoiceSlideFace({
   if (mode === "edit") {
     return (
       <MultipleChoiceEditor
+        slide={slide}
         question={question}
         options={options}
         feedbackIncorrect={feedbackIncorrect}
@@ -76,62 +65,42 @@ export function MultipleChoiceSlideFace({
 
 // On-canvas direct-manipulation editor — matches this app's philosophy of
 // authoring content on the visual slide itself rather than in a side panel
-// (properties-panel.tsx only carries the layout/type-agnostic controls).
-// Plain inputs throughout: a rich-text editor per option would be overkill
-// for short answer text (see content-slide-face.tsx for the TipTap
-// reference this deliberately does NOT follow here).
+// (properties-panel.tsx only carries the layout/type-agnostic controls, now
+// including TextFormattingControls once one of these fields is focused —
+// see that file's WIDGET_TEXT_SLIDE_TYPES). Each text field is a real
+// TipTap instance (WidgetEditableText, widget-text-field.tsx) rather than a
+// plain input — the same rich-text capability every other text field in
+// this app has, requested directly: "edit everything I normally would
+// apart from size."
 //
-// Local state mirrors the incoming config (same shape as
-// select-options-editor.tsx's local-state-mirrors-prop pattern) rather than
-// reading straight from `slide.config` on every keystroke — this component
-// is remounted via `key={slide.id}` whenever the selected slide changes
-// (see slide-canvas.tsx), so there is no risk of local state going stale
-// against a different slide's data.
+// Local state still mirrors the incoming `options` array (same shape as
+// select-options-editor.tsx's local-state-mirrors-prop pattern) — this
+// component is remounted via `key={slide.id}` whenever the selected slide
+// changes (see slide-canvas.tsx), so there's no risk of local state going
+// stale against a different slide's data. Only the array's STRUCTURE lives
+// here now (which options exist, their order, is_correct, and id) — each
+// option's own TEXT content is owned entirely by its own WidgetEditableText
+// instance (debounced-commit internally, same as every other TipTap field),
+// not mirrored into this component's state at all.
 function MultipleChoiceEditor({
+  slide,
   question,
   options,
   feedbackIncorrect,
   onConfigChange,
 }: {
+  slide: Slide;
   question: string;
   options: MultipleChoiceOption[];
   feedbackIncorrect: string;
   onConfigChange: SlideFaceProps["onConfigChange"];
 }) {
-  const [localQuestion, setLocalQuestion] = useState(question);
   const [localOptions, setLocalOptions] = useState(options);
-  const [localFeedback, setLocalFeedback] = useState(feedbackIncorrect);
 
-  const debouncedCommitQuestion = useDebouncedCallback(
-    (value: string) => onConfigChange?.({ question: value }),
-    CHANGE_DEBOUNCE_MS,
-  );
-  const debouncedCommitFeedback = useDebouncedCallback(
-    (value: string) => onConfigChange?.({ feedback_incorrect: value }),
-    CHANGE_DEBOUNCE_MS,
-  );
-  // One stable debounced function for the whole `options` array — an option
-  // text edit debounce-commits the entire array (matching config's shape),
-  // rather than each option row owning its own debounced callback.
-  const debouncedCommitOptions = useDebouncedCallback(
-    (next: MultipleChoiceOption[]) => onConfigChange?.({ options: next }),
-    CHANGE_DEBOUNCE_MS,
-  );
-
-  function handleQuestionChange(value: string) {
-    setLocalQuestion(value);
-    debouncedCommitQuestion(value);
-  }
-
-  function handleFeedbackChange(value: string) {
-    setLocalFeedback(value);
-    debouncedCommitFeedback(value);
-  }
-
-  function handleOptionTextChange(index: number, text: string) {
-    const next = localOptions.map((opt, i) => (i === index ? { ...opt, text } : opt));
+  function handleOptionTextCommit(index: number, html: string) {
+    const next = localOptions.map((opt, i) => (i === index ? { ...opt, text: html } : opt));
     setLocalOptions(next);
-    debouncedCommitOptions(next);
+    onConfigChange?.({ options: next });
   }
 
   // Discrete actions (mark-correct, add, remove) commit immediately — no
@@ -161,11 +130,12 @@ function MultipleChoiceEditor({
 
   return (
     <div className="flex h-full w-full flex-col gap-6 px-16 py-12 text-foreground">
-      <input
-        value={localQuestion}
-        onChange={(e) => handleQuestionChange(e.target.value)}
+      <WidgetEditableText
+        fieldId={`${slide.id}:question`}
+        value={question}
         placeholder="Click to add question"
-        className={cn(FIELD_CLASSES, "text-3xl font-bold")}
+        className="text-3xl font-bold"
+        onCommit={(html) => onConfigChange?.({ question: html })}
       />
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
@@ -185,12 +155,14 @@ function MultipleChoiceEditor({
             >
               <Check className="h-4 w-4" />
             </button>
-            <Input
-              value={option.text}
-              onChange={(e) => handleOptionTextChange(index, e.target.value)}
-              placeholder={`Option ${index + 1}`}
-              className="flex-1"
-            />
+            <div className={WIDGET_INPUT_CHROME}>
+              <WidgetEditableText
+                fieldId={`${slide.id}:option:${option.id}`}
+                value={option.text}
+                placeholder={`Option ${index + 1}`}
+                onCommit={(html) => handleOptionTextCommit(index, html)}
+              />
+            </div>
             <Button
               variant="ghost"
               size="icon"
@@ -211,11 +183,12 @@ function MultipleChoiceEditor({
         </Button>
       )}
 
-      <input
-        value={localFeedback}
-        onChange={(e) => handleFeedbackChange(e.target.value)}
+      <WidgetEditableText
+        fieldId={`${slide.id}:feedback`}
+        value={feedbackIncorrect}
         placeholder="Explanation for wrong answers (optional)"
-        className={cn(FIELD_CLASSES, "border-t border-border pt-3 text-sm text-muted-foreground")}
+        className="border-t border-border pt-3 text-sm text-muted-foreground"
+        onCommit={(html) => onConfigChange?.({ feedback_incorrect: html })}
       />
     </div>
   );
@@ -362,13 +335,12 @@ function MultipleChoicePresent({
 
   const lockedOption = lockedId ? options.find((o) => o.id === lockedId) : undefined;
   const isLockedWrong = !!lockedOption && !lockedOption.is_correct;
-  const showIncorrectFeedback = (!!flashIncorrectId || isLockedWrong) && feedbackIncorrect.trim().length > 0;
+  const showIncorrectFeedback =
+    (!!flashIncorrectId || isLockedWrong) && stripHtml(feedbackIncorrect).trim().length > 0;
 
   return (
     <div className="flex h-full w-full flex-col justify-center gap-6 px-16 py-12 text-foreground">
-      <div className="text-3xl font-bold">
-        {question || <span className="text-muted-foreground/50">Untitled question</span>}
-      </div>
+      <StaticField value={question} placeholder="Untitled question" className="text-3xl font-bold" />
 
       <div className="flex flex-1 flex-col justify-center gap-3">
         {options.map((option) => {
@@ -394,14 +366,16 @@ function MultipleChoicePresent({
                 revealState === "neutral" && "border-border hover:enabled:border-primary/60 hover:enabled:bg-muted",
               )}
             >
-              {option.text || "—"}
+              <StaticField value={option.text} placeholder="—" />
             </button>
           );
         })}
       </div>
 
       {showIncorrectFeedback && (
-        <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">{feedbackIncorrect}</div>
+        <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+          <StaticField value={feedbackIncorrect} placeholder="" />
+        </div>
       )}
     </div>
   );
@@ -413,13 +387,11 @@ function MultipleChoicePresent({
 function MultipleChoiceStatic({ question, options }: { question: string; options: MultipleChoiceOption[] }) {
   return (
     <div className="flex h-full w-full flex-col justify-center gap-4 px-16 py-12 text-foreground">
-      <div className="text-3xl font-bold">
-        {question || <span className="text-muted-foreground/50">Click to add question</span>}
-      </div>
+      <StaticField value={question} placeholder="Click to add question" className="text-3xl font-bold" />
       <div className="flex flex-col gap-2">
         {options.map((option) => (
           <div key={option.id} className="rounded-lg border-2 border-border px-4 py-3 text-left text-lg">
-            {option.text || "—"}
+            <StaticField value={option.text} placeholder="—" />
           </div>
         ))}
       </div>

@@ -30,13 +30,15 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
   const { access, refresh } = (await res.json()) as { access: string; refresh: string };
   await setAuthCookies({ access, refresh });
 
-  // Every account lands at "/" now, regardless of role — it's the one
-  // unified Dashboard destination for everyone (see (dashboard)/page.tsx,
-  // which branches its own content by role) now that app-shell.tsx gives
-  // operatives and office users the same nav. "/portal" still exists but
-  // only as a redirect to here, so sending everyone here directly avoids
-  // that extra hop for operatives specifically.
-  redirect("/");
+  // Every account lands at "/dashboard" now, regardless of role — it's the
+  // one unified Dashboard destination for everyone (see
+  // (dashboard)/dashboard/page.tsx, which branches its own content by
+  // role) now that app-shell.tsx gives operatives and office users the
+  // same nav. "/portal" still exists but only as a redirect to here, so
+  // sending everyone here directly avoids that extra hop for operatives
+  // specifically. "/" itself is the public marketing home page now (see
+  // app/(marketing)) — signed-in traffic never lands there.
+  redirect("/dashboard");
 }
 
 export async function logout() {

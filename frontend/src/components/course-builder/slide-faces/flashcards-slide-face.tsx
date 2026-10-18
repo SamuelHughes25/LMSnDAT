@@ -4,13 +4,11 @@ import { useState } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Plus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import type { FlashcardItem, Slide } from "@/lib/course-types";
-import { useDebouncedCallback } from "@/lib/use-debounced-callback";
-import { cn } from "@/lib/utils";
+import { cn, stripHtml } from "@/lib/utils";
+import { StaticField } from "./content-slide-face";
 import type { SlideFaceProps } from "./index";
-
-const CHANGE_DEBOUNCE_MS = 500;
+import { WIDGET_INPUT_CHROME, WidgetEditableText } from "./widget-text-field";
 
 // UI-guidance min (a deck of zero cards is meaningless) and a hard-capped
 // max (mirrors match_pairs' MIN_PAIRS/MAX_PAIRS split) — only the max is
@@ -44,8 +42,14 @@ function makeCardId(n: number) {
 // size. overflow-hidden + break-words on the face divs (below) is a hard
 // backstop for any text this heuristic still underestimates (e.g. one
 // pathologically long unbroken "word"), not the primary mechanism.
-function cardFaceTextSizeClass(text: string): string {
-  const len = text.length;
+//
+// `text` is now sanitized HTML (card faces became rich-text fields — see
+// WidgetEditableText), so this measures stripHtml(text).length, not the
+// raw string — a short face wrapped in a few formatting tags (e.g.
+// "<p><strong>Paris</strong></p>") would otherwise read as much longer
+// than it visually is and pick an unnecessarily small font size.
+function cardFaceTextSizeClass(html: string): string {
+  const len = stripHtml(html).length;
   if (len <= 24) return "text-2xl";
   if (len <= 50) return "text-xl";
   if (len <= 90) return "text-lg";
@@ -58,7 +62,7 @@ export function FlashcardsSlideFace({ slide, mode, onConfigChange, onInteraction
   const cards = slide.config.cards ?? [];
 
   if (mode === "edit") {
-    return <FlashcardsEditor cards={cards} onConfigChange={onConfigChange} />;
+    return <FlashcardsEditor slide={slide} cards={cards} onConfigChange={onConfigChange} />;
   }
 
   if (mode === "present") {
@@ -69,26 +73,25 @@ export function FlashcardsSlideFace({ slide, mode, onConfigChange, onInteraction
 }
 
 // On-canvas direct-manipulation editor — same list-editing pattern as
-// accordion-slide-face.tsx's sections list. Local state mirrors the
-// incoming config (remounted via key={slide.id} in slide-canvas.tsx).
+// accordion-slide-face.tsx's sections list. Local state still mirrors the
+// incoming `cards` array's STRUCTURE (remounted via key={slide.id} in
+// slide-canvas.tsx) — each card's own front/back TEXT is now owned by its
+// own WidgetEditableText instance instead (widget-text-field.tsx).
 function FlashcardsEditor({
+  slide,
   cards,
   onConfigChange,
 }: {
+  slide: Slide;
   cards: FlashcardItem[];
   onConfigChange: SlideFaceProps["onConfigChange"];
 }) {
   const [localCards, setLocalCards] = useState(cards);
 
-  const debouncedCommitCards = useDebouncedCallback(
-    (next: FlashcardItem[]) => onConfigChange?.({ cards: next }),
-    CHANGE_DEBOUNCE_MS,
-  );
-
-  function handleFieldChange(index: number, field: "front" | "back", value: string) {
-    const next = localCards.map((c, i) => (i === index ? { ...c, [field]: value } : c));
+  function handleFieldCommit(index: number, field: "front" | "back", html: string) {
+    const next = localCards.map((c, i) => (i === index ? { ...c, [field]: html } : c));
     setLocalCards(next);
-    debouncedCommitCards(next);
+    onConfigChange?.({ cards: next });
   }
 
   function commitCards(next: FlashcardItem[]) {
@@ -123,18 +126,22 @@ function FlashcardsEditor({
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
         {localCards.map((card, index) => (
           <div key={card.id} className="flex items-center gap-2">
-            <Input
-              value={card.front}
-              onChange={(e) => handleFieldChange(index, "front", e.target.value)}
-              placeholder="Front"
-              className="flex-1"
-            />
-            <Input
-              value={card.back}
-              onChange={(e) => handleFieldChange(index, "back", e.target.value)}
-              placeholder="Back"
-              className="flex-1"
-            />
+            <div className={cn(WIDGET_INPUT_CHROME, "flex-1")}>
+              <WidgetEditableText
+                fieldId={`${slide.id}:card:${card.id}:front`}
+                value={card.front}
+                placeholder="Front"
+                onCommit={(html) => handleFieldCommit(index, "front", html)}
+              />
+            </div>
+            <div className={cn(WIDGET_INPUT_CHROME, "flex-1")}>
+              <WidgetEditableText
+                fieldId={`${slide.id}:card:${card.id}:back`}
+                value={card.back}
+                placeholder="Back"
+                onCommit={(html) => handleFieldCommit(index, "back", html)}
+              />
+            </div>
             <Button
               variant="ghost"
               size="icon"
@@ -301,7 +308,7 @@ function FlashcardsPresent({
               WebkitBackfaceVisibility: "hidden",
             }}
           >
-            {card.front || "—"}
+            <StaticField value={card.front} placeholder="—" />
           </div>
           <div
             className={cn(
@@ -322,7 +329,7 @@ function FlashcardsPresent({
               WebkitBackfaceVisibility: "hidden",
             }}
           >
-            {card.back || "—"}
+            <StaticField value={card.back} placeholder="—" />
           </div>
         </button>
       </div>
@@ -363,7 +370,7 @@ function FlashcardsStatic({ cards }: { cards: FlashcardItem[] }) {
               cardFaceTextSizeClass(cards[0].front),
             )}
           >
-            {cards[0].front || "—"}
+            <StaticField value={cards[0].front} placeholder="—" />
           </div>
           <div className="text-sm text-muted-foreground">1/{cards.length} cards</div>
         </>

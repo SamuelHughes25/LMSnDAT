@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { TextStyle } from "@tiptap/extension-text-style";
@@ -68,8 +69,13 @@ function RichTextFreeTextBox({
   value: string;
   onCommit: (value: string) => void;
 }) {
-  const { focusEditor, blurEditor, panelRef, panelInteractingRef, panelPointerDownRef } = useActiveEditorContext();
+  const { focusEditor, blurEditor, panelRef, panelInteractingRef, panelPointerDownRef, lastFontFamilyRef } =
+    useActiveEditorContext();
   const debouncedCommit = useDebouncedCallback(onCommit, CHANGE_DEBOUNCE_MS);
+  // Guards the remembered-font application below to exactly once per box
+  // — see that handler's own comment for why it has to live in onFocus,
+  // not onCreate.
+  const appliedRememberedFontRef = useRef(false);
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -119,12 +125,42 @@ function RichTextFreeTextBox({
     },
     onFocus: ({ editor }) => {
       focusEditor(fieldId, editor);
+      // Applies the author's last-picked font (see lastFontFamilyRef's own
+      // comment in active-editor-context.tsx) the first time a genuinely
+      // fresh/empty box is focused — never to a box that already has real
+      // saved content, which would mean silently re-styling something the
+      // author already authored just because they happened to focus it
+      // again later in the same session. Deliberately NOT in onCreate: a
+      // TipTap "stored mark" set there only survives until the next
+      // selection change, and focusing the box (the user clicking into
+      // it to actually type) IS that selection change — confirmed via a
+      // real browser that onCreate's own attempt silently never took
+      // effect, since by the time any text was typed the mark had
+      // already been cleared. onFocus fires AFTER the browser's own
+      // focus/selection has settled, so setting it here is what actually
+      // survives into the first keystroke. appliedRememberedFontRef
+      // guards this to exactly once per box, so clicking in and out of
+      // an already-typed-into box never re-applies or fights whatever
+      // font the author deliberately chose for it since.
+      if (!appliedRememberedFontRef.current && editor.isEmpty && lastFontFamilyRef.current) {
+        appliedRememberedFontRef.current = true;
+        editor.chain().setFontFamily(lastFontFamilyRef.current).run();
+      }
     },
     // Same two-part blur guard as RichTextBody — see that component's own
     // comment in content-slide-face.tsx for the full reasoning (a plain
     // panel button vs. a portal-rendered Select listbox item need different
     // detection strategies).
     onBlur: ({ editor, event }) => {
+      // Unconditional, and first: see use-debounced-callback.ts's own
+      // comment for why a pending debounced commit has to flush on EVERY
+      // blur, including (especially) the "focus moved into the panel"
+      // case the guard below exists to otherwise ignore — clicking a
+      // Layers panel reorder button IS exactly that case, and is exactly
+      // the moment a just-applied format (bold/underline) still sitting
+      // in this timer needs to actually land before anything else reads
+      // "the current config" to merge its own change on top of.
+      debouncedCommit.flush();
       const panelEl = panelRef.current;
       const nextFocus = event.relatedTarget;
       const focusMovedIntoPanel = !!(panelEl && nextFocus instanceof Node && panelEl.contains(nextFocus));

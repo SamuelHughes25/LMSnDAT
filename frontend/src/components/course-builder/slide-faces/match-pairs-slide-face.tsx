@@ -4,21 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import { Plus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import type { MatchPair, Slide } from "@/lib/course-types";
 import type { SlideInteractionResult } from "@/lib/slide-interaction";
-import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { useIsClient } from "@/lib/use-is-client";
-import { cn } from "@/lib/utils";
+import { cn, stripHtml } from "@/lib/utils";
+import { StaticField } from "./content-slide-face";
 import type { SlideFaceProps } from "./index";
-
-// Same debounce budget as the other two slide-face editors — governs how
-// often a network PATCH fires while typing into the instructions/keyword/
-// definition fields, not how the field itself feels (local echo state
-// updates on every keystroke). Discrete actions (add/remove pair) commit
-// immediately, no debounce — same split established in
-// multiple-choice-slide-face.tsx / missing-word-slide-face.tsx.
-const CHANGE_DEBOUNCE_MS = 500;
+import { WIDGET_INPUT_CHROME, WidgetEditableText } from "./widget-text-field";
 
 // The spec's "min 2 pairs" is enforced here as UI guidance only (disables
 // delete at 2 remaining) — the backend deliberately does NOT hard-reject a
@@ -45,9 +37,6 @@ function shuffle<T>(items: T[]): T[] {
   return result;
 }
 
-const FIELD_CLASSES =
-  "w-full border-none bg-transparent p-0 text-foreground outline-none placeholder:text-muted-foreground/50 focus:rounded focus:outline-none focus:ring-1 focus:ring-primary/40";
-
 export function MatchPairsSlideFace({
   slide,
   mode,
@@ -60,7 +49,9 @@ export function MatchPairsSlideFace({
   const pairs = slide.config.pairs ?? [];
 
   if (mode === "edit") {
-    return <MatchPairsEditor instructions={instructions} pairs={pairs} onConfigChange={onConfigChange} />;
+    return (
+      <MatchPairsEditor slide={slide} instructions={instructions} pairs={pairs} onConfigChange={onConfigChange} />
+    );
   }
 
   if (mode === "present") {
@@ -85,38 +76,22 @@ export function MatchPairsSlideFace({
 // component is remounted via `key={slide.id}` in slide-canvas.tsx whenever
 // the selected slide changes, so there's no stale-state risk).
 function MatchPairsEditor({
+  slide,
   instructions,
   pairs,
   onConfigChange,
 }: {
+  slide: Slide;
   instructions: string;
   pairs: MatchPair[];
   onConfigChange: SlideFaceProps["onConfigChange"];
 }) {
-  const [localInstructions, setLocalInstructions] = useState(instructions);
   const [localPairs, setLocalPairs] = useState(pairs);
 
-  const debouncedCommitInstructions = useDebouncedCallback(
-    (value: string) => onConfigChange?.({ instructions: value }),
-    CHANGE_DEBOUNCE_MS,
-  );
-  // One stable debounced function for the whole `pairs` array — a keyword
-  // or definition edit debounce-commits the entire array (matching
-  // config's shape), same approach as multiple_choice's options.
-  const debouncedCommitPairs = useDebouncedCallback(
-    (next: MatchPair[]) => onConfigChange?.({ pairs: next }),
-    CHANGE_DEBOUNCE_MS,
-  );
-
-  function handleInstructionsChange(value: string) {
-    setLocalInstructions(value);
-    debouncedCommitInstructions(value);
-  }
-
-  function handleFieldChange(index: number, field: "keyword" | "definition", value: string) {
-    const next = localPairs.map((p, i) => (i === index ? { ...p, [field]: value } : p));
+  function handleFieldCommit(index: number, field: "keyword" | "definition", html: string) {
+    const next = localPairs.map((p, i) => (i === index ? { ...p, [field]: html } : p));
     setLocalPairs(next);
-    debouncedCommitPairs(next);
+    onConfigChange?.({ pairs: next });
   }
 
   // Discrete actions (add, remove) commit immediately — no debounce, since
@@ -139,28 +114,33 @@ function MatchPairsEditor({
 
   return (
     <div className="flex h-full w-full flex-col gap-6 px-16 py-12 text-foreground">
-      <input
-        value={localInstructions}
-        onChange={(e) => handleInstructionsChange(e.target.value)}
+      <WidgetEditableText
+        fieldId={`${slide.id}:instructions`}
+        value={instructions}
         placeholder="Instructions (optional), e.g. Match each term to its definition"
-        className={cn(FIELD_CLASSES, "text-2xl font-bold")}
+        className="text-2xl font-bold"
+        onCommit={(html) => onConfigChange?.({ instructions: html })}
       />
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
         {localPairs.map((pair, index) => (
           <div key={pair.id} className="flex items-center gap-2">
-            <Input
-              value={pair.keyword}
-              onChange={(e) => handleFieldChange(index, "keyword", e.target.value)}
-              placeholder="Keyword"
-              className="flex-1"
-            />
-            <Input
-              value={pair.definition}
-              onChange={(e) => handleFieldChange(index, "definition", e.target.value)}
-              placeholder="Definition"
-              className="flex-1"
-            />
+            <div className={cn(WIDGET_INPUT_CHROME, "flex-1")}>
+              <WidgetEditableText
+                fieldId={`${slide.id}:pair:${pair.id}:keyword`}
+                value={pair.keyword}
+                placeholder="Keyword"
+                onCommit={(html) => handleFieldCommit(index, "keyword", html)}
+              />
+            </div>
+            <div className={cn(WIDGET_INPUT_CHROME, "flex-1")}>
+              <WidgetEditableText
+                fieldId={`${slide.id}:pair:${pair.id}:definition`}
+                value={pair.definition}
+                placeholder="Definition"
+                onCommit={(html) => handleFieldCommit(index, "definition", html)}
+              />
+            </div>
             <Button
               variant="ghost"
               size="icon"
@@ -383,14 +363,22 @@ function MatchPairsPresent({
   if (pairs.length === 0) {
     return (
       <div className="flex h-full w-full flex-col justify-center gap-6 px-16 py-12 text-foreground">
-        {instructions && <div className="text-xl font-semibold">{instructions}</div>}
+        {stripHtml(instructions).trim().length > 0 && (
+        <div className="text-xl font-semibold">
+          <StaticField value={instructions} placeholder="" />
+        </div>
+      )}
       </div>
     );
   }
 
   return (
     <div className="flex h-full w-full flex-col justify-center gap-6 px-16 py-12 text-foreground">
-      {instructions && <div className="text-xl font-semibold">{instructions}</div>}
+      {stripHtml(instructions).trim().length > 0 && (
+        <div className="text-xl font-semibold">
+          <StaticField value={instructions} placeholder="" />
+        </div>
+      )}
 
       {/* justify-center on each column, not just the outer wrapper above:
           this grid's cells stretch to the full flex-1 height (CSS Grid's
@@ -476,7 +464,7 @@ function MatchTile({
         state === "neutral" && "border-border hover:enabled:border-primary/60 hover:enabled:bg-muted",
       )}
     >
-      {text || "—"}
+      <StaticField value={text} placeholder="—" />
     </button>
   );
 }
@@ -488,21 +476,19 @@ function MatchTile({
 function MatchPairsStatic({ instructions, pairs }: { instructions: string; pairs: MatchPair[] }) {
   return (
     <div className="flex h-full w-full flex-col justify-center gap-4 px-16 py-12 text-foreground">
-      <div className="text-xl font-semibold">
-        {instructions || <span className="text-muted-foreground/50">Click to add instructions</span>}
-      </div>
+      <StaticField value={instructions} placeholder="Click to add instructions" className="text-xl font-semibold" />
       <div className="grid flex-1 grid-cols-2 gap-8">
         <div className="flex flex-col gap-2">
           {pairs.map((pair) => (
             <div key={pair.id} className="rounded-lg border-2 border-border px-4 py-3 text-left text-base">
-              {pair.keyword || "—"}
+              <StaticField value={pair.keyword} placeholder="—" />
             </div>
           ))}
         </div>
         <div className="flex flex-col gap-2">
           {pairs.map((pair) => (
             <div key={pair.id} className="rounded-lg border-2 border-border px-4 py-3 text-left text-base">
-              {pair.definition || "—"}
+              <StaticField value={pair.definition} placeholder="—" />
             </div>
           ))}
         </div>

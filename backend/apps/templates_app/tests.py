@@ -247,6 +247,24 @@ class TemplateOwnershipTests(APIAuthTestCase):
         self.template.refresh_from_db()
         self.assertEqual(self.template.owner_id, self.editor.id)
 
+    def test_transfer_ownership_rejects_malformed_or_missing_owner_cleanly(self):
+        # Mirrors CourseOwnershipTests' identical test exactly — see its
+        # own comment on why User.id's plain integer pk made a malformed
+        # value a real unhandled-500 risk here, not just DRF boilerplate.
+        superuser = User.objects.create_user(username='town_superuser2', password='pw', is_superuser=True)
+        client = self.auth('town_superuser2', 'pw')
+
+        resp = client.post(
+            f'/api/v1/templates/{self.template.id}/transfer-ownership/', {'owner': 'not-a-real-id'}, format='json',
+        )
+        self.assertEqual(resp.status_code, 400, resp.content)
+
+        resp = client.post(f'/api/v1/templates/{self.template.id}/transfer-ownership/', {}, format='json')
+        self.assertEqual(resp.status_code, 400, resp.content)
+
+        self.template.refresh_from_db()
+        self.assertEqual(self.template.owner_id, self.owner.id)
+
     def test_only_owner_or_admin_can_set_editors(self):
         editor_client = self.auth('town_editor', 'pw')
         resp = editor_client.post(
@@ -260,3 +278,12 @@ class TemplateOwnershipTests(APIAuthTestCase):
         )
         self.assertEqual(resp.status_code, 200, resp.content)
         self.assertEqual(set(self.template.editors.values_list('id', flat=True)), {self.outsider.id})
+
+        # A malformed id anywhere in the list comes back as a clean 400,
+        # not an unhandled 500 — same reasoning as transfer-ownership.
+        resp = owner_client.post(
+            f'/api/v1/templates/{self.template.id}/set-editors/',
+            {'editors': [self.outsider.id, 'not-a-real-id']},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 400, resp.content)

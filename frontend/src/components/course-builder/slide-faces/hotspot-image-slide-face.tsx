@@ -4,14 +4,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ImagePlus, Loader2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import type { HotspotMarker, Slide } from "@/lib/course-types";
-import { useDebouncedCallback } from "@/lib/use-debounced-callback";
-import { cn } from "@/lib/utils";
+import { cn, stripHtml } from "@/lib/utils";
+import { StaticField } from "./content-slide-face";
 import { clampPositionPct, useImageUpload } from "./image-shared";
 import type { SlideFaceProps } from "./index";
-
-const CHANGE_DEBOUNCE_MS = 500;
+import { WIDGET_INPUT_CHROME, WidgetEditableText } from "./widget-text-field";
 
 // Backend-enforced hard cap (SlideSerializer.validate()'s hotspot_image
 // branch) — no UI-guidance minimum, since zero hotspots (or no image yet)
@@ -38,6 +36,7 @@ export function HotspotImageSlideFace({ slide, mode, courseVersionId, onConfigCh
   if (mode === "edit") {
     return (
       <HotspotImageEditor
+        slide={slide}
         imageUrl={imageUrl}
         hotspots={hotspots}
         courseVersionId={courseVersionId}
@@ -63,11 +62,13 @@ export function HotspotImageSlideFace({ slide, mode, courseVersionId, onConfigCh
 // and clampPositionPct (both from image-shared.tsx) are still reused
 // directly for upload plumbing and coordinate clamping.
 function HotspotImageEditor({
+  slide,
   imageUrl,
   hotspots,
   courseVersionId,
   onConfigChange,
 }: {
+  slide: Slide;
   imageUrl: string | null;
   hotspots: HotspotMarker[];
   courseVersionId: string | undefined;
@@ -118,11 +119,6 @@ function HotspotImageEditor({
     // Deliberately mount-only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const debouncedCommitHotspots = useDebouncedCallback(
-    (next: HotspotMarker[]) => onConfigChange?.({ hotspots: next }),
-    CHANGE_DEBOUNCE_MS,
-  );
 
   function commitHotspots(next: HotspotMarker[]) {
     setLocalHotspots(next);
@@ -188,16 +184,16 @@ function HotspotImageEditor({
     setEditingId((current) => (current === id ? null : id));
   }
 
-  function handleLabelChange(id: string, value: string) {
-    const next = localHotspots.map((h) => (h.id === id ? { ...h, label: value } : h));
+  function handleLabelCommit(id: string, html: string) {
+    const next = localHotspots.map((h) => (h.id === id ? { ...h, label: html } : h));
     setLocalHotspots(next);
-    debouncedCommitHotspots(next);
+    onConfigChange?.({ hotspots: next });
   }
 
-  function handleDescriptionChange(id: string, value: string) {
-    const next = localHotspots.map((h) => (h.id === id ? { ...h, description: value } : h));
+  function handleDescriptionCommit(id: string, html: string) {
+    const next = localHotspots.map((h) => (h.id === id ? { ...h, description: html } : h));
     setLocalHotspots(next);
-    debouncedCommitHotspots(next);
+    onConfigChange?.({ hotspots: next });
   }
 
   function removeMarker(id: string) {
@@ -290,24 +286,27 @@ function HotspotImageEditor({
                   style={{ left: `${effective.xPct}%`, top: `${effective.yPct}%`, transform: "translate(-50%, 14px)" }}
                 >
                   <div className="flex items-center gap-1">
-                    <Input
-                      autoFocus
-                      value={hotspot.label}
-                      onChange={(e) => handleLabelChange(hotspot.id, e.target.value)}
-                      placeholder="Label"
-                      className="flex-1"
-                    />
+                    <div className={cn(WIDGET_INPUT_CHROME, "flex-1")}>
+                      <WidgetEditableText
+                        autoFocus
+                        fieldId={`${slide.id}:hotspot:${hotspot.id}:label`}
+                        value={hotspot.label}
+                        placeholder="Label"
+                        onCommit={(html) => handleLabelCommit(hotspot.id, html)}
+                      />
+                    </div>
                     <Button variant="ghost" size="icon" onClick={() => removeMarker(hotspot.id)} aria-label="Remove hotspot">
                       <X className="h-4 w-4" />
                     </Button>
                   </div>
-                  <textarea
-                    value={hotspot.description ?? ""}
-                    onChange={(e) => handleDescriptionChange(hotspot.id, e.target.value)}
-                    placeholder="Description (optional)"
-                    rows={2}
-                    className="w-full resize-y rounded border border-border bg-transparent p-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground/50 focus:ring-1 focus:ring-primary/40"
-                  />
+                  <div className={cn(WIDGET_INPUT_CHROME, "min-h-12 text-sm")}>
+                    <WidgetEditableText
+                      fieldId={`${slide.id}:hotspot:${hotspot.id}:description`}
+                      value={hotspot.description ?? ""}
+                      placeholder="Description (optional)"
+                      onCommit={(html) => handleDescriptionCommit(hotspot.id, html)}
+                    />
+                  </div>
                 </div>
               );
             })}
@@ -577,9 +576,13 @@ function HotspotImagePresent({
                   unbroken run of characters to wrap at the box's own edge,
                   which is what actually keeps text "contained," not
                   anything about height. */}
-              <div className="font-semibold break-words">{hotspot.label || "—"}</div>
-              {hotspot.description && (
-                <div className="mt-1 text-sm break-words text-muted-foreground">{hotspot.description}</div>
+              <div className="font-semibold break-words">
+                <StaticField value={hotspot.label} placeholder="—" />
+              </div>
+              {hotspot.description && stripHtml(hotspot.description).trim().length > 0 && (
+                <div className="mt-1 text-sm break-words text-muted-foreground">
+                  <StaticField value={hotspot.description} placeholder="" />
+                </div>
               )}
             </div>
           );

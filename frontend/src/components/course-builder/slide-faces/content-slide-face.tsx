@@ -515,8 +515,17 @@ function EditableSubtitle({
 // long-supported fix for "give an empty block real line-height" — same
 // idea as a literal `&nbsp;` character, without needing to rewrite any
 // already-saved content.
+// overflow-hidden, not overflow-y-auto — a scrollbar appearing on a text
+// box was reported directly as looking wrong ("in weird scenarios they
+// show up and it looks shite"): this app's canvas is a fixed-size,
+// WYSIWYG-style surface (not a scrolling document), so a box whose
+// content overflows its own bounds should behave the same way every
+// other positioned/resized box on the canvas already does — clip
+// silently — rather than sprouting a scrollbar that never appears in the
+// builder's own thumbnail/Preview render of the same box anyway (static
+// mode has never scrolled; only the live edit-mode textarea could).
 export const BODY_TYPOGRAPHY =
-  "h-full overflow-y-auto text-lg leading-relaxed [&_p]:my-0 [&_p:empty]:before:content-['\\00a0'] [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-6 [&_ol]:pl-6 [&_li]:my-0.5";
+  "h-full overflow-hidden text-lg leading-relaxed [&_p]:my-0 [&_p:empty]:before:content-['\\00a0'] [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-6 [&_ol]:pl-6 [&_li]:my-0.5";
 
 // A second, genuinely different bug behind the same user-visible report
 // ("blank lines don't survive") — this one has nothing to do with
@@ -665,8 +674,12 @@ function RichTextBody({
   onCommit: (value: string) => void;
   className?: string;
 }) {
-  const { focusEditor, blurEditor, panelRef, panelInteractingRef, panelPointerDownRef } = useActiveEditorContext();
+  const { focusEditor, blurEditor, panelRef, panelInteractingRef, panelPointerDownRef, lastFontFamilyRef } =
+    useActiveEditorContext();
   const debouncedCommit = useDebouncedCallback(onCommit, CHANGE_DEBOUNCE_MS);
+  // See free-text-box.tsx's identical ref for why this has to guard an
+  // onFocus-time application, not an onCreate-time one.
+  const appliedRememberedFontRef = useRef(false);
 
   const editor = useEditor({
     // SSR would otherwise print a "Tiptap Error: SSR has been detected"
@@ -733,6 +746,17 @@ function RichTextBody({
     },
     onFocus: ({ editor }) => {
       focusEditor(fieldId, editor);
+      // See free-text-box.tsx's identical onFocus for the full
+      // reasoning — applies the author's last-picked font
+      // (active-editor-context.tsx's lastFontFamilyRef) the first time
+      // a genuinely fresh/empty body is focused, never to one that
+      // already has real saved content. Deliberately onFocus, not
+      // onCreate: a stored mark set at creation time doesn't survive
+      // the selection change focusing the box itself causes.
+      if (!appliedRememberedFontRef.current && editor.isEmpty && lastFontFamilyRef.current) {
+        appliedRememberedFontRef.current = true;
+        editor.chain().setFontFamily(lastFontFamilyRef.current).run();
+      }
     },
     // See active-editor-context.tsx's blurEditor for why this is safe against
     // focus/blur races between the two-column layout's two editors.
@@ -755,6 +779,10 @@ function RichTextBody({
     //     whenever it's opening/open, sidestepping the portal question
     //     entirely in favor of explicit "we're mid-interaction" state.
     onBlur: ({ editor, event }) => {
+      // Unconditional, and first — see use-debounced-callback.ts's own
+      // comment for why a pending debounced commit must flush on every
+      // blur, not just the ones that go on to call blurEditor below.
+      debouncedCommit.flush();
       const panelEl = panelRef.current;
       const nextFocus = event.relatedTarget;
       const focusMovedIntoPanel = !!(panelEl && nextFocus instanceof Node && panelEl.contains(nextFocus));
@@ -821,8 +849,12 @@ function useSingleLineSlideEditor({
   typographyClass: string;
   placeholder: string;
 }) {
-  const { focusEditor, blurEditor, panelRef, panelInteractingRef, panelPointerDownRef } = useActiveEditorContext();
+  const { focusEditor, blurEditor, panelRef, panelInteractingRef, panelPointerDownRef, lastFontFamilyRef } =
+    useActiveEditorContext();
   const debouncedCommit = useDebouncedCallback(onCommit, CHANGE_DEBOUNCE_MS);
+  // See free-text-box.tsx's identical ref for why this has to guard an
+  // onFocus-time application, not an onCreate-time one.
+  const appliedRememberedFontRef = useRef(false);
 
   return useEditor({
     immediatelyRender: false,
@@ -875,8 +907,23 @@ function useSingleLineSlideEditor({
     },
     onFocus: ({ editor }) => {
       focusEditor(fieldId, editor);
+      // See free-text-box.tsx's identical onFocus for the full
+      // reasoning — applies the author's last-picked font
+      // (active-editor-context.tsx's lastFontFamilyRef) the first time
+      // a genuinely fresh/empty title or subtitle is focused, never to
+      // one that already has real saved content. Deliberately onFocus,
+      // not onCreate: a stored mark set at creation time doesn't
+      // survive the selection change focusing the box itself causes.
+      if (!appliedRememberedFontRef.current && editor.isEmpty && lastFontFamilyRef.current) {
+        appliedRememberedFontRef.current = true;
+        editor.chain().setFontFamily(lastFontFamilyRef.current).run();
+      }
     },
     onBlur: ({ editor, event }) => {
+      // Unconditional, and first — see use-debounced-callback.ts's own
+      // comment for why a pending debounced commit must flush on every
+      // blur, not just the ones that go on to call blurEditor below.
+      debouncedCommit.flush();
       const panelEl = panelRef.current;
       const nextFocus = event.relatedTarget;
       const focusMovedIntoPanel = !!(panelEl && nextFocus instanceof Node && panelEl.contains(nextFocus));

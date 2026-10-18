@@ -7,15 +7,13 @@ import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, Plus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import type { SequencingItem, Slide } from "@/lib/course-types";
 import type { SlideInteractionResult } from "@/lib/slide-interaction";
-import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { useIsClient } from "@/lib/use-is-client";
-import { cn } from "@/lib/utils";
+import { cn, stripHtml } from "@/lib/utils";
+import { StaticField } from "./content-slide-face";
 import type { SlideFaceProps } from "./index";
-
-const CHANGE_DEBOUNCE_MS = 500;
+import { WIDGET_INPUT_CHROME, WidgetEditableText } from "./widget-text-field";
 
 // UI-guidance min (mirrors match_pairs' MIN_PAIRS — not backend-enforced,
 // same progressive-authoring reasoning) and a backend-enforced max.
@@ -66,7 +64,9 @@ export function SequencingSlideFace({
   const items = slide.config.sequence_items ?? [];
 
   if (mode === "edit") {
-    return <SequencingEditor instructions={instructions} items={items} onConfigChange={onConfigChange} />;
+    return (
+      <SequencingEditor slide={slide} instructions={instructions} items={items} onConfigChange={onConfigChange} />
+    );
   }
 
   if (mode === "present") {
@@ -96,36 +96,23 @@ export function SequencingSlideFace({
 // row, with onClick stopPropagation so grabbing it never also fires a text
 // field's own click).
 function SequencingEditor({
+  slide,
   instructions,
   items,
   onConfigChange,
 }: {
+  slide: Slide;
   instructions: string;
   items: SequencingItem[];
   onConfigChange: SlideFaceProps["onConfigChange"];
 }) {
-  const [localInstructions, setLocalInstructions] = useState(instructions);
   const [localItems, setLocalItems] = useState(items);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
-  const debouncedCommitInstructions = useDebouncedCallback(
-    (value: string) => onConfigChange?.({ instructions: value }),
-    CHANGE_DEBOUNCE_MS,
-  );
-  const debouncedCommitItems = useDebouncedCallback(
-    (next: SequencingItem[]) => onConfigChange?.({ sequence_items: next }),
-    CHANGE_DEBOUNCE_MS,
-  );
-
-  function handleInstructionsChange(value: string) {
-    setLocalInstructions(value);
-    debouncedCommitInstructions(value);
-  }
-
-  function handleTextChange(index: number, value: string) {
-    const next = localItems.map((it, i) => (i === index ? { ...it, text: value } : it));
+  function handleTextCommit(index: number, html: string) {
+    const next = localItems.map((it, i) => (i === index ? { ...it, text: html } : it));
     setLocalItems(next);
-    debouncedCommitItems(next);
+    onConfigChange?.({ sequence_items: next });
   }
 
   function commitItems(next: SequencingItem[]) {
@@ -155,11 +142,12 @@ function SequencingEditor({
 
   return (
     <div className="flex h-full w-full flex-col gap-4 px-16 py-12 text-foreground">
-      <input
-        value={localInstructions}
-        onChange={(e) => handleInstructionsChange(e.target.value)}
+      <WidgetEditableText
+        fieldId={`${slide.id}:instructions`}
+        value={instructions}
         placeholder="Instructions (optional), e.g. Put these steps in the correct order"
-        className="w-full border-none bg-transparent p-0 text-2xl font-bold text-foreground outline-none placeholder:text-muted-foreground/50 focus:rounded focus:ring-1 focus:ring-primary/40"
+        className="text-2xl font-bold"
+        onCommit={(html) => onConfigChange?.({ instructions: html })}
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -169,10 +157,11 @@ function SequencingEditor({
               {localItems.map((item, index) => (
                 <SequencingEditorRow
                   key={item.id}
+                  fieldId={`${slide.id}:item:${item.id}:text`}
                   item={item}
                   index={index}
                   canRemove={localItems.length > MIN_ITEMS}
-                  onTextChange={(value) => handleTextChange(index, value)}
+                  onTextCommit={(html) => handleTextCommit(index, html)}
                   onRemove={() => removeItem(index)}
                 />
               ))}
@@ -192,16 +181,18 @@ function SequencingEditor({
 }
 
 function SequencingEditorRow({
+  fieldId,
   item,
   index,
   canRemove,
-  onTextChange,
+  onTextCommit,
   onRemove,
 }: {
+  fieldId: string;
   item: SequencingItem;
   index: number;
   canRemove: boolean;
-  onTextChange: (value: string) => void;
+  onTextCommit: (html: string) => void;
   onRemove: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id });
@@ -220,7 +211,9 @@ function SequencingEditorRow({
         <GripVertical className="h-4 w-4" />
       </button>
       <div className="w-6 shrink-0 text-center text-sm text-muted-foreground">{index + 1}</div>
-      <Input value={item.text} onChange={(e) => onTextChange(e.target.value)} placeholder="Step text" className="flex-1" />
+      <div className={cn(WIDGET_INPUT_CHROME, "flex-1")}>
+        <WidgetEditableText fieldId={fieldId} value={item.text} placeholder="Step text" onCommit={onTextCommit} />
+      </div>
       <Button variant="ghost" size="icon" disabled={!canRemove} onClick={onRemove} aria-label="Remove item">
         <X className="h-4 w-4" />
       </Button>
@@ -348,14 +341,22 @@ function SequencingPresent({
   if (items.length === 0) {
     return (
       <div className="flex h-full w-full flex-col justify-center gap-6 px-16 py-12 text-foreground">
-        {instructions && <div className="text-xl font-semibold">{instructions}</div>}
+        {stripHtml(instructions).trim().length > 0 && (
+        <div className="text-xl font-semibold">
+          <StaticField value={instructions} placeholder="" />
+        </div>
+      )}
       </div>
     );
   }
 
   return (
     <div className="flex h-full w-full flex-col justify-center gap-6 px-16 py-12 text-foreground">
-      {instructions && <div className="text-xl font-semibold">{instructions}</div>}
+      {stripHtml(instructions).trim().length > 0 && (
+        <div className="text-xl font-semibold">
+          <StaticField value={instructions} placeholder="" />
+        </div>
+      )}
 
       {/* flex flex-col justify-center HERE, not just on the outer wrapper
           above: this wrapper stretches to fill the full flex-1 height
@@ -450,7 +451,9 @@ function SequencingPresentRow({
       >
         <GripVertical className="h-4 w-4" />
       </button>
-      <div className="flex-1 text-base">{text || "—"}</div>
+      <div className="flex-1 text-base">
+        <StaticField value={text} placeholder="—" />
+      </div>
     </div>
   );
 }
@@ -461,14 +464,14 @@ function SequencingPresentRow({
 function SequencingStatic({ instructions, items }: { instructions: string; items: SequencingItem[] }) {
   return (
     <div className="flex h-full w-full flex-col justify-center gap-4 px-16 py-12 text-foreground">
-      <div className="text-xl font-semibold">
-        {instructions || <span className="text-muted-foreground/50">Click to add instructions</span>}
-      </div>
+      <StaticField value={instructions} placeholder="Click to add instructions" className="text-xl font-semibold" />
       <div className="flex flex-col gap-2">
         {items.map((item, index) => (
           <div key={item.id} className="flex items-center gap-2 rounded-lg border border-border p-3">
             <div className="w-6 shrink-0 text-center text-sm text-muted-foreground">{index + 1}</div>
-            <div className="flex-1 text-base">{item.text || "—"}</div>
+            <div className="flex-1 text-base">
+              <StaticField value={item.text} placeholder="—" />
+            </div>
           </div>
         ))}
       </div>

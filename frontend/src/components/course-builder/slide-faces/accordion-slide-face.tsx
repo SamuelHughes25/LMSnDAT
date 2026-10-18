@@ -4,17 +4,11 @@ import { useState } from "react";
 import { ChevronDown, ChevronUp, Plus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import type { AccordionSection, Slide } from "@/lib/course-types";
-import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { cn } from "@/lib/utils";
+import { StaticField } from "./content-slide-face";
 import type { SlideFaceProps } from "./index";
-
-// Same debounce budget as the other slide-face editors — governs how often
-// a network PATCH fires while typing into a title/body field, not how the
-// field itself feels (local echo state updates on every keystroke).
-// Discrete actions (add/remove/reorder section) commit immediately.
-const CHANGE_DEBOUNCE_MS = 500;
+import { WIDGET_INPUT_CHROME, WidgetEditableText } from "./widget-text-field";
 
 // The spec's min-1/max-8 are UI guidance (min) and a hard cap (max) — same
 // split as match_pairs' MIN_PAIRS/MAX_PAIRS. Only the max is enforced by
@@ -31,7 +25,7 @@ export function AccordionSlideFace({ slide, mode, onConfigChange, onInteraction 
   const sections = slide.config.sections ?? [];
 
   if (mode === "edit") {
-    return <AccordionEditor sections={sections} onConfigChange={onConfigChange} />;
+    return <AccordionEditor slide={slide} sections={sections} onConfigChange={onConfigChange} />;
   }
 
   if (mode === "present") {
@@ -43,36 +37,28 @@ export function AccordionSlideFace({ slide, mode, onConfigChange, onInteraction 
 
 // On-canvas direct-manipulation editor — same list-editing pattern as
 // match-pairs-slide-face.tsx's pairs list, applied to title/body sections.
-// Local state mirrors the incoming config (this component is remounted via
-// key={slide.id} in slide-canvas.tsx whenever the selected slide changes,
-// so there's no stale-state risk).
-//
-// `body` is a plain <textarea>, not TipTap rich text — content-slide-face.tsx's
-// RichTextBody is tightly coupled to SlideTextToolbar's focus-follows-
-// selection wiring and to PositionableBox, not reusable per-row as-is, and
-// every other structured-list field in this app (multiple_choice options,
-// match_pairs keyword/definition, table cells) is deliberately plain for
-// the same "avoid a grid of TipTap instances" reason. A real trade-off for
-// long content, not an oversight — see AccordionSection's own comment in
-// course-types.ts.
+// Local state still mirrors the incoming `sections` array's STRUCTURE (this
+// component is remounted via key={slide.id} in slide-canvas.tsx whenever
+// the selected slide changes, so there's no stale-state risk) — each
+// section's own title/body TEXT is now owned by its own WidgetEditableText
+// instance instead (widget-text-field.tsx; same rich-text capability every
+// other text field in this app has, requested directly: "edit everything I
+// normally would apart from size").
 function AccordionEditor({
+  slide,
   sections,
   onConfigChange,
 }: {
+  slide: Slide;
   sections: AccordionSection[];
   onConfigChange: SlideFaceProps["onConfigChange"];
 }) {
   const [localSections, setLocalSections] = useState(sections);
 
-  const debouncedCommitSections = useDebouncedCallback(
-    (next: AccordionSection[]) => onConfigChange?.({ sections: next }),
-    CHANGE_DEBOUNCE_MS,
-  );
-
-  function handleFieldChange(index: number, field: "title" | "body", value: string) {
-    const next = localSections.map((s, i) => (i === index ? { ...s, [field]: value } : s));
+  function handleFieldCommit(index: number, field: "title" | "body", html: string) {
+    const next = localSections.map((s, i) => (i === index ? { ...s, [field]: html } : s));
     setLocalSections(next);
-    debouncedCommitSections(next);
+    onConfigChange?.({ sections: next });
   }
 
   // Discrete actions (add, remove, reorder) commit immediately — no
@@ -113,12 +99,15 @@ function AccordionEditor({
         {localSections.map((section, index) => (
           <div key={section.id} className="flex flex-col gap-1.5 rounded-lg border border-border p-3">
             <div className="flex items-center gap-2">
-              <Input
-                value={section.title}
-                onChange={(e) => handleFieldChange(index, "title", e.target.value)}
-                placeholder="Section title"
-                className="flex-1 font-medium"
-              />
+              <div className={cn(WIDGET_INPUT_CHROME, "flex-1")}>
+                <WidgetEditableText
+                  fieldId={`${slide.id}:section:${section.id}:title`}
+                  value={section.title}
+                  placeholder="Section title"
+                  className="font-medium"
+                  onCommit={(html) => handleFieldCommit(index, "title", html)}
+                />
+              </div>
               <Button
                 variant="ghost"
                 size="icon"
@@ -147,13 +136,14 @@ function AccordionEditor({
                 <X className="h-4 w-4" />
               </Button>
             </div>
-            <textarea
-              value={section.body}
-              onChange={(e) => handleFieldChange(index, "body", e.target.value)}
-              placeholder="Hidden content shown when this section is expanded"
-              rows={3}
-              className="w-full resize-y rounded border border-border bg-transparent p-2 text-sm text-foreground outline-none placeholder:text-muted-foreground/50 focus:ring-1 focus:ring-primary/40"
-            />
+            <div className={cn(WIDGET_INPUT_CHROME, "min-h-16 text-sm")}>
+              <WidgetEditableText
+                fieldId={`${slide.id}:section:${section.id}:body`}
+                value={section.body}
+                placeholder="Hidden content shown when this section is expanded"
+                onCommit={(html) => handleFieldCommit(index, "body", html)}
+              />
+            </div>
           </div>
         ))}
       </div>
@@ -246,12 +236,12 @@ function AccordionPresent({
               onClick={() => toggleSection(section.id)}
               className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left text-lg font-medium hover:bg-muted"
             >
-              {section.title || "—"}
+              <StaticField value={section.title} placeholder="—" className="flex-1" />
               <ChevronDown className={cn("h-5 w-5 shrink-0 text-muted-foreground transition-transform", isOpen && "rotate-180")} />
             </button>
             {isOpen && (
-              <div className="border-t border-border px-4 py-3 text-base whitespace-pre-wrap text-foreground">
-                {section.body || "—"}
+              <div className="border-t border-border px-4 py-3 text-base text-foreground">
+                <StaticField value={section.body} placeholder="—" />
               </div>
             )}
           </div>
@@ -276,7 +266,7 @@ function AccordionStatic({ sections }: { sections: AccordionSection[] }) {
             key={section.id}
             className="flex items-center justify-between gap-2 rounded-lg border border-border px-4 py-3 text-lg font-medium"
           >
-            {section.title || "—"}
+            <StaticField value={section.title} placeholder="—" className="flex-1" />
             <ChevronDown className="h-5 w-5 shrink-0 text-muted-foreground" />
           </div>
         ))

@@ -3,7 +3,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import SAFE_METHODS, IsAuthenticated
 from rest_framework.response import Response
 
@@ -12,6 +12,7 @@ from apps.core.permissions import (
     HasArchiveTabAccessOrIsOwner, HasDashboardTabAccess, IsContentOwnerEditorOrAdmin, IsContentOwnerOrAdmin, IsSuperuser,
     user_can_access_tab, user_can_edit_content,
 )
+from apps.core.utils import parse_int_pk
 from . import services
 from .models import (
     Course, CourseAsset, CourseAssignment, CourseAttempt, CourseDeadlineExtension, CourseVersion, Lesson,
@@ -25,7 +26,17 @@ from .serializers import (
 
 
 class CourseViewSet(viewsets.ModelViewSet):
-    queryset = Course.objects.all().select_related('editing_user').prefetch_related('editors')
+    # owner/created_by/archived_by select_related alongside editing_user —
+    # CourseSerializer's owner_username/created_by_username/
+    # archived_by_username (ReadOnlyField(source='<fk>.username')) each
+    # trigger one query PER ROW without this: confirmed via
+    # CaptureQueriesContext that listing 10 courses took 22 queries (1 list
+    # + 1 editors prefetch + 2 per row for owner/created_by) instead of the
+    # 2 this produces — the N+1 that made the course list (and the portal,
+    # which hits this same endpoint) visibly slower as the catalog grew.
+    queryset = Course.objects.all().select_related(
+        'editing_user', 'owner', 'created_by', 'archived_by',
+    ).prefetch_related('editors')
     serializer_class = CourseSerializer
     required_tab = 'courses'
 
@@ -95,7 +106,8 @@ class CourseViewSet(viewsets.ModelViewSet):
         # actually resolves to (not just whatever course the request
         # claims), via DRF's automatic check_object_permissions.
         course = self.get_object()
-        new_owner = User.objects.filter(pk=request.data.get('owner')).first()
+        new_owner_id = parse_int_pk(request.data.get('owner'))
+        new_owner = User.objects.filter(pk=new_owner_id).first() if new_owner_id is not None else None
         if not new_owner:
             return Response({'owner': 'Required and must reference an existing user.'}, status=400)
         course.owner = new_owner
@@ -108,10 +120,13 @@ class CourseViewSet(viewsets.ModelViewSet):
         editor_ids = request.data.get('editors', [])
         if not isinstance(editor_ids, list):
             return Response({'editors': 'Must be a list of user ids.'}, status=400)
+        parsed_ids = [parse_int_pk(v) for v in editor_ids]
+        if any(i is None for i in parsed_ids):
+            return Response({'editors': 'Must be a list of valid user ids.'}, status=400)
         # Full replace, same "send the complete list" convention as
         # Group.courses/templates and User.content_groups elsewhere in
         # this app — not an incremental add/remove.
-        course.editors.set(User.objects.filter(pk__in=editor_ids))
+        course.editors.set(User.objects.filter(pk__in=parsed_ids))
         return Response(CourseSerializer(course, context={'request': request}).data)
 
     def destroy(self, request, *args, **kwargs):
@@ -207,7 +222,12 @@ class CourseViewSet(viewsets.ModelViewSet):
 
 
 class CourseVersionViewSet(viewsets.ModelViewSet):
-    queryset = CourseVersion.objects.select_related('course').prefetch_related('lessons__slides', 'assets')
+    # created_by alongside course — same N+1 reasoning as CourseViewSet
+    # above: CourseVersionSerializer.created_by_username reads
+    # created_by.username per row.
+    queryset = CourseVersion.objects.select_related('course', 'created_by').prefetch_related(
+        'lessons__slides', 'assets',
+    )
     serializer_class = CourseVersionSerializer
     permission_classes = [IsContentOwnerEditorOrAdmin]
     required_tab = 'courses'
@@ -435,10 +455,38 @@ class CourseAttemptViewSet(viewsets.ModelViewSet):
         attempt = self.get_object()
         serializer = SlideResultBulkUpsertSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        results = serializer.validated_data['results']
+
+        # Every submitted `slide` id must actually belong to THIS attempt's
+        # own course_version — grade_slide() (via SlideResult.save()) is
+        # already tamper-proof against a forged is_correct/score for a
+        # given slide, but without this check nothing stopped a learner
+        # from submitting a result for an entirely DIFFERENT course's
+        # trivially-easy slide (e.g. a flashcards slide, graded correct the
+        # instant its cards are marked "viewed", no right/wrong answer to
+        # even get wrong). complete() averages every SlideResult row on the
+        # attempt with no awareness of which course each slide belongs to,
+        # so that extra row would have silently inflated THIS course's
+        # score — a real, confirmed false-pass exploit on exactly the kind
+        # of legally-binding compliance training grading.py's own module
+        # docstring exists to protect. One query up front (not a get() per
+        # item in the loop below) keeps this a single extra round trip
+        # regardless of how many results are in the batch.
+        slide_ids = {item['slide'] for item in results}
+        valid_slide_ids = set(
+            Slide.objects.filter(
+                id__in=slide_ids, lesson__course_version_id=attempt.course_version_id,
+            ).values_list('id', flat=True)
+        )
+        invalid_ids = slide_ids - valid_slide_ids
+        if invalid_ids:
+            raise ValidationError({
+                'results': f"Slide(s) {', '.join(str(i) for i in invalid_ids)} are not part of this attempt's course.",
+            })
 
         saved = []
         with transaction.atomic():
-            for item in serializer.validated_data['results']:
+            for item in results:
                 result, _ = SlideResult.objects.update_or_create(
                     attempt=attempt,
                     slide_id=item['slide'],

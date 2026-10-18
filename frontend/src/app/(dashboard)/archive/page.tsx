@@ -32,7 +32,7 @@ export default async function ArchivePage() {
   // HasArchiveTabAccess usage) — anyone without it would just get 403s
   // from every fetch below, so they're bounced before that rather than
   // shown a broken page.
-  if (!user.accessible_tabs.includes("archive")) redirect("/");
+  if (!user.accessible_tabs.includes("archive")) redirect("/dashboard");
 
   const [courses, templates, users] = await Promise.all([
     djangoFetch<Paginated<Course>>("/courses/?archived=true"),

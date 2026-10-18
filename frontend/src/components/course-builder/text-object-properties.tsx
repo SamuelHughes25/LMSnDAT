@@ -1,9 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
 import type { BoxTransform, PositionableField, Slide, SlideConfig } from "@/lib/course-types";
-import { useActiveEditorContext } from "./active-editor-context";
+import { useActiveEditorContext, useForceRerenderOnEditorTransaction } from "./active-editor-context";
 import { ObjectPositionFields } from "./object-position-fields";
 import { TextFormattingControls } from "./text-formatting-controls";
 
@@ -41,24 +39,7 @@ export function TextObjectProperties({
   // null or may still belong to some other box entirely. See
   // active-editor-context.tsx's activeEditorId for the full reasoning.
   const editor = activeEditorId === fieldId ? activeEditor : null;
-
-  // Forces a re-render on every editor transaction (content change, cursor
-  // move, mark toggle) — without this, the panel's own "current bold/
-  // color/size" display would go stale the instant a mark is applied to an
-  // already-selected range (that doesn't move the selection itself, the
-  // only thing this app previously re-rendered on). Same fix the old
-  // floating toolbar needed for the same reason.
-  const [, forceUpdate] = useState(0);
-  useEffect(() => {
-    if (!editor) return;
-    function handleTransaction() {
-      forceUpdate((v) => v + 1);
-    }
-    editor.on("transaction", handleTransaction);
-    return () => {
-      editor.off("transaction", handleTransaction);
-    };
-  }, [editor]);
+  useForceRerenderOnEditorTransaction(editor);
 
   const transform = slide.config.box_transforms?.[field];
 

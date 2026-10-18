@@ -485,6 +485,59 @@ class GradingTests(APIAuthTestCase):
         self.assertEqual(resp.data[0]['score'], 0.0)
         self.assertFalse(SlideResult.objects.get(attempt_id=attempt_id, slide=slide).is_correct)
 
+    def test_results_endpoint_rejects_a_slide_from_a_different_course(self):
+        """The results endpoint must never accept a `slide` id that isn't
+        actually part of THIS attempt's own course_version — otherwise a
+        learner could submit a trivially-correct SlideResult for some OTHER
+        course's easy slide, and complete()'s average-of-all-slide_results
+        would silently count it toward THIS course's score. Grading a real
+        compliance course off an answer to an unrelated course's question
+        is exactly the "false pass" this whole module exists to prevent
+        (see grading.py's own module docstring) — it just arrives via the
+        slide id instead of a forged is_correct/score."""
+        # A second, unrelated course with a trivially-satisfiable slide
+        # (flashcards: graded correct the instant every card's been
+        # "viewed", no right/wrong answer to even get wrong).
+        other_course = Course.objects.create(name='Other Course', created_by=self.admin)
+        other_version = CourseVersion.objects.create(
+            course=other_course, version_number=1, status=CourseVersion.Status.PUBLISHED, created_by=self.admin,
+        )
+        other_lesson = Lesson.objects.create(course_version=other_version, title='L1', order=0)
+        foreign_slide = Slide.objects.create(
+            lesson=other_lesson, slide_type='flashcards', order=0,
+            config={'cards': [{'id': 'c1', 'front': 'f', 'back': 'b'}]},
+        )
+
+        client = self.auth('grading_admin', 'pw')
+        resp = client.post('/api/v1/course-attempts/', {'course_version': str(self.version.id)}, format='json')
+        self.assertEqual(resp.status_code, 201, resp.content)
+        attempt_id = resp.data['id']
+
+        resp = client.post(
+            f'/api/v1/course-attempts/{attempt_id}/results/',
+            {'results': [{'slide': str(foreign_slide.id), 'detail': {'cardsViewed': 1}}]},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertFalse(SlideResult.objects.filter(attempt_id=attempt_id, slide=foreign_slide).exists())
+
+    def test_results_endpoint_rejects_a_nonexistent_slide_id(self):
+        """A `slide` id that doesn't correspond to any real Slide at all
+        must come back as a clean 400 (bad request), not an unhandled
+        IntegrityError/500 from the FK constraint — a malformed or
+        hand-crafted direct API call, not just normal UI use."""
+        client = self.auth('grading_admin', 'pw')
+        resp = client.post('/api/v1/course-attempts/', {'course_version': str(self.version.id)}, format='json')
+        self.assertEqual(resp.status_code, 201, resp.content)
+        attempt_id = resp.data['id']
+
+        resp = client.post(
+            f'/api/v1/course-attempts/{attempt_id}/results/',
+            {'results': [{'slide': '00000000-0000-0000-0000-000000000000', 'detail': {}}]},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 400, resp.content)
+
 
 class CourseAttemptTests(APIAuthTestCase):
     def setUp(self):
@@ -1482,6 +1535,26 @@ class CourseOwnershipTests(APIAuthTestCase):
         )
         self.assertEqual(resp.status_code, 403, resp.content)
 
+    def test_transfer_ownership_rejects_malformed_or_missing_owner_cleanly(self):
+        """A malformed/missing `owner` value must come back as a clean 400,
+        not an unhandled 500 — User.id is an integer pk, and Django's ORM
+        raises a bare ValueError (not caught by DRF's exception handler)
+        the moment a non-numeric pk lookup is actually evaluated."""
+        superuser = User.objects.create_user(username='own_superuser2', password='pw', is_superuser=True)
+        client = self.auth('own_superuser2', 'pw')
+
+        resp = client.post(
+            f'/api/v1/courses/{self.course.id}/transfer-ownership/', {'owner': 'not-a-real-id'}, format='json',
+        )
+        self.assertEqual(resp.status_code, 400, resp.content)
+
+        resp = client.post(f'/api/v1/courses/{self.course.id}/transfer-ownership/', {}, format='json')
+        self.assertEqual(resp.status_code, 400, resp.content)
+
+        # Owner unchanged throughout.
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.owner_id, self.owner.id)
+
     def test_only_owner_or_admin_can_set_editors(self):
         editor_client = self.auth('own_editor', 'pw')
         resp = editor_client.post(
@@ -1500,6 +1573,15 @@ class CourseOwnershipTests(APIAuthTestCase):
         outsider_client = self.auth('own_outsider', 'pw')
         resp = outsider_client.patch(f'/api/v1/courses/{self.course.id}/', {'name': 'x'}, format='json')
         self.assertEqual(resp.status_code, 200, resp.content)
+
+        # A malformed id anywhere in the list comes back as a clean 400,
+        # not an unhandled 500 — same reasoning as transfer-ownership.
+        resp = owner_client.post(
+            f'/api/v1/courses/{self.course.id}/set-editors/',
+            {'editors': [self.outsider.id, 'not-a-real-id']},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 400, resp.content)
 
 
 class DemotedOwnerLockoutTests(APIAuthTestCase):

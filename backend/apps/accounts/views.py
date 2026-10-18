@@ -13,7 +13,13 @@ from .serializers import GroupSerializer, PermissionSetSerializer, TeamSerialize
 
 
 class UserViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.select_related('team', 'permission_set').prefetch_related('content_groups').all()
+    # archived_by alongside team/permission_set — UserSerializer's
+    # archived_by_username reads archived_by.username per row, a real N+1
+    # on the Archive page's user list (same bug class as CourseViewSet/
+    # TemplateViewSet — see their own comments).
+    queryset = User.objects.select_related('team', 'permission_set', 'archived_by').prefetch_related(
+        'content_groups',
+    ).all()
     serializer_class = UserSerializer
     required_tab = 'users'
 

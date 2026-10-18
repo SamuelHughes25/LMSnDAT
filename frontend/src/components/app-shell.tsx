@@ -17,12 +17,15 @@ type Tab = AccountUser["accessible_tabs"][number];
 
 // Every account — operative or office user alike — gets the SAME top-level
 // items now: Dashboard (branches its own content by role, see
-// (dashboard)/page.tsx), and Templates/Courses, which always point at the
-// "what's assigned to me" view (the former portal pages, unchanged) rather
-// than the authoring tools. Nobody picks a role to see these — there's
-// nothing to gate, every account has content assigned to it or doesn't.
+// (dashboard)/dashboard/page.tsx), and Templates/Courses, which always
+// point at the "what's assigned to me" view (the former portal pages,
+// unchanged) rather than the authoring tools. Nobody picks a role to see
+// these — there's nothing to gate, every account has content assigned to
+// it or doesn't. "/" itself moved to the public marketing home page (see
+// app/(marketing)) — signed-in users never land there, so it's no longer
+// what "Dashboard" points at.
 const TOP_LINKS = [
-  { href: "/", label: "Dashboard" },
+  { href: "/dashboard", label: "Dashboard" },
   { href: "/portal/templates", label: "Templates" },
   { href: "/portal/courses", label: "Courses" },
 ];

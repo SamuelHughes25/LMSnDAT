@@ -15,8 +15,8 @@ import type { Paginated } from "@/lib/types";
 // route groups — every account (an operative exactly as much as an office
 // user) needs to be able to reach this to change their own password.
 // Linked from AppShell's own header (the username · tier label, a link —
-// see app-shell.tsx). No sidebar/nav of its own; just a Back link to "/",
-// which now works for every account regardless of role (see
+// see app-shell.tsx). No sidebar/nav of its own; just a Back link to
+// "/dashboard", which now works for every account regardless of role (see
 // (dashboard)/layout.tsx's own comment on the redirect this used to need
 // and no longer does).
 //
@@ -40,7 +40,7 @@ export default async function AccountPage() {
   return (
     <div className="mx-auto max-w-md space-y-6 p-6">
       <div className="flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+        <Link href="/dashboard" className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
           <ArrowLeft className="h-4 w-4" />
           Back
         </Link>

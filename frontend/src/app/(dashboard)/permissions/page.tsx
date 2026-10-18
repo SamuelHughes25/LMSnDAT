@@ -32,7 +32,7 @@ const TAB_COLUMNS: { field: keyof PermissionSet & `can_access_${string}`; label:
 // bypass this entirely and don't need one.
 export default async function PermissionsPage() {
   const user = await getCurrentUser();
-  if (!user.accessible_tabs.includes("permissions")) redirect("/");
+  if (!user.accessible_tabs.includes("permissions")) redirect("/dashboard");
 
   const permissionSets = await djangoFetch<Paginated<PermissionSet>>("/permission-sets/");
 
