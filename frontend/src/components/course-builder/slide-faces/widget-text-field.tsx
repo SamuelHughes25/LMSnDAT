@@ -78,6 +78,12 @@ export function WidgetEditableText({
 
   const editor = useEditor({
     immediatelyRender: false,
+    // @tiptap/react v3 defaults this to false — see content-slide-face.tsx's
+    // own comment on this same option for the full reasoning (a selection-
+    // only change otherwise never re-renders TextFormattingControls, so its
+    // Font/Size/Color readouts go stale until something else forces a
+    // re-render).
+    shouldRerenderOnTransaction: true,
     editable: true,
     content: value ?? "",
     autofocus: autoFocus ? "end" : false,

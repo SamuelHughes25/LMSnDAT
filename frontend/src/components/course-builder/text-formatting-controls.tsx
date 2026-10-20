@@ -53,14 +53,37 @@ const TEXT_COLOR_PRESETS: { label: string; value: string | null }[] = [
 // A curated, web-safe list rather than every font installed on the author's
 // own machine — see the original comment this was copied from in
 // text-object-properties.tsx's git history for the full reasoning.
+//
+// No more "Default" entry — it used to carry `value: null` (meaning "no
+// explicit override, just use the mark's own styling") under a vague,
+// unhelpful label. That vagueness is exactly what let a real bug — a
+// self-referential CSS variable in globals.css that silently made the
+// app's actual base font compute to the browser's serif fallback instead
+// of Geist — hide in plain sight: "Default" never told anyone what it
+// actually resolved to. "Geist" below is that same `value: null` behavior
+// (still just unsets the mark), renamed to the real font it now correctly
+// renders as — every option in this list is a genuine font name, per the
+// request, nothing generic.
 const FONT_FAMILY_OPTIONS: { key: string; label: string; value: string | null }[] = [
-  { key: "default", label: "Default", value: null },
+  { key: "geist", label: "Geist", value: null },
   { key: "arial", label: "Arial", value: "Arial, Helvetica, sans-serif" },
+  { key: "helvetica", label: "Helvetica", value: "Helvetica, Arial, sans-serif" },
+  { key: "verdana", label: "Verdana", value: "Verdana, Geneva, sans-serif" },
+  { key: "tahoma", label: "Tahoma", value: "Tahoma, Geneva, sans-serif" },
+  { key: "trebuchet", label: "Trebuchet MS", value: "'Trebuchet MS', sans-serif" },
+  { key: "calibri", label: "Calibri", value: "Calibri, Candara, sans-serif" },
+  { key: "segoe", label: "Segoe UI", value: "'Segoe UI', sans-serif" },
+  { key: "century-gothic", label: "Century Gothic", value: "'Century Gothic', sans-serif" },
+  { key: "franklin-gothic", label: "Franklin Gothic Medium", value: "'Franklin Gothic Medium', 'Arial Narrow', sans-serif" },
+  { key: "impact", label: "Impact", value: "Impact, sans-serif" },
   { key: "georgia", label: "Georgia", value: "Georgia, 'Times New Roman', serif" },
   { key: "times", label: "Times New Roman", value: "'Times New Roman', Times, serif" },
+  { key: "garamond", label: "Garamond", value: "Garamond, serif" },
+  { key: "cambria", label: "Cambria", value: "Cambria, serif" },
+  { key: "palatino", label: "Palatino Linotype", value: "'Palatino Linotype', 'Book Antiqua', Palatino, serif" },
+  { key: "book-antiqua", label: "Book Antiqua", value: "'Book Antiqua', Palatino, serif" },
   { key: "courier", label: "Courier New", value: "'Courier New', Courier, monospace" },
-  { key: "verdana", label: "Verdana", value: "Verdana, Geneva, sans-serif" },
-  { key: "trebuchet", label: "Trebuchet MS", value: "'Trebuchet MS', sans-serif" },
+  { key: "consolas", label: "Consolas", value: "Consolas, 'Courier New', monospace" },
   { key: "comic-sans", label: "Comic Sans MS", value: "'Comic Sans MS', 'Comic Sans', cursive" },
 ];
 
@@ -111,16 +134,37 @@ function currentComputedFontSizeLabel(editor: Editor): string {
 // every character in it agrees — "mixed" means they don't (e.g. half the
 // selection is Georgia, half is untouched), which the caller renders as
 // an em dash rather than silently picking a side.
+// Browsers rewrite an inline style's quote characters the moment it
+// round-trips through saved HTML: setFontFamily("...'Times New Roman'...")
+// is stored verbatim in the live ProseMirror document right after applying
+// it — so it string-matches FONT_FAMILY_OPTIONS and the dropdown shows the
+// right name immediately — but the NEXT time that HTML is parsed back into
+// a document (a page reload, reopening the course, anything that reparses
+// saved content fresh) the browser's own style-attribute serialization has
+// turned the single quotes into double quotes. The exact same font no
+// longer string-matches FONT_FAMILY_OPTIONS' (single-quoted) value at all,
+// FONT_FAMILY_OPTIONS.find() falls through to its own ?? fallback — the
+// very first entry, Geist — regardless of what font the text actually is.
+// Confirmed directly: apply Georgia, reload the page, reselect the same
+// text — the dropdown claims Geist even though the text still visibly
+// renders in Georgia. Stripping quote characters before comparing makes
+// the match immune to this, both when reading a mark's value here and when
+// matching it against FONT_FAMILY_OPTIONS below.
+function normalizeFontFamilyValue(value: string | null): string | null {
+  return value === null ? null : value.replace(/['"]/g, "");
+}
+
 function getUniformTextStyleAttr(
   editor: Editor,
   attr: "fontFamily" | "fontSize" | "color",
 ): string | null | "mixed" {
+  const normalize = attr === "fontFamily" ? normalizeFontFamilyValue : (v: string | null) => v;
   const { state } = editor;
   const { from, to, empty } = state.selection;
   if (empty) {
     const marks = state.storedMarks ?? state.selection.$from.marks();
     const mark = marks.find((m) => m.type.name === "textStyle");
-    return (mark?.attrs[attr] as string | undefined) ?? null;
+    return normalize((mark?.attrs[attr] as string | undefined) ?? null);
   }
   let seen = false;
   let value: string | null = null;
@@ -128,7 +172,7 @@ function getUniformTextStyleAttr(
   state.doc.nodesBetween(from, to, (node) => {
     if (mixed || !node.isText) return;
     const mark = node.marks.find((m) => m.type.name === "textStyle");
-    const nodeValue = (mark?.attrs[attr] as string | undefined) ?? null;
+    const nodeValue = normalize((mark?.attrs[attr] as string | undefined) ?? null);
     if (!seen) {
       seen = true;
       value = nodeValue;
@@ -204,7 +248,8 @@ export function TextFormattingControls({
   const isMixedFamily = currentFontFamilyAttr === "mixed";
   const currentFamilyOption = isMixedFamily
     ? null
-    : (FONT_FAMILY_OPTIONS.find((o) => o.value === currentFontFamilyAttr) ?? FONT_FAMILY_OPTIONS[0]);
+    : (FONT_FAMILY_OPTIONS.find((o) => normalizeFontFamilyValue(o.value) === currentFontFamilyAttr) ??
+      FONT_FAMILY_OPTIONS[0]);
 
   const currentColorAttr = getUniformTextStyleAttr(editor, "color");
   const currentColor = currentColorAttr === "mixed" ? null : currentColorAttr;
@@ -320,7 +365,7 @@ export function TextFormattingControls({
               {() =>
                 isMixedFamily
                   ? "—"
-                  : currentFamilyOption!.key === "default"
+                  : currentFamilyOption!.key === "geist"
                     ? currentComputedFontFamilyLabel(editor)
                     : currentFamilyOption!.label
               }

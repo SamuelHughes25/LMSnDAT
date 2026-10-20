@@ -686,6 +686,18 @@ function RichTextBody({
     // warning and risk a hydration mismatch — this component only ever
     // needs to exist once mounted in the browser.
     immediatelyRender: false,
+    // @tiptap/react v3 defaults this to false (a breaking change from v2,
+    // where every transaction forced a re-render) — without it, a
+    // selection-only change (clicking into different text, highlighting a
+    // different run) never re-renders TextFormattingControls, so its Font/
+    // Size/Color readouts go stale until something ELSE happens to
+    // re-render this subtree (e.g. actually applying a format, which also
+    // changes content and so triggers the parent's own onUpdate-driven
+    // re-render). Confirmed as the mechanism behind a reported bug: the
+    // Font dropdown would claim text was still "Geist" right after
+    // selecting text that visibly wasn't, until the FIRST format change
+    // forced a real re-render and the readout caught up.
+    shouldRerenderOnTransaction: true,
     editable: true,
     content: value ?? "",
     extensions: [
@@ -858,6 +870,9 @@ function useSingleLineSlideEditor({
 
   return useEditor({
     immediatelyRender: false,
+    // See the other useEditor() call in this file for why this is needed —
+    // same TipTap v3 default-changed issue, same fix.
+    shouldRerenderOnTransaction: true,
     editable: true,
     // Pre-existing rows may hold plain text with no wrapping tags (rows
     // written before TipTap replaced the old plain <input>s) — ProseMirror's
