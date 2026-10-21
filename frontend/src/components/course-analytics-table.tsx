@@ -22,8 +22,19 @@ export type UserSummary = {
   lastAttemptAt: string;
 };
 
-function PassedBadge({ passed }: { passed: boolean | null }) {
-  if (passed === null) return <>—</>;
+// An assessment attempt is always either Passed or Failed, never a bare
+// "—" — see user-course-history-table.tsx's identical PassedBadge for the
+// full reasoning: an attempt left in_progress forever (closed the tab,
+// never came back) used to show as a perpetually-unresolved "—" here too,
+// reading as broken rather than simply not-yet-passed. `passed === null`
+// on an assessment course now only ever means "not completed yet," so it
+// reads as Failed; a learner who finishes later gets their real result the
+// moment they do. Non-assessment courses have no pass/fail concept at all
+// (grading.py only ever sets `passed` when course.is_assessment) — this
+// table only renders for one course at a time, so that's a single
+// top-level flag, not per-row.
+function PassedBadge({ passed, isAssessment }: { passed: boolean | null; isAssessment: boolean }) {
+  if (!isAssessment) return <span className="text-muted-foreground">Not an assessment</span>;
   return passed ? <Badge>Passed</Badge> : <Badge variant="destructive">Failed</Badge>;
 }
 
@@ -107,12 +118,14 @@ export function CourseAnalyticsTable({
   usersById,
   attemptsByUser,
   courseId,
+  isAssessment,
   deadlineByUser,
 }: {
   summaries: UserSummary[];
   usersById: Record<number, AccountUser>;
   attemptsByUser: Record<number, CourseAttempt[]>;
   courseId: string;
+  isAssessment: boolean;
   // Omitted entirely when the course has no deadline set at all — the
   // Deadline column only ever appears for a course that actually has one
   // to show/edit.
@@ -161,7 +174,7 @@ export function CourseAnalyticsTable({
                   <TableCell>{summary.attemptCount}</TableCell>
                   <TableCell>{summary.bestScore === null ? "—" : `${summary.bestScore}%`}</TableCell>
                   <TableCell>
-                    <PassedBadge passed={summary.passed} />
+                    <PassedBadge passed={summary.passed} isAssessment={isAssessment} />
                   </TableCell>
                   <TableCell>{new Date(summary.lastAttemptAt).toLocaleDateString()}</TableCell>
                   {showDeadlineColumn && (
@@ -215,7 +228,7 @@ export function CourseAnalyticsTable({
                       <TableCell />
                       <TableCell>{attempt.score === null ? "—" : `${attempt.score}%`}</TableCell>
                       <TableCell>
-                        <PassedBadge passed={attempt.passed} />
+                        <PassedBadge passed={attempt.passed} isAssessment={isAssessment} />
                       </TableCell>
                       <TableCell>{new Date(attempt.started_at).toLocaleDateString()}</TableCell>
                       {showDeadlineColumn && <TableCell />}

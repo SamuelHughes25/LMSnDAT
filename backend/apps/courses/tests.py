@@ -739,6 +739,11 @@ class CourseAttemptTests(APIAuthTestCase):
         self.assertTrue(result.is_correct)
 
     def test_complete_computes_score_and_passed_for_assessment(self):
+        # self.assessment_version has TWO gradable slides (mc_slide,
+        # match_pairs_slide) — both need a correct submission for a clean
+        # 100%, now that complete() averages over every gradable slide in
+        # the course rather than just the ones a learner happened to
+        # submit (see that test just below for the unanswered case).
         member_client = self.auth('attempt_member', 'pw')
         resp = member_client.post(
             '/api/v1/course-attempts/', {'course_version': str(self.assessment_version.id)}, format='json'
@@ -746,7 +751,10 @@ class CourseAttemptTests(APIAuthTestCase):
         attempt_id = resp.data['id']
         member_client.post(
             f'/api/v1/course-attempts/{attempt_id}/results/',
-            {'results': [{'slide': str(self.mc_slide.id), 'detail': {'selectedOptionId': 'a'}}]},
+            {'results': [
+                {'slide': str(self.mc_slide.id), 'detail': {'selectedOptionId': 'a'}},
+                {'slide': str(self.match_pairs_slide.id), 'detail': {'pairings': {'p1': 'p1', 'p2': 'p2'}}},
+            ]},
             format='json',
         )
         resp = member_client.post(f'/api/v1/course-attempts/{attempt_id}/complete/', format='json')
@@ -755,10 +763,37 @@ class CourseAttemptTests(APIAuthTestCase):
         self.assertTrue(resp.data['passed'])
         self.assertEqual(resp.data['status'], 'completed')
 
-    def test_complete_with_no_results_leaves_score_and_passed_null(self):
+    def test_complete_with_no_results_scores_zero_not_null(self):
+        # A course with gradable slides always gets a real score on
+        # complete() now, even if the learner answered nothing — an
+        # unanswered question counts as wrong, not as excluded from the
+        # average (see complete()'s own comment on why this changed: the
+        # old "average only over submitted results" behavior let a learner
+        # who skipped every question complete with score/passed left at
+        # None, same as a course with no gradable slides at all, instead of
+        # the real, failing score this is). None is reserved for a course
+        # that genuinely has no gradable slides at all — see the dedicated
+        # test just below this one.
         member_client = self.auth('attempt_member', 'pw')
         resp = member_client.post(
             '/api/v1/course-attempts/', {'course_version': str(self.assessment_version.id)}, format='json'
+        )
+        attempt_id = resp.data['id']
+        resp = member_client.post(f'/api/v1/course-attempts/{attempt_id}/complete/', format='json')
+        self.assertEqual(resp.data['score'], 0)
+        self.assertFalse(resp.data['passed'])
+
+    def test_complete_with_no_gradable_slides_leaves_score_and_passed_null(self):
+        # The one case score/passed should still be None: a course with no
+        # gradable/interactive slides at all, regardless of is_assessment.
+        no_slides_version = CourseVersion.objects.create(
+            course=self.assessment_course, version_number=2, status=CourseVersion.Status.DRAFT,
+            created_by=self.admin,
+        )
+        Lesson.objects.create(course_version=no_slides_version, title='L1', order=0)
+        member_client = self.auth('attempt_member', 'pw')
+        resp = member_client.post(
+            '/api/v1/course-attempts/', {'course_version': str(no_slides_version.id)}, format='json'
         )
         attempt_id = resp.data['id']
         resp = member_client.post(f'/api/v1/course-attempts/{attempt_id}/complete/', format='json')

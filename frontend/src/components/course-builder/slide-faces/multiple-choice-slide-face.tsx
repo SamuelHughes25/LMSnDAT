@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Check, Plus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -27,7 +27,6 @@ export function MultipleChoiceSlideFace({
   mode,
   onConfigChange,
   onInteraction,
-  isAssessment,
   priorResult,
 }: SlideFaceProps) {
   const question = slide.config.question ?? "";
@@ -54,7 +53,6 @@ export function MultipleChoiceSlideFace({
         options={options}
         feedbackIncorrect={feedbackIncorrect}
         onInteraction={onInteraction}
-        isAssessment={!!isAssessment}
         priorResult={priorResult}
       />
     );
@@ -196,27 +194,24 @@ function MultipleChoiceEditor({
 
 // Genuinely interactive learner-facing render (course-preview-viewer.tsx
 // today, a real learner player later). No correct-answer indicator is shown
-// before answering. Picking the CORRECT option locks in immediately and
-// permanently (same as before). Picking a WRONG one is NOT permanent: it
-// flashes red for a moment — same "flash then bounce back" shape as
-// match-pairs-slide-face.tsx's flashMismatch — then automatically resets
-// so the learner can try again, rather than being stuck having permanently
-// "failed" the slide on a single wrong click. onInteraction only ever
-// fires once, for the eventual CORRECT selection — a wrong attempt isn't
-// a final answer here, so it isn't reported as one (same "a bounce-back
-// attempt doesn't count as the scored outcome" idea match_pairs already
-// uses for mismatches); how many wrong attempts happened along the way is
-// still included in the final report's `detail`, for a future analytics
-// pass, without this stage building any scoring around it.
-const INCORRECT_FLASH_MS = 1400;
-
+// before answering. Every pick is permanent the instant it's made — right
+// or wrong — and reported to onInteraction as the final answer. Previously
+// a wrong pick outside assessment mode flashed red and silently reset,
+// letting a learner just keep guessing until they landed on the right
+// one; this component also only restored a prior answer from the server
+// (priorResult) in assessment mode, so navigating away and back
+// (Previous/Next, a page refresh) re-opened ANY already-answered question
+// for an unlimited re-guess, assessment or not — reported directly as a
+// real exploit that quietly corrupted the score a non-assessment course
+// still tracks for analytics. Picking is final and restored from
+// priorResult unconditionally now, matching every other interactive slide
+// type's own fix for the same bug.
 function MultipleChoicePresent({
   slide,
   question,
   options,
   feedbackIncorrect,
   onInteraction,
-  isAssessment,
   priorResult,
 }: {
   slide: Slide;
@@ -224,34 +219,21 @@ function MultipleChoicePresent({
   options: MultipleChoiceOption[];
   feedbackIncorrect: string;
   onInteraction: SlideFaceProps["onInteraction"];
-  isAssessment: boolean;
   priorResult?: SlideInteractionResult;
 }) {
-  // The permanent, final pick — right OR wrong. Outside assessment mode
-  // this is only ever set for a correct pick (a wrong one goes through
-  // flashIncorrectId below instead and never lands here); in assessment
-  // mode a wrong pick is locked in here too, since the whole point of an
-  // assessment is that the first submitted answer is the one that counts
-  // — reported directly: multiple choice previously let a learner just
-  // keep guessing forever, silently resetting every wrong pick, so a
-  // "scored" assessment built from this type could never actually be
-  // failed.
+  // The permanent, final pick — right or wrong, locked the instant it's
+  // made.
   const [lockedId, setLockedId] = useState<string | null>(null);
-  // Briefly holds a WRONG option's id so it can flash red before both the
-  // flash and the selection itself reset — non-assessment mode only; see
-  // handleSelect.
-  const [flashIncorrectId, setFlashIncorrectId] = useState<string | null>(null);
-  // Purely for the final report's `detail` payload, not for scoring (see
-  // the comment above). Real state, not a ref — the sync block just below
-  // needs to set it during render (see that block's own comment on why),
-  // and React's lint config disallows mutating a ref's `.current` there.
+  // Purely for the final report's `detail` payload, not for scoring. Real
+  // state, not a ref — the sync block just below needs to set it during
+  // render (see that block's own comment on why), and React's lint config
+  // disallows mutating a ref's `.current` there.
   const [incorrectAttempts, setIncorrectAttempts] = useState(0);
 
-  // Syncs lockedId/incorrectAttemptsRef from the server's own record of this
-  // slide's answer (priorResult) whenever it CHANGES — ONLY in assessment
-  // mode (see priorResult's own doc comment in slide-faces/index.ts). Not a
-  // one-time lazy useState initializer — a lazy initializer only captures
-  // whatever priorResult happens to be at THIS component's very first
+  // Syncs lockedId/incorrectAttempts from the server's own record of this
+  // slide's answer (priorResult) whenever it CHANGES. Not a one-time lazy
+  // useState initializer — a lazy initializer only captures whatever
+  // priorResult happens to be at THIS component's very first
   // render, which reported as wrong in two real, confirmed cases: (1) a
   // fresh page load/new tab — course-preview-viewer.tsx's attempt-resume
   // fetch is still in flight at the moment this component first mounts, so
@@ -275,28 +257,15 @@ function MultipleChoicePresent({
   // also means there's no visible one-frame flash of "unlocked" in the
   // ordinary case where priorResult is already available at mount.
   const [syncedPriorResult, setSyncedPriorResult] = useState(priorResult);
-  if (isAssessment && priorResult !== syncedPriorResult) {
+  if (priorResult !== syncedPriorResult) {
     setSyncedPriorResult(priorResult);
     const detail = priorResult?.detail as { selectedOptionId?: string; incorrectAttempts?: number } | undefined;
     setLockedId(detail?.selectedOptionId ?? null);
     setIncorrectAttempts(detail?.incorrectAttempts ?? 0);
   }
 
-  // Clears the red flash (and the selection with it) ~1.4s after a wrong
-  // pick, giving the learner enough time to read the wrong-answer
-  // explanation (if one is set) before the options become clickable again.
-  // Never runs in assessment mode — a wrong pick there goes straight to
-  // lockedId instead of flashIncorrectId, so there's nothing to clear.
-  useEffect(() => {
-    if (!flashIncorrectId) return;
-    const timer = setTimeout(() => {
-      setFlashIncorrectId(null);
-    }, INCORRECT_FLASH_MS);
-    return () => clearTimeout(timer);
-  }, [flashIncorrectId]);
-
   function handleSelect(option: MultipleChoiceOption) {
-    if (lockedId || flashIncorrectId) return;
+    if (lockedId) return;
     if (option.is_correct) {
       setLockedId(option.id);
       onInteraction?.({
@@ -315,28 +284,21 @@ function MultipleChoicePresent({
     // up-to-date count.
     const nextIncorrectAttempts = incorrectAttempts + 1;
     setIncorrectAttempts(nextIncorrectAttempts);
-    if (isAssessment) {
-      // Permanent — this IS the submitted answer, and it's wrong.
-      setLockedId(option.id);
-      onInteraction?.({
-        slideId: slide.id,
-        slideType: slide.slide_type,
-        isCorrect: false,
-        score: 0,
-        answeredAt: new Date().toISOString(),
-        detail: { selectedOptionId: option.id, incorrectAttempts: nextIncorrectAttempts },
-      });
-      return;
-    }
-    // Non-assessment: flash red, then reset — free-form practice, no
-    // permanent record of the wrong pick, no report sent at all.
-    setFlashIncorrectId(option.id);
+    // Permanent — this IS the submitted answer, and it's wrong.
+    setLockedId(option.id);
+    onInteraction?.({
+      slideId: slide.id,
+      slideType: slide.slide_type,
+      isCorrect: false,
+      score: 0,
+      answeredAt: new Date().toISOString(),
+      detail: { selectedOptionId: option.id, incorrectAttempts: nextIncorrectAttempts },
+    });
   }
 
   const lockedOption = lockedId ? options.find((o) => o.id === lockedId) : undefined;
   const isLockedWrong = !!lockedOption && !lockedOption.is_correct;
-  const showIncorrectFeedback =
-    (!!flashIncorrectId || isLockedWrong) && stripHtml(feedbackIncorrect).trim().length > 0;
+  const showIncorrectFeedback = isLockedWrong && stripHtml(feedbackIncorrect).trim().length > 0;
 
   return (
     <div className="flex h-full w-full flex-col justify-center gap-6 px-16 py-12 text-foreground">
@@ -345,20 +307,14 @@ function MultipleChoicePresent({
       <div className="flex flex-1 flex-col justify-center gap-3">
         {options.map((option) => {
           const revealState =
-            lockedId === option.id
-              ? option.is_correct
-                ? "correct"
-                : "incorrect"
-              : flashIncorrectId === option.id
-                ? "incorrect"
-                : "neutral";
+            lockedId === option.id ? (option.is_correct ? "correct" : "incorrect") : "neutral";
 
           return (
             <button
               key={option.id}
               type="button"
               onClick={() => handleSelect(option)}
-              disabled={!!lockedId || !!flashIncorrectId}
+              disabled={!!lockedId}
               className={cn(
                 "rounded-lg border-2 px-4 py-3 text-left text-lg transition-colors disabled:cursor-default",
                 revealState === "correct" && "border-green-600 bg-green-50 text-green-900",

@@ -26,20 +26,29 @@ export type CourseSummary = {
   // never reaches this table at all (its attempts are purged along with
   // it), so there's no equivalent "deleted" state to render.
   isArchived: boolean;
-  // Needed to tell apart the two reasons `passed` (on the summary, or on
+  // Tells apart the one remaining reason `passed` (on the summary, or on
   // any individual attempt below) can be null: a non-assessment course
   // never has a pass/fail concept at all (grading.py only ever sets
-  // `passed` when course.is_assessment), vs. an assessment course's
-  // attempt that's simply still in_progress, not yet completed. Reported
-  // directly as confusing — a bare "—" looked identical for both, reading
-  // as "this attempt is incomplete/broken" even for a course that was
-  // never going to have a pass/fail result in the first place.
+  // `passed` when course.is_assessment). An assessment attempt reports
+  // binary pass/fail only — see PassedBadge's own comment on why an
+  // in-progress/abandoned attempt reads as "Failed" rather than a third,
+  // open-ended state.
   isAssessment: boolean;
 };
 
+// An assessment attempt is always either Passed or Failed here, never
+// "In progress" — reported directly: a course left mid-way (closed the
+// tab, never came back) stuck its attempt in in_progress forever, and
+// surfacing that as a vague, perpetually-unresolved "In progress" read as
+// broken rather than simply not-yet-passed. `passed === null` on an
+// assessment course now only ever means exactly that — not yet
+// completed — so it reads as Failed: a real learner who finishes later
+// gets their real Passed/Failed the moment they do, and a genuinely
+// abandoned attempt stops sitting in limbo. (A non-assessment course still
+// has no pass/fail concept at all, handled by the isAssessment check
+// below, unaffected by this.)
 function PassedBadge({ passed, isAssessment }: { passed: boolean | null; isAssessment: boolean }) {
   if (!isAssessment) return <span className="text-muted-foreground">Not an assessment</span>;
-  if (passed === null) return <span className="text-muted-foreground">In progress</span>;
   return passed ? <Badge>Passed</Badge> : <Badge variant="destructive">Failed</Badge>;
 }
 

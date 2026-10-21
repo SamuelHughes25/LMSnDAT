@@ -167,6 +167,7 @@ export default async function CourseAnalyticsPage({ params }: { params: Promise<
         usersById={Object.fromEntries(users.map((u) => [u.id, u]))}
         attemptsByUser={attemptsByUser}
         courseId={id}
+        isAssessment={course.is_assessment}
         deadlineByUser={deadlineByUser}
       />
     </div>

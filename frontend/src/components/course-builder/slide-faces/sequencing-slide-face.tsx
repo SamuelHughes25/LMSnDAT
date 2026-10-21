@@ -57,7 +57,6 @@ export function SequencingSlideFace({
   mode,
   onConfigChange,
   onInteraction,
-  isAssessment,
   priorResult,
 }: SlideFaceProps) {
   const instructions = slide.config.instructions ?? "";
@@ -76,7 +75,6 @@ export function SequencingSlideFace({
         instructions={instructions}
         items={items}
         onInteraction={onInteraction}
-        isAssessment={!!isAssessment}
         priorResult={priorResult}
       />
     );
@@ -234,14 +232,12 @@ function SequencingPresent({
   instructions,
   items,
   onInteraction,
-  isAssessment,
   priorResult,
 }: {
   slide: Slide;
   instructions: string;
   items: SequencingItem[];
   onInteraction: SlideFaceProps["onInteraction"];
-  isAssessment: boolean;
   priorResult?: SlideInteractionResult;
 }) {
   // NOT shuffled in the useState lazy initializer directly — confirmed via
@@ -270,24 +266,23 @@ function SequencingPresent({
   const [score, setScore] = useState(0);
 
   // Syncs orderedIds/submitted/score from the server's own record of this
-  // slide's answer (priorResult) whenever it CHANGES — ONLY in assessment
-  // mode (see priorResult's own doc comment in slide-faces/index.ts). Not a
-  // one-time lazy useState initializer — see multiple-choice-slide-
-  // face.tsx's identical fix for the full reasoning: a lazy initializer
-  // only captures whatever priorResult happens to be at this component's
-  // very first render, which is wrong both on a fresh page load (the
-  // attempt-resume fetch is still in flight at first mount) and on Retake
-  // (priorResult disappearing needs to clear this back to blank too, even
-  // without a remount — which here also means letting the shuffle-on-
-  // isClient logic above re-shuffle into a fresh order for the new attempt,
-  // by resetting hasShuffled rather than leaving the old submitted order in
-  // place). Not a useEffect either — see that same file's comment on why
-  // this project's lint config specifically flags setState-inside-an-effect,
-  // and why the "adjust state during render" shape below is the sanctioned
-  // alternative (the same shape isClient/hasShuffled itself already uses,
-  // one paragraph up, for the shuffle-once-on-mount logic).
+  // slide's answer (priorResult) whenever it CHANGES. Not a one-time lazy
+  // useState initializer — see multiple-choice-slide-face.tsx's identical
+  // fix for the full reasoning: a lazy initializer only captures whatever
+  // priorResult happens to be at this component's very first render, which
+  // is wrong both on a fresh page load (the attempt-resume fetch is still
+  // in flight at first mount) and on Retake (priorResult disappearing
+  // needs to clear this back to blank too, even without a remount — which
+  // here also means letting the shuffle-on-isClient logic above re-shuffle
+  // into a fresh order for the new attempt, by resetting hasShuffled
+  // rather than leaving the old submitted order in place). Not a
+  // useEffect either — see that same file's comment on why this project's
+  // lint config specifically flags setState-inside-an-effect, and why the
+  // "adjust state during render" shape below is the sanctioned alternative
+  // (the same shape isClient/hasShuffled itself already uses, one
+  // paragraph up, for the shuffle-once-on-mount logic).
   const [syncedPriorResult, setSyncedPriorResult] = useState(priorResult);
-  if (isAssessment && priorResult !== syncedPriorResult) {
+  if (priorResult !== syncedPriorResult) {
     setSyncedPriorResult(priorResult);
     const finalOrder = (priorResult?.detail as { finalOrder?: string[] } | undefined)?.finalOrder ?? null;
     if (finalOrder) {
@@ -331,11 +326,6 @@ function SequencingPresent({
       answeredAt: new Date().toISOString(),
       detail: { finalOrder: orderedIds },
     });
-  }
-
-  function handleTryAgain() {
-    setOrderedIds(shuffleDiffering(items.map((it) => it.id)));
-    setSubmitted(false);
   }
 
   if (items.length === 0) {
@@ -388,19 +378,14 @@ function SequencingPresent({
           Submit
         </Button>
       ) : (
+        // No "Try again" button — see missing-word-slide-face.tsx's
+        // identical comment: the first Submit is the final, graded answer,
+        // so a learner can't just reshuffle and resubmit until they land
+        // on the right order, assessment or not.
         <div className="flex items-center gap-4">
           <div className="text-sm font-medium text-muted-foreground">
             {Math.round(score * items.length)} of {items.length} in the correct position
           </div>
-          {/* Hidden in assessment mode — see missing-word-slide-face.tsx's
-              identical comment: the first Submit is the final, graded
-              answer there, so a learner can't just reshuffle and resubmit
-              until they land on the right order. */}
-          {!isAssessment && (
-            <Button type="button" variant="outline" onClick={handleTryAgain}>
-              Try again
-            </Button>
-          )}
         </div>
       )}
     </div>

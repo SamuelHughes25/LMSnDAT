@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Plus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -42,7 +42,6 @@ export function MatchPairsSlideFace({
   mode,
   onConfigChange,
   onInteraction,
-  isAssessment,
   priorResult,
 }: SlideFaceProps) {
   const instructions = slide.config.instructions ?? "";
@@ -61,7 +60,6 @@ export function MatchPairsSlideFace({
         instructions={instructions}
         pairs={pairs}
         onInteraction={onInteraction}
-        isAssessment={!!isAssessment}
         priorResult={priorResult}
       />
     );
@@ -169,42 +167,40 @@ function MatchPairsEditor({
 // far, mapped to that definition's id (both ids are the pair's own id, so
 // `pairings[k] === k` means that keyword landed on its correct definition —
 // same "shared id = correct pair" convention missing_word's `placements`
-// already uses). Replaces the old `matchedIds: Set<string>` model, which
-// could only represent "matched correctly" and had no way to record a
-// permanent wrong pairing at all.
+// already uses).
 //
-// Outside an assessment, behavior is UNCHANGED from before this fix: a
-// mismatch bounces back (never enters `pairings`) for another try, and
-// completion is only ever a perfect run — see the branch in
-// handleDefinitionClick below.
-//
-// In an assessment, per an explicit user bug report, every click is
-// permanent — right or wrong — and gets reported immediately (not just at
-// full completion). Reporting on every click, not only the final one, does
+// Every click is permanent — right or wrong — and gets reported
+// immediately (not just at full completion), regardless of whether the
+// course is an assessment. This used to differ by mode: outside an
+// assessment a mismatch bounced back for another try and nothing was ever
+// reported until a perfect run, which (combined with priorResult only
+// being restored in assessment mode below) let a learner who left and came
+// back just keep re-guessing a non-assessment course's matching slide
+// forever — reported directly as the same exploit multiple-choice-slide-
+// face.tsx had, corrupting the score a non-assessment course still tracks
+// for analytics. Reporting on every click, not only the final one, does
 // three things at once with the one mechanism: (1) makes each pairing
 // permanent server-side the instant it's made, (2) makes partial progress
 // survive a mid-exercise remount (Previous/Next) via `priorResult`, since
 // `pairings` is restored from it below, and (3) means an attempt abandoned
 // half-finished still scores fair partial credit instead of nothing. This
-// also naturally produces the exact cascading-mismatch mechanic the user
-// asked for with no special-casing: once a wrong definition is picked, it's
-// permanently consumed, so whichever keyword actually needed it is
-// guaranteed to be forced into whatever's left over by the end — a
-// mismatch anywhere makes the slide an overall fail, but the learner is
-// never blocked from finishing the rest.
+// also naturally produces a cascading-mismatch mechanic with no special-
+// casing needed: once a wrong definition is picked, it's permanently
+// consumed, so whichever keyword actually needed it is guaranteed to be
+// forced into whatever's left over by the end — a mismatch anywhere makes
+// the slide an overall fail, but the learner is never blocked from
+// finishing the rest.
 function MatchPairsPresent({
   slide,
   instructions,
   pairs,
   onInteraction,
-  isAssessment,
   priorResult,
 }: {
   slide: Slide;
   instructions: string;
   pairs: MatchPair[];
   onInteraction: SlideFaceProps["onInteraction"];
-  isAssessment: boolean;
   priorResult?: SlideInteractionResult;
 }) {
   // Two SEPARATE shuffles (not sharing an order) — this is what makes it a
@@ -234,39 +230,28 @@ function MatchPairsPresent({
 
   const [selectedKeywordId, setSelectedKeywordId] = useState<string | null>(null);
   const [pairings, setPairings] = useState<Record<string, string>>({});
-  // Briefly holds the id of a mismatched attempt so both sides can flash
-  // red before bouncing back — cleared by a setTimeout. Only ever set in
-  // non-assessment mode: in assessment mode a mismatch is permanent the
-  // instant it happens, so there's nothing transient to flash.
-  const [flashMismatch, setFlashMismatch] = useState<{ keywordId: string; definitionId: string } | null>(null);
-  // Guards the non-assessment "report once, at full completion" path only
-  // — assessment mode reports on every click instead (see the doc comment
-  // above) and has no equivalent guard to make.
-  const [reported, setReported] = useState(false);
   // How many mismatched attempts have occurred so far, purely for inclusion
-  // in the reported `detail` payload — NOT itself used for non-assessment
-  // scoring (that stays completion-only, per the comment above). Real
-  // state, not a ref — the sync block just below needs to set it during
-  // render (see that block's own comment on why), and React's lint config
-  // disallows mutating a ref's `.current` there.
+  // in the reported `detail` payload. Real state, not a ref — the sync
+  // block just below needs to set it during render (see that block's own
+  // comment on why), and React's lint config disallows mutating a ref's
+  // `.current` there.
   const [mismatchCount, setMismatchCount] = useState(0);
 
-  // Syncs pairings/mismatchCountRef from the server's own record of this
-  // slide's answer (priorResult) whenever it CHANGES — ONLY in assessment
-  // mode (see priorResult's own doc comment in slide-faces/index.ts). Not a
-  // one-time lazy useState initializer — see multiple-choice-slide-
-  // face.tsx's identical fix for the full reasoning: a lazy initializer
-  // only captures whatever priorResult happens to be at this component's
-  // very first render, which is wrong both on a fresh page load (the
-  // attempt-resume fetch is still in flight at first mount) and on Retake
-  // (priorResult disappearing needs to clear this back to blank too, even
-  // without a remount). Not a useEffect either — see that same file's
-  // comment on why this project's lint config specifically flags
-  // setState-inside-an-effect, and why the "adjust state during render"
-  // shape below is the sanctioned alternative (the same shape isClient/
-  // hasShuffled above already uses for the shuffle-once-on-mount logic).
+  // Syncs pairings/mismatchCount from the server's own record of this
+  // slide's answer (priorResult) whenever it CHANGES. Not a one-time lazy
+  // useState initializer — see multiple-choice-slide-face.tsx's identical
+  // fix for the full reasoning: a lazy initializer only captures whatever
+  // priorResult happens to be at this component's very first render, which
+  // is wrong both on a fresh page load (the attempt-resume fetch is still
+  // in flight at first mount) and on Retake (priorResult disappearing
+  // needs to clear this back to blank too, even without a remount). Not a
+  // useEffect either — see that same file's comment on why this project's
+  // lint config specifically flags setState-inside-an-effect, and why the
+  // "adjust state during render" shape below is the sanctioned alternative
+  // (the same shape isClient/hasShuffled above already uses for the
+  // shuffle-once-on-mount logic).
   const [syncedPriorResult, setSyncedPriorResult] = useState(priorResult);
-  if (isAssessment && priorResult !== syncedPriorResult) {
+  if (priorResult !== syncedPriorResult) {
     setSyncedPriorResult(priorResult);
     const detail = priorResult?.detail as
       | { pairings?: Record<string, string>; mismatchCount?: number }
@@ -283,62 +268,23 @@ function MatchPairsPresent({
     [pairings],
   );
 
-  // Clears a mismatch flash ~650ms after it's set, so the learner gets a
-  // brief visible "that was wrong" beat before both sides go interactive
-  // again — no lasting penalty marker, just transient feedback, per the
-  // plan ("no lasting penalty marker needed, just visual feedback").
-  useEffect(() => {
-    if (!flashMismatch) return;
-    const timer = setTimeout(() => setFlashMismatch(null), 650);
-    return () => clearTimeout(timer);
-  }, [flashMismatch]);
-
   function handleKeywordClick(keywordId: string) {
-    if (keywordId in pairings || flashMismatch) return;
+    if (keywordId in pairings) return;
     setSelectedKeywordId((current) => (current === keywordId ? null : keywordId));
   }
 
   function handleDefinitionClick(definitionId: string) {
-    if (definitionId in definitionToKeyword || flashMismatch || !selectedKeywordId) return;
+    if (definitionId in definitionToKeyword || !selectedKeywordId) return;
     const keywordId = selectedKeywordId;
 
-    // Non-assessment: UNCHANGED bounce-back behavior. No "final wrong
-    // state" concept here — a mismatch just bounces back for another try,
-    // and "completed" and "scored 1.0" are the same event, the moment
-    // every pair has locked in correctly.
-    if (!isAssessment) {
-      if (keywordId === definitionId) {
-        const next = { ...pairings, [keywordId]: definitionId };
-        setPairings(next);
-        setSelectedKeywordId(null);
-
-        if (Object.keys(next).length === pairs.length && !reported) {
-          setReported(true);
-          onInteraction?.({
-            slideId: slide.id,
-            slideType: slide.slide_type,
-            isCorrect: true,
-            score: 1,
-            answeredAt: new Date().toISOString(),
-            detail: { pairings: next, mismatchCount },
-          });
-        }
-      } else {
-        setMismatchCount((c) => c + 1);
-        setFlashMismatch({ keywordId, definitionId });
-        setSelectedKeywordId(null);
-      }
-      return;
-    }
-
-    // Assessment mode: every click is permanent, right or wrong, and is
-    // reported immediately (see the doc comment above MatchPairsPresent for
-    // why reporting on every click — not just the final one — is what makes
-    // this both un-bypassable on remount and correctly partial-credit-able).
-    // nextMismatchCount is computed locally, not read back from state —
-    // setMismatchCount below won't be reflected in `mismatchCount` until the
-    // next render, but the detail payload sent this same tick needs the
-    // up-to-date count.
+    // Every click is permanent, right or wrong, and is reported
+    // immediately (see the doc comment above MatchPairsPresent for why
+    // reporting on every click — not just the final one — is what makes
+    // this both un-bypassable on remount and correctly partial-credit-
+    // able). nextMismatchCount is computed locally, not read back from
+    // state — setMismatchCount below won't be reflected in
+    // `mismatchCount` until the next render, but the detail payload sent
+    // this same tick needs the up-to-date count.
     const nextMismatchCount = keywordId !== definitionId ? mismatchCount + 1 : mismatchCount;
     if (keywordId !== definitionId) {
       setMismatchCount(nextMismatchCount);
@@ -400,11 +346,9 @@ function MatchPairsPresent({
                   ? pairings[id] === id
                     ? "matched-correct"
                     : "matched-incorrect"
-                  : flashMismatch?.keywordId === id
-                    ? "mismatch"
-                    : selectedKeywordId === id
-                      ? "selected"
-                      : "neutral"
+                  : selectedKeywordId === id
+                    ? "selected"
+                    : "neutral"
               }
               onClick={() => handleKeywordClick(id)}
             />
@@ -420,9 +364,7 @@ function MatchPairsPresent({
                   ? definitionToKeyword[id] === id
                     ? "matched-correct"
                     : "matched-incorrect"
-                  : flashMismatch?.definitionId === id
-                    ? "mismatch"
-                    : "neutral"
+                  : "neutral"
               }
               onClick={() => handleDefinitionClick(id)}
             />
@@ -431,7 +373,7 @@ function MatchPairsPresent({
       </div>
 
       <div className="text-sm font-medium text-muted-foreground">
-        {Object.keys(pairings).length} of {pairs.length} {isAssessment ? "answered" : "matched"}
+        {Object.keys(pairings).length} of {pairs.length} answered
       </div>
     </div>
   );
@@ -444,11 +386,9 @@ function MatchTile({
 }: {
   text: string;
   // "matched-correct"/"matched-incorrect" are both PERMANENT (disabled) —
-  // the assessment-mode addition is "incorrect", a locked wrong pairing
-  // that never existed in the old matched/mismatch-only model (mismatch was
-  // always transient there). Non-assessment mode never produces
-  // "matched-incorrect": its mismatches stay transient "mismatch" flashes.
-  state: "neutral" | "selected" | "matched-correct" | "matched-incorrect" | "mismatch";
+  // every click locks in immediately, right or wrong, so there's no
+  // transient "about to bounce back" state to represent here any more.
+  state: "neutral" | "selected" | "matched-correct" | "matched-incorrect";
   onClick: () => void;
 }) {
   return (
@@ -459,7 +399,7 @@ function MatchTile({
       className={cn(
         "rounded-lg border-2 px-4 py-3 text-left text-base transition-colors disabled:cursor-default",
         state === "matched-correct" && "border-green-600 bg-green-50 text-green-900",
-        (state === "matched-incorrect" || state === "mismatch") && "border-red-600 bg-red-50 text-red-900",
+        state === "matched-incorrect" && "border-red-600 bg-red-50 text-red-900",
         state === "selected" && "border-primary bg-primary/10",
         state === "neutral" && "border-border hover:enabled:border-primary/60 hover:enabled:bg-muted",
       )}

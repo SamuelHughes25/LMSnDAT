@@ -122,6 +122,14 @@ _GRADERS = {
     'flashcards': _flashcards,
 }
 
+# Public: which slide_type values are actually gradable/interactive, for
+# CourseAttemptViewSet.complete() to enumerate every assessment slide a
+# course has — not just the ones a learner happened to submit a SlideResult
+# for. A slide type with no grader (content, or any future type not yet
+# wired above) never contributes a SlideResult row at all (its present-mode
+# component never calls onInteraction), so it's correctly excluded here too.
+GRADABLE_SLIDE_TYPES = frozenset(_GRADERS)
+
 
 def grade_slide(slide, detail):
     """Returns (is_correct: bool, score: float in [0, 1]) computed purely

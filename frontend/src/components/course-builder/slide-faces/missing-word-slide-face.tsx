@@ -83,7 +83,6 @@ export function MissingWordSlideFace({
   mode,
   onConfigChange,
   onInteraction,
-  isAssessment,
   priorResult,
 }: SlideFaceProps) {
   const paragraph = slide.config.paragraph ?? "";
@@ -100,7 +99,6 @@ export function MissingWordSlideFace({
         paragraph={paragraph}
         blanks={blanks}
         onInteraction={onInteraction}
-        isAssessment={!!isAssessment}
         priorResult={priorResult}
       />
     );
@@ -243,14 +241,12 @@ function MissingWordPresent({
   paragraph,
   blanks,
   onInteraction,
-  isAssessment,
   priorResult,
 }: {
   slide: Slide;
   paragraph: string;
   blanks: MissingWordBlank[];
   onInteraction: SlideFaceProps["onInteraction"];
-  isAssessment: boolean;
   priorResult?: SlideInteractionResult;
 }) {
   const [placement, setPlacement] = useState<Placement>(() =>
@@ -268,9 +264,7 @@ function MissingWordPresent({
   // real shuffle is applied once isClient flips true — see useIsClient's
   // own comment for why that's the point at which a client-only render is
   // guaranteed to no longer be compared against the server's output.
-  // hasShuffled guards this from re-firing every render; "try again" below
-  // re-shuffles explicitly via the same setScrambledIds, safely, since a
-  // button click can only ever happen client-side.
+  // hasShuffled guards this from re-firing every render.
   const isClient = useIsClient();
   const [scrambledIds, setScrambledIds] = useState<string[]>(() => blanks.map((b) => b.id));
   const [hasShuffled, setHasShuffled] = useState(false);
@@ -285,20 +279,19 @@ function MissingWordPresent({
   const [activeId, setActiveId] = useState<string | null>(null);
 
   // Syncs placement/submitted from the server's own record of this slide's
-  // answer (priorResult) whenever it CHANGES — ONLY in assessment mode (see
-  // priorResult's own doc comment in slide-faces/index.ts). Not a one-time
-  // lazy useState initializer — see multiple-choice-slide-face.tsx's
-  // identical fix for the full reasoning: a lazy initializer only captures
-  // whatever priorResult happens to be at this component's very first
-  // render, which is wrong both on a fresh page load (the attempt-resume
-  // fetch is still in flight at first mount) and on Retake (priorResult
-  // disappearing needs to clear this back to blank too, even without a
-  // remount). Not a useEffect either — see that same file's comment on why
-  // this project's lint config specifically flags setState-inside-an-effect,
-  // and why the "adjust state during render" shape below is the sanctioned
-  // alternative (same shape isClient/hasShuffled above already uses).
+  // answer (priorResult) whenever it CHANGES. Not a one-time lazy useState
+  // initializer — see multiple-choice-slide-face.tsx's identical fix for
+  // the full reasoning: a lazy initializer only captures whatever
+  // priorResult happens to be at this component's very first render, which
+  // is wrong both on a fresh page load (the attempt-resume fetch is still
+  // in flight at first mount) and on Retake (priorResult disappearing
+  // needs to clear this back to blank too, even without a remount). Not a
+  // useEffect either — see that same file's comment on why this project's
+  // lint config specifically flags setState-inside-an-effect, and why the
+  // "adjust state during render" shape below is the sanctioned alternative
+  // (same shape isClient/hasShuffled above already uses).
   const [syncedPriorResult, setSyncedPriorResult] = useState(priorResult);
-  if (isAssessment && priorResult !== syncedPriorResult) {
+  if (priorResult !== syncedPriorResult) {
     setSyncedPriorResult(priorResult);
     const priorPlacement = (priorResult?.detail as { placements?: Placement } | undefined)?.placements ?? null;
     setPlacement(priorPlacement ?? Object.fromEntries(blanks.map((b) => [b.id, null])));
@@ -362,13 +355,6 @@ function MissingWordPresent({
     });
   }
 
-  function handleTryAgain() {
-    setPlacement(Object.fromEntries(blanks.map((b) => [b.id, null])));
-    setSubmitted(false);
-    setPromptMessage(null);
-    setScrambledIds(shuffle(blanks.map((b) => b.id)));
-  }
-
   if (blanks.length === 0) {
     return (
       <div className="flex h-full w-full flex-col justify-center gap-6 px-16 py-12 text-foreground">
@@ -421,20 +407,15 @@ function MissingWordPresent({
           Submit
         </Button>
       ) : (
+        // No "Try again" button — the first Submit is the final, graded
+        // answer, same reasoning as multiple-choice-slide-face.tsx's locked
+        // wrong pick: a course that let a learner keep retrying until they
+        // got it right could never actually record a failure, assessment
+        // or not.
         <div className="flex items-center gap-4">
           <div className="text-sm font-medium text-muted-foreground">
             {correctCount} of {blanks.length} correct
           </div>
-          {/* Hidden in assessment mode — the first Submit is the final,
-              graded answer there, same reasoning as multiple-choice-slide-
-              face.tsx's locked wrong pick: an assessment that let a
-              learner keep retrying until they got it right could never
-              actually be failed. */}
-          {!isAssessment && (
-            <Button type="button" variant="outline" onClick={handleTryAgain}>
-              Try again
-            </Button>
-          )}
         </div>
       )}
     </div>

@@ -14,6 +14,7 @@ from apps.core.permissions import (
 )
 from apps.core.utils import parse_int_pk
 from . import services
+from .grading import GRADABLE_SLIDE_TYPES
 from .models import (
     Course, CourseAsset, CourseAssignment, CourseAttempt, CourseDeadlineExtension, CourseVersion, Lesson,
     ReusableLesson, Slide, SlideResult,
@@ -499,8 +500,25 @@ class CourseAttemptViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def complete(self, request, pk=None):
         attempt = self.get_object()
-        scores = list(attempt.slide_results.values_list('score', flat=True))
-        score = round(sum(scores) / len(scores) * 100) if scores else None
+        # Every gradable slide in the course counts toward the score,
+        # whether or not the learner actually submitted a result for it —
+        # a skipped question is a wrong one, not an excluded one. Averaging
+        # only over SUBMITTED SlideResult rows (the old behavior) silently
+        # dropped unanswered questions from the denominator entirely,
+        # either inflating the score or, if nothing was ever answered,
+        # leaving it None even though the course plainly has assessment
+        # slides. None is reserved for the one case it should mean: this
+        # course genuinely has no gradable slides at all.
+        gradable_slide_count = Slide.objects.filter(
+            lesson__course_version_id=attempt.course_version_id,
+            slide_type__in=GRADABLE_SLIDE_TYPES,
+        ).count()
+        scores = list(
+            attempt.slide_results.filter(slide__slide_type__in=GRADABLE_SLIDE_TYPES).values_list(
+                'score', flat=True,
+            )
+        )
+        score = round(sum(scores) / gradable_slide_count * 100) if gradable_slide_count else None
 
         course = attempt.course_version.course
         passed = None
