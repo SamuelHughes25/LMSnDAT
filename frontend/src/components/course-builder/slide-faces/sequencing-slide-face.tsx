@@ -255,36 +255,62 @@ function SequencingPresent({
   // server's output. hasShuffled guards this from re-firing on every
   // render (same "adjust state during render, guarded so it only fires
   // once" shape as flashcards-slide-face.tsx's flip-reset).
+  function priorFinalOrder(result: SlideInteractionResult | undefined) {
+    return (result?.detail as { finalOrder?: string[] } | undefined)?.finalOrder;
+  }
+
   const isClient = useIsClient();
-  const [orderedIds, setOrderedIds] = useState<string[]>(() => items.map((it) => it.id));
-  const [hasShuffled, setHasShuffled] = useState(false);
+  // Lazy-initialized FROM priorResult (not just synced on change below)
+  // because course-preview-viewer.tsx remounts this whole component on
+  // every slide navigation (`key={current.slide.id}` on Face) — a learner
+  // clicking Previous back to an already-submitted question is a brand new
+  // mount with priorResult ALREADY populated, not a prop change on a
+  // surviving instance. Confirmed as a real, live bug: the sync-only
+  // version of this fix looked right (it does correctly catch priorResult
+  // arriving LATER on an instance that's already mounted — see the sync
+  // block's own comment below), but on a fresh remount `syncedPriorResult`'s
+  // own lazy initializer captured the same already-known priorResult the
+  // sync check compares against, so the two were equal from the very first
+  // render and the sync body never ran — orderedIds/submitted silently
+  // stayed at their own plain defaults, reopening the question for an
+  // unlimited re-submit exactly like before this whole fix, just one layer
+  // deeper. hasShuffled starts true when a prior submission exists
+  // specifically to skip the shuffle-on-mount block below entirely — the
+  // restored order IS the already-submitted one, nothing left to scramble.
+  const [orderedIds, setOrderedIds] = useState<string[]>(() => priorFinalOrder(priorResult) ?? items.map((it) => it.id));
+  const [hasShuffled, setHasShuffled] = useState(() => priorFinalOrder(priorResult) !== undefined);
   if (isClient && !hasShuffled) {
     setHasShuffled(true);
     setOrderedIds(shuffleDiffering(items.map((it) => it.id)));
   }
-  const [submitted, setSubmitted] = useState(false);
-  const [score, setScore] = useState(0);
+  const [submitted, setSubmitted] = useState(() => priorFinalOrder(priorResult) !== undefined);
+  const [score, setScore] = useState(() => priorResult?.score ?? 0);
 
   // Syncs orderedIds/submitted/score from the server's own record of this
-  // slide's answer (priorResult) whenever it CHANGES. Not a one-time lazy
-  // useState initializer — see multiple-choice-slide-face.tsx's identical
-  // fix for the full reasoning: a lazy initializer only captures whatever
-  // priorResult happens to be at this component's very first render, which
-  // is wrong both on a fresh page load (the attempt-resume fetch is still
-  // in flight at first mount) and on Retake (priorResult disappearing
-  // needs to clear this back to blank too, even without a remount — which
-  // here also means letting the shuffle-on-isClient logic above re-shuffle
-  // into a fresh order for the new attempt, by resetting hasShuffled
-  // rather than leaving the old submitted order in place). Not a
-  // useEffect either — see that same file's comment on why this project's
-  // lint config specifically flags setState-inside-an-effect, and why the
-  // "adjust state during render" shape below is the sanctioned alternative
-  // (the same shape isClient/hasShuffled itself already uses, one
-  // paragraph up, for the shuffle-once-on-mount logic).
+  // slide's answer (priorResult) whenever it CHANGES on an ALREADY-MOUNTED
+  // instance — the lazy initializers just above handle the fresh-mount
+  // case (priorResult already known), this handles the two cases where it
+  // ISN'T yet, or stops being: (1) a fresh page load/new tab — the
+  // attempt-resume fetch is still in flight at the moment this component
+  // first mounts, so priorResult is still undefined on that first render
+  // and only arrives a tick later once the fetch resolves, on this SAME
+  // instance (no remount). (2) Retake — resets the parent's `results`
+  // state to {} for a new attempt WITHOUT necessarily remounting a slide
+  // that happens to still be at the same index/id as before, so this
+  // component's own state has to clear back to blank too when priorResult
+  // disappears (which here also means letting the shuffle-on-isClient
+  // logic above re-shuffle into a fresh order for the new attempt, by
+  // resetting hasShuffled rather than leaving the old submitted order in
+  // place). Not a useEffect either — see multiple-choice-slide-face.tsx's
+  // identical comment on why this project's lint config specifically
+  // flags setState-inside-an-effect, and why the "adjust state during
+  // render" shape below is the sanctioned alternative (the same shape
+  // isClient/hasShuffled itself already uses, one paragraph up, for the
+  // shuffle-once-on-mount logic).
   const [syncedPriorResult, setSyncedPriorResult] = useState(priorResult);
   if (priorResult !== syncedPriorResult) {
     setSyncedPriorResult(priorResult);
-    const finalOrder = (priorResult?.detail as { finalOrder?: string[] } | undefined)?.finalOrder ?? null;
+    const finalOrder = priorFinalOrder(priorResult) ?? null;
     if (finalOrder) {
       setOrderedIds(finalOrder);
       setHasShuffled(true);

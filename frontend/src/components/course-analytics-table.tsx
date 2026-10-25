@@ -30,11 +30,18 @@ export type UserSummary = {
 // on an assessment course now only ever means "not completed yet," so it
 // reads as Failed; a learner who finishes later gets their real result the
 // moment they do. Non-assessment courses have no pass/fail concept at all
-// (grading.py only ever sets `passed` when course.is_assessment) — this
-// table only renders for one course at a time, so that's a single
-// top-level flag, not per-row.
+// (grading.py only ever sets `passed` when course.is_assessment), so this
+// column reads N/A for them — not Failed, not even a styled "Not an
+// assessment" — reported directly as confusing in its own right: a 100%
+// score sitting next to a Failed-shaped badge read as contradictory, when
+// the real answer is simply that pass/fail doesn't apply here at all. The
+// score itself (Best score column) is completely unaffected — it's
+// computed from CourseAttempt.score, which grading.py always sets
+// regardless of is_assessment; only `passed` is assessment-gated. This
+// table only renders for one course at a time, so isAssessment is a
+// single top-level flag, not per-row.
 function PassedBadge({ passed, isAssessment }: { passed: boolean | null; isAssessment: boolean }) {
-  if (!isAssessment) return <span className="text-muted-foreground">Not an assessment</span>;
+  if (!isAssessment) return <span className="text-muted-foreground">N/A</span>;
   return passed ? <Badge>Passed</Badge> : <Badge variant="destructive">Failed</Badge>;
 }
 

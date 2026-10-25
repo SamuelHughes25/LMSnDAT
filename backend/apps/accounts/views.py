@@ -36,7 +36,7 @@ class UserViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def me(self, request):
-        return Response(UserSerializer(request.user).data)
+        return Response(UserSerializer(request.user, context={'request': request}).data)
 
     # Self-service only — `detail=False` and always acts on request.user,
     # same "no pk, operates on the caller" shape as `me` above, deliberately
@@ -87,17 +87,37 @@ class UserViewSet(viewsets.ModelViewSet):
             qs = qs.exclude(is_superuser=True)
 
         # Manual query-param filtering (search-by-username, filter-by-
-        # group) applied on TOP of the scoping above, matching this
-        # codebase's existing "no django-filter, just get_queryset()" style
-        # used elsewhere for parent-scoping (e.g. ?course= on child
-        # viewsets) — there's no SearchFilter/DjangoFilterBackend anywhere
-        # in this project to introduce a new dependency for.
+        # group/permission-set/role) applied on TOP of the scoping above,
+        # matching this codebase's existing "no django-filter, just
+        # get_queryset()" style used elsewhere for parent-scoping (e.g.
+        # ?course= on child viewsets) — there's no SearchFilter/
+        # DjangoFilterBackend anywhere in this project to introduce a new
+        # dependency for.
         search = self.request.query_params.get('search')
         if search:
             qs = qs.filter(username__icontains=search)
-        group = self.request.query_params.get('group')
-        if group:
-            qs = qs.filter(content_groups=group)
+
+        # Each of group/permission_set/role accepts the query param
+        # repeated (?group=a&group=b — getlist(), not get()) for the
+        # Users page's multi-select Filters panel: multiple values within
+        # ONE category are OR'd together (any matching group counts), but
+        # the three categories are AND'd against each other (a user has to
+        # match the group filter AND the permission-set filter AND the
+        # role filter, whichever of the three actually have a value set).
+        # .distinct() once at the end covers the one filter here that
+        # joins across a many-to-many (content_groups) and so could
+        # otherwise fan a single user out into one row per matching group.
+        group_ids = self.request.query_params.getlist('group')
+        if group_ids:
+            qs = qs.filter(content_groups__in=group_ids)
+        permission_set_ids = self.request.query_params.getlist('permission_set')
+        if permission_set_ids:
+            qs = qs.filter(permission_set__in=permission_set_ids)
+        roles = self.request.query_params.getlist('role')
+        if roles:
+            qs = qs.filter(role__in=roles)
+        if group_ids:
+            qs = qs.distinct()
 
         # Mirrors CourseViewSet/TemplateViewSet.get_queryset's is_archived
         # filter exactly — "archived" for a User means deactivated
@@ -189,7 +209,7 @@ class UserViewSet(viewsets.ModelViewSet):
         user.archived_by = None
         user.archived_at = None
         user.save(update_fields=['is_active', 'archived_by', 'archived_at'])
-        return Response(UserSerializer(user).data)
+        return Response(UserSerializer(user, context={'request': request}).data)
 
     @action(detail=True, methods=['post'])
     def purge(self, request, pk=None):
@@ -252,14 +272,14 @@ class UserViewSet(viewsets.ModelViewSet):
         user = get_object_or_404(User, pk=pk)
         user.is_platform_admin = True
         user.save(update_fields=['is_platform_admin'])
-        return Response(UserSerializer(user).data)
+        return Response(UserSerializer(user, context={'request': request}).data)
 
     @action(detail=True, methods=['post'], url_path='revoke-platform-admin')
     def revoke_platform_admin(self, request, pk=None):
         user = get_object_or_404(User, pk=pk)
         user.is_platform_admin = False
         user.save(update_fields=['is_platform_admin'])
-        return Response(UserSerializer(user).data)
+        return Response(UserSerializer(user, context={'request': request}).data)
 
 
 class TeamViewSet(viewsets.ModelViewSet):

@@ -106,6 +106,16 @@ export type AccountUser = {
   accessible_tabs: (
     "templates" | "courses" | "users" | "groups" | "permissions" | "archive"
   )[];
+  // Which specific courses/templates this user owns or edits, computed
+  // server-side (UserSerializer.get_manageable_course_ids/
+  // get_manageable_template_ids) ONLY for the viewer's own row — always []
+  // when looking at someone else's AccountUser. Lets a tab-less owner/
+  // editor still see a scoped-down "Courses"/"Templates" Manage link (just
+  // their own content) rather than nothing at all; once the real tab is
+  // granted, accessible_tabs.includes(...) takes over and this becomes
+  // irrelevant (the full list already includes anything in here).
+  manageable_course_ids: string[];
+  manageable_template_ids: string[];
   // The one permanently-protected super-super-user tier — Django's own
   // builtin field, repurposed here. Always false for everyone except the
   // one account created directly via a one-off shell command; never

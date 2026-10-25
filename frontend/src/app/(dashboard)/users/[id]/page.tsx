@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AdminResetPasswordButton } from "@/components/admin-reset-password-button";
 import { PlatformAdminToggle } from "@/components/platform-admin-toggle";
+import { UserAccountTypePicker } from "@/components/user-account-type-picker";
 import { UserCourseHistoryTable, type CourseSummary } from "@/components/user-course-history-table";
 import { UserGroupsEditor } from "@/components/user-groups-editor";
 import { UserPermissionSetPicker } from "@/components/user-permission-set-picker";
@@ -112,47 +113,69 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
         Back to users
       </Link>
 
-      <div className="rounded-lg border-2 border-border bg-card p-4 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
-          <div>
-            <h1 className="text-2xl font-semibold">{user.username}</h1>
-            {user.email && <p className="text-sm text-muted-foreground">{user.email}</p>}
-          </div>
-          {/* Permission + team + created date, all one row, consistent
-              label-over-value pairs instead of the previous loose run of
-              differently-styled inline elements (a Badge mixed in with
-              plain spans and no separation) that read as messy/scattered. */}
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-            <div>
-              <div className="text-xs text-muted-foreground">Type</div>
-              <Badge variant="outline" className="mt-1">
-                {getUserKindLabel(user)}
-              </Badge>
-            </div>
-            {/* Dashboard access — shown regardless of role now: an
-                operative can be granted is_superuser/is_platform_admin/a
-                permission set exactly the same as an office user (see
-                app-shell.tsx's unified nav, which is what actually makes a
-                grant like that reach anything now). Hiding this whole
-                section behind a role check used to mean a real grant on an
-                operative's account had no visible confirmation anywhere on
-                this page. The protected super-super-user and revocable
-                super user tiers both bypass permission sets entirely, so
-                they get their own read-only badge instead of the picker. */}
-            <div>
-              <div className="text-xs text-muted-foreground">Permissions</div>
-              {user.is_superuser ? (
-                <Badge className="mt-1">Super-super-user (protected)</Badge>
-              ) : user.is_platform_admin ? (
-                <Badge className="mt-1">Super user (full access)</Badge>
-              ) : (
-                <UserPermissionSetPicker
-                  userId={user.id}
-                  currentPermissionSetId={user.permission_set}
-                  currentPermissionSetName={user.permission_set_name}
-                  availablePermissionSets={permissionSets.results}
-                />
-              )}
+      <div>
+        <h1 className="text-2xl font-semibold">{user.username}</h1>
+        {user.email && <p className="text-sm text-muted-foreground">{user.email}</p>}
+        <p className="text-xs text-muted-foreground">Joined {new Date(user.date_joined).toLocaleDateString()}</p>
+      </div>
+
+      {/* A dedicated card instead of a loose run of label/value pairs
+          squeezed into the header next to the username — reported
+          directly as jumbled, everything fighting for space along one
+          line. A proper grid, each field its own cell, is what the
+          Groups/Course history sections right below already look like —
+          this just brings the account-level settings in line with that
+          same shape instead of standing out as the one cramped exception. */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Account settings</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap items-start gap-x-8 gap-y-5">
+            {/* Account type + Permissions sit right next to each other in
+                their own tight sub-group (gap-3, not this row's own
+                gap-x-8) — reported directly as belonging together visually,
+                not as two unrelated settings that happened to be adjacent:
+                picking an account type is what a Super User's dashboard
+                home actually branches on (see UserAccountTypePicker's own
+                comment), and Permissions is what the sidebar branches on,
+                so seeing both grants at a glance, side by side, is the
+                point. Access is shown regardless of role now: an operative
+                can be granted is_superuser/is_platform_admin/a permission
+                set exactly the same as an office user (see app-shell.tsx's
+                unified nav, which is what actually makes a grant like that
+                reach anything now). The protected super-super-user and
+                revocable super user tiers both bypass permission sets (and,
+                functionally, the operative/office-user distinction itself
+                — a Super User sees every tab regardless of role) entirely,
+                so they get their own read-only badge instead of the picker
+                in both spots. */}
+            <div className="flex items-start gap-3">
+              <div>
+                <div className="text-xs text-muted-foreground">Account type</div>
+                {user.is_superuser || user.is_platform_admin ? (
+                  <Badge variant="outline" className="mt-1">
+                    {getUserKindLabel(user)}
+                  </Badge>
+                ) : (
+                  <UserAccountTypePicker userId={user.id} currentRole={user.role} />
+                )}
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Permissions</div>
+                {user.is_superuser ? (
+                  <Badge className="mt-1">Super-super-user (protected)</Badge>
+                ) : user.is_platform_admin ? (
+                  <Badge className="mt-1">Super user (full access)</Badge>
+                ) : (
+                  <UserPermissionSetPicker
+                    userId={user.id}
+                    currentPermissionSetId={user.permission_set}
+                    currentPermissionSetName={user.permission_set_name}
+                    availablePermissionSets={permissionSets.results}
+                  />
+                )}
+              </div>
             </div>
             {team && (
               <div>
@@ -160,10 +183,6 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
                 <div className="mt-1 text-sm font-medium">{team.name}</div>
               </div>
             )}
-            <div>
-              <div className="text-xs text-muted-foreground">Created</div>
-              <div className="mt-1 text-sm font-medium">{new Date(user.date_joined).toLocaleDateString()}</div>
-            </div>
             {/* Only an is_superuser VIEWER ever sees this, regardless of
                 whose profile it is — "only me the super super user can do
                 this." Never shown on the superuser's own row (nothing to
@@ -182,8 +201,8 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
               </div>
             )}
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

@@ -163,7 +163,7 @@ export default async function GroupDetailPage({
                 <TableHead>Username</TableHead>
                 <TableHead>Groups</TableHead>
                 <TableHead>Permission</TableHead>
-                <TableHead>Created</TableHead>
+                <TableHead>Joined</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

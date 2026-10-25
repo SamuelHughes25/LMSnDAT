@@ -2,7 +2,6 @@ import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
 import { DeleteUserButton } from "@/components/delete-user-button";
-import { GroupFilterSelect } from "@/components/group-filter-select";
 import { NewUserDialog } from "@/components/new-user-dialog";
 import {
   Table,
@@ -12,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { UserFiltersPanel } from "@/components/user-filters-panel";
 import { UsersSearchBar } from "@/components/users-search-bar";
 import type { AccountUser, Group, PermissionSet } from "@/lib/accounts-types";
 import { getUserKindLabel } from "@/lib/accounts-types";
@@ -19,21 +19,37 @@ import { getCurrentUser } from "@/lib/dal";
 import { djangoFetch } from "@/lib/django";
 import type { Paginated } from "@/lib/types";
 
-// Search-by-username and filter-by-group are forwarded as query params to
-// Django's /users/ endpoint (see UserViewSet.get_queryset() for the
-// matching ?search=/?group= handling) rather than filtered client-side —
+// A query param repeated in the URL (?group=a&group=b) is handed to a
+// Server Component as a real string[] already — Next.js does this
+// normalization itself, no manual parsing needed — but a param given
+// exactly once still arrives as a bare string, and an absent one as
+// undefined. UserFiltersPanel (the Filters button) always writes the
+// repeated form via URLSearchParams, but a hand-typed/bookmarked URL with
+// a single ?group=x is just as valid, so this normalizes either shape
+// into a plain array before forwarding to Django.
+function toArray(value: string | string[] | undefined): string[] {
+  if (value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+// Search-by-username and filter-by-group/permission-set/role are
+// forwarded as query params to Django's /users/ endpoint (see
+// UserViewSet.get_queryset() for the matching ?search=/?group=/
+// ?permission_set=/?role= handling) rather than filtered client-side —
 // same "Server Component reads searchParams, refetches" pattern as every
 // other data-driven page in this app.
 export default async function UsersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; group?: string }>;
+  searchParams: Promise<{ q?: string; group?: string | string[]; permission_set?: string | string[]; role?: string | string[] }>;
 }) {
-  const { q, group: groupFilter } = await searchParams;
+  const { q, group: groupFilter, permission_set: permissionSetFilter, role: roleFilter } = await searchParams;
 
   const query = new URLSearchParams();
   if (q) query.set("search", q);
-  if (groupFilter) query.set("group", groupFilter);
+  for (const id of toArray(groupFilter)) query.append("group", id);
+  for (const id of toArray(permissionSetFilter)) query.append("permission_set", id);
+  for (const role of toArray(roleFilter)) query.append("role", role);
   const queryString = query.toString();
 
   const [users, groups, permissionSets, currentUser] = await Promise.all([
@@ -54,7 +70,7 @@ export default async function UsersPage({
 
       <div className="mt-4 flex items-center gap-2">
         <UsersSearchBar />
-        <GroupFilterSelect groups={groups.results} paramName="group" allLabel="All groups" />
+        <UserFiltersPanel groups={groups.results} permissionSets={permissionSets.results} />
       </div>
 
       <div className="mt-4 rounded-lg border-2 border-border bg-card shadow-sm">
@@ -65,7 +81,7 @@ export default async function UsersPage({
               <TableHead>Groups</TableHead>
               <TableHead>Type</TableHead>
               <TableHead>Permissions</TableHead>
-              <TableHead>Created</TableHead>
+              <TableHead>Joined</TableHead>
               <TableHead className="w-10" />
             </TableRow>
           </TableHeader>

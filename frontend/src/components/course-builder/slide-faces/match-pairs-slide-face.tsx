@@ -228,34 +228,55 @@ function MatchPairsPresent({
     setDefinitionOrder(shuffle(pairs.map((p) => p.id)));
   }
 
+  function priorMatchDetail(result: SlideInteractionResult | undefined) {
+    return result?.detail as { pairings?: Record<string, string>; mismatchCount?: number } | undefined;
+  }
+
   const [selectedKeywordId, setSelectedKeywordId] = useState<string | null>(null);
-  const [pairings, setPairings] = useState<Record<string, string>>({});
+  // Lazy-initialized FROM priorResult (not just synced on change below)
+  // because course-preview-viewer.tsx remounts this whole component on
+  // every slide navigation (`key={current.slide.id}` on Face) — a learner
+  // clicking Previous back to an already-answered question is a brand new
+  // mount with priorResult ALREADY populated, not a prop change on a
+  // surviving instance. Confirmed as a real, live bug: the sync-only
+  // version of this fix looked right (it does correctly catch priorResult
+  // arriving LATER on an instance that's already mounted — see the sync
+  // block's own comment below), but on a fresh remount `syncedPriorResult`'s
+  // own lazy initializer captured the same already-known priorResult the
+  // sync check compares against, so the two were equal from the very first
+  // render and the sync body never ran — pairings silently stayed at {},
+  // reopening every already-answered pair for an unlimited re-guess
+  // exactly like before this whole fix, just one layer deeper.
+  const [pairings, setPairings] = useState<Record<string, string>>(() => priorMatchDetail(priorResult)?.pairings ?? {});
   // How many mismatched attempts have occurred so far, purely for inclusion
   // in the reported `detail` payload. Real state, not a ref — the sync
   // block just below needs to set it during render (see that block's own
   // comment on why), and React's lint config disallows mutating a ref's
   // `.current` there.
-  const [mismatchCount, setMismatchCount] = useState(0);
+  const [mismatchCount, setMismatchCount] = useState(() => priorMatchDetail(priorResult)?.mismatchCount ?? 0);
 
   // Syncs pairings/mismatchCount from the server's own record of this
-  // slide's answer (priorResult) whenever it CHANGES. Not a one-time lazy
-  // useState initializer — see multiple-choice-slide-face.tsx's identical
-  // fix for the full reasoning: a lazy initializer only captures whatever
-  // priorResult happens to be at this component's very first render, which
-  // is wrong both on a fresh page load (the attempt-resume fetch is still
-  // in flight at first mount) and on Retake (priorResult disappearing
-  // needs to clear this back to blank too, even without a remount). Not a
-  // useEffect either — see that same file's comment on why this project's
-  // lint config specifically flags setState-inside-an-effect, and why the
-  // "adjust state during render" shape below is the sanctioned alternative
-  // (the same shape isClient/hasShuffled above already uses for the
+  // slide's answer (priorResult) whenever it CHANGES on an ALREADY-MOUNTED
+  // instance — the lazy initializers just above handle the fresh-mount
+  // case (priorResult already known), this handles the two cases where it
+  // ISN'T yet, or stops being: (1) a fresh page load/new tab — the
+  // attempt-resume fetch is still in flight at the moment this component
+  // first mounts, so priorResult is still undefined on that first render
+  // and only arrives a tick later once the fetch resolves, on this SAME
+  // instance (no remount). (2) Retake — resets the parent's `results`
+  // state to {} for a new attempt WITHOUT necessarily remounting a slide
+  // that happens to still be at the same index/id as before, so this
+  // component's own pairings has to clear back to blank too when
+  // priorResult disappears. Not a useEffect either — see multiple-choice-
+  // slide-face.tsx's identical comment on why this project's lint config
+  // specifically flags setState-inside-an-effect, and why the "adjust
+  // state during render" shape below is the sanctioned alternative (the
+  // same shape isClient/hasShuffled above already uses for the
   // shuffle-once-on-mount logic).
   const [syncedPriorResult, setSyncedPriorResult] = useState(priorResult);
   if (priorResult !== syncedPriorResult) {
     setSyncedPriorResult(priorResult);
-    const detail = priorResult?.detail as
-      | { pairings?: Record<string, string>; mismatchCount?: number }
-      | undefined;
+    const detail = priorMatchDetail(priorResult);
     setPairings(detail?.pairings ?? {});
     setMismatchCount(detail?.mismatchCount ?? 0);
   }

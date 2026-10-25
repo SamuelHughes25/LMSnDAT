@@ -74,11 +74,21 @@ export function AppShell({
   displayName,
   tierLabel,
   accessibleTabs,
+  hasManageableCourses,
+  hasManageableTemplates,
   children,
 }: {
   displayName: string;
   tierLabel: string;
   accessibleTabs: Tab[];
+  // True if the viewer owns/edits at least one course/template but lacks
+  // the full 'courses'/'templates' tab — see accounts-types.ts's
+  // manageable_course_ids/manageable_template_ids comment. Just enough to
+  // decide whether the "Courses"/"Templates" Manage link shows at all; the
+  // courses/templates list pages themselves re-fetch and filter down to
+  // the actual ids (see (dashboard)/courses/page.tsx).
+  hasManageableCourses?: boolean;
+  hasManageableTemplates?: boolean;
   children: React.ReactNode;
 }) {
   // Server-rendered (and the client's very first paint) always show
@@ -140,7 +150,17 @@ export function AppShell({
     });
   }
 
-  const visibleManageLinks = MANAGE_LINKS.filter((link) => accessibleTabs.includes(link.tab));
+  // A tab-less owner/editor still gets the "Courses"/"Templates" link —
+  // it just points at a scoped-down page instead of the full catalog (see
+  // courses/page.tsx and templates/page.tsx's own filtering). Checked
+  // per-link via its own `tab`, not a blanket OR, so an editor-only grant
+  // never leaks a "Users"/"Groups" link that has nothing to do with it.
+  const visibleManageLinks = MANAGE_LINKS.filter(
+    (link) =>
+      accessibleTabs.includes(link.tab) ||
+      (link.tab === "courses" && hasManageableCourses) ||
+      (link.tab === "templates" && hasManageableTemplates),
+  );
   // The whole "Manage" section (heading included) disappears for an
   // account with no manage-tab access at all, rather than rendering an
   // empty heading over nothing — an operative with zero grants (the

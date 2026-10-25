@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 
 import { TemplateBuilder } from "@/components/builder/template-builder";
+import { MobileLandscapeGate } from "@/components/mobile-landscape-gate";
 import { DjangoApiError, djangoFetch } from "@/lib/django";
 import type { Paginated, Template, TemplateVersion } from "@/lib/types";
 
@@ -27,5 +28,9 @@ export default async function TemplateBuilderPage({ params }: { params: Promise<
     notFound();
   }
 
-  return <TemplateBuilder template={template} initialVersion={draft} />;
+  return (
+    <MobileLandscapeGate>
+      <TemplateBuilder template={template} initialVersion={draft} />
+    </MobileLandscapeGate>
+  );
 }

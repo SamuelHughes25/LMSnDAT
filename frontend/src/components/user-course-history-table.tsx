@@ -44,11 +44,17 @@ export type CourseSummary = {
 // assessment course now only ever means exactly that — not yet
 // completed — so it reads as Failed: a real learner who finishes later
 // gets their real Passed/Failed the moment they do, and a genuinely
-// abandoned attempt stops sitting in limbo. (A non-assessment course still
-// has no pass/fail concept at all, handled by the isAssessment check
-// below, unaffected by this.)
+// abandoned attempt stops sitting in limbo. A non-assessment course reads
+// N/A instead — not Failed, not even a styled "Not an assessment" —
+// reported directly as confusing in its own right: a full-marks score
+// sitting next to a Failed-shaped badge read as contradictory, when the
+// real answer is simply that pass/fail doesn't apply to an unassessed
+// course at all. The score itself (Best score / per-attempt score) is
+// completely unaffected — it's computed from CourseAttempt.score, which
+// grading.py always sets regardless of is_assessment; only `passed` is
+// assessment-gated.
 function PassedBadge({ passed, isAssessment }: { passed: boolean | null; isAssessment: boolean }) {
-  if (!isAssessment) return <span className="text-muted-foreground">Not an assessment</span>;
+  if (!isAssessment) return <span className="text-muted-foreground">N/A</span>;
   return passed ? <Badge>Passed</Badge> : <Badge variant="destructive">Failed</Badge>;
 }
 

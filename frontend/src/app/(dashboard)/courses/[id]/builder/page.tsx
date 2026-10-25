@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 
 import { CourseBuilder } from "@/components/course-builder/course-builder";
+import { MobileLandscapeGate } from "@/components/mobile-landscape-gate";
 import type { Course, CourseVersion } from "@/lib/course-types";
 import { DjangoApiError, djangoFetch } from "@/lib/django";
 import type { Paginated } from "@/lib/types";
@@ -32,5 +33,9 @@ export default async function CourseBuilderPage({ params }: { params: Promise<{ 
     notFound();
   }
 
-  return <CourseBuilder course={course} initialVersion={draft} />;
+  return (
+    <MobileLandscapeGate>
+      <CourseBuilder course={course} initialVersion={draft} />
+    </MobileLandscapeGate>
+  );
 }

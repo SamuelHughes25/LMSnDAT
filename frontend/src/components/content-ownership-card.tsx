@@ -2,17 +2,15 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, X } from "lucide-react";
+import { X } from "lucide-react";
 
 import { setCourseEditors, transferCourseOwnership } from "@/app/actions/courses";
 import { setTemplateEditors, transferTemplateOwnership } from "@/app/actions/templates";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { UserSearchCombobox } from "@/components/user-search-combobox";
 
 type UserOption = { id: number; username: string };
-
-const PICK_VALUE = "__pick__";
 
 // One component for both entity types — only which pair of server actions
 // to call differs, same "kind-based dispatch" shape as
@@ -93,9 +91,9 @@ export function ContentOwnershipCard({
   // complete list client-side and send that, same "send the complete
   // list" convention as user-groups-editor.tsx's sibling toggleCourseInGroup
   // uses from the other direction.
-  function handleAddEditor(newEditorId: string) {
+  function handleAddEditor(newEditorId: number) {
     setError(null);
-    const nextIds = [...editors.map((e) => e.id), Number(newEditorId)];
+    const nextIds = [...editors.map((e) => e.id), newEditorId];
     startTransition(async () => {
       const result = await setEditors(contentId, nextIds);
       if (!result.ok) {
@@ -132,25 +130,13 @@ export function ContentOwnershipCard({
         <div className="mt-1.5 flex flex-wrap items-center gap-2">
           <Badge variant="outline">{owner.username}</Badge>
           {viewerIsSuperuser && transferCandidates.length > 0 && (
-            <Select
-              value={PICK_VALUE}
-              onValueChange={(v) => {
-                if (!v || v === PICK_VALUE) return;
-                const candidate = transferCandidates.find((u) => String(u.id) === v);
-                if (candidate) setPendingNewOwner(candidate);
-              }}
-            >
-              <SelectTrigger className="w-56" disabled={pending}>
-                <SelectValue>{() => <span className="text-muted-foreground">Transfer ownership to…</span>}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {transferCandidates.map((u) => (
-                  <SelectItem key={u.id} value={String(u.id)}>
-                    {u.username}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <UserSearchCombobox
+              candidates={transferCandidates}
+              placeholder="Transfer ownership to…"
+              onSelect={(u) => setPendingNewOwner(u)}
+              disabled={pending}
+              className="w-56"
+            />
           )}
         </div>
         {/* Only shown once it actually differs from the current owner —
@@ -208,24 +194,13 @@ export function ContentOwnershipCard({
           ))}
         </div>
         {editorCandidates.length > 0 && (
-          <Select value={PICK_VALUE} onValueChange={(v) => v && v !== PICK_VALUE && handleAddEditor(v)}>
-            <SelectTrigger className="mt-2 w-56" disabled={pending}>
-              <SelectValue>
-                {() => (
-                  <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                    <Plus className="h-3.5 w-3.5" /> Add editor
-                  </span>
-                )}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {editorCandidates.map((u) => (
-                <SelectItem key={u.id} value={String(u.id)}>
-                  {u.username}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <UserSearchCombobox
+            candidates={editorCandidates}
+            placeholder="Search to add editor…"
+            onSelect={(u) => handleAddEditor(u.id)}
+            disabled={pending}
+            className="mt-2 w-56"
+          />
         )}
       </div>
 

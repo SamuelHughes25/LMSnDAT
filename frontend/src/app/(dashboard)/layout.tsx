@@ -17,7 +17,13 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const user = await getCurrentUser();
 
   return (
-    <AppShell displayName={user.username} tierLabel={getUserTierLabel(user)} accessibleTabs={user.accessible_tabs}>
+    <AppShell
+      displayName={user.username}
+      tierLabel={getUserTierLabel(user)}
+      accessibleTabs={user.accessible_tabs}
+      hasManageableCourses={user.manageable_course_ids.length > 0}
+      hasManageableTemplates={user.manageable_template_ids.length > 0}
+    >
       {children}
     </AppShell>
   );

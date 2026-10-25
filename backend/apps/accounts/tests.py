@@ -188,6 +188,46 @@ class UserCreationTests(APIAuthTestCase):
         resp = admin_client.get(f'/api/v1/users/?group={self.group.id}')
         self.assertEqual([u['username'] for u in resp.data['results']], ['alice'])
 
+    def test_user_list_filters_combine_or_within_category_and_across(self):
+        """The Users page's multi-select Filters panel: repeating a query
+        param (?group=a&group=b) OR's within that one category, but the
+        group/permission_set/role categories AND against each other."""
+        second_group = Group.objects.create(name="Don't Walk By")
+        managers_set = PermissionSet.objects.create(name='Managers', can_access_users=True)
+
+        alice = User.objects.create_user(username='alice', password='pw', role=User.Role.MEMBER)
+        alice.content_groups.add(self.group)
+        bob = User.objects.create_user(username='bob', password='pw', role=User.Role.MEMBER)
+        bob.content_groups.add(second_group)
+        carol = User.objects.create_user(
+            username='carol', password='pw', role=User.Role.ADMIN, permission_set=managers_set,
+        )
+        carol.content_groups.add(self.group)
+        User.objects.create_user(username='dave', password='pw', role=User.Role.MEMBER)
+
+        admin_client = self.auth('admin', 'pw')
+
+        # OR within one category: either group.
+        resp = admin_client.get(f'/api/v1/users/?group={self.group.id}&group={second_group.id}')
+        self.assertEqual(
+            {u['username'] for u in resp.data['results']}, {'alice', 'bob', 'carol'},
+        )
+
+        # AND across categories: in self.group AND role=member excludes
+        # carol (wrong role) and bob (wrong group), leaving only alice.
+        resp = admin_client.get(f'/api/v1/users/?group={self.group.id}&role={User.Role.MEMBER}')
+        self.assertEqual([u['username'] for u in resp.data['results']], ['alice'])
+
+        # permission_set filter on its own.
+        resp = admin_client.get(f'/api/v1/users/?permission_set={managers_set.id}')
+        self.assertEqual([u['username'] for u in resp.data['results']], ['carol'])
+
+        # Each user appears once even though self.group's filter joins
+        # across a many-to-many relation.
+        resp = admin_client.get(f'/api/v1/users/?group={self.group.id}')
+        usernames = [u['username'] for u in resp.data['results']]
+        self.assertEqual(len(usernames), len(set(usernames)))
+
     def test_user_can_belong_to_multiple_groups(self):
         """"Everyone might need access to something like Don't Walk By, or
         Asbestos Training" on top of their main job-description group —

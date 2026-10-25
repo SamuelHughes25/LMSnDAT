@@ -82,6 +82,32 @@ export async function setUserPermissionSet(
   }
 }
 
+// A plain PATCH — role is an ordinary writable field (see UserSerializer),
+// guarded the same way the rest of UserViewSet.update() already is (the
+// super-super-user's own row can't be touched by anyone else, a super
+// user's row can't be touched by anyone but the super-super-user) — no
+// extra checks needed here, the backend 400s and describeUserCreateError
+// surfaces whatever it says. This is what makes "promote an operative to
+// a manager" or "move an office user back to an operative role" actually
+// change which dashboard content they land on — (dashboard)/dashboard/
+// page.tsx's own home screen branches on exactly this field, independent
+// of whatever tabs a permission set/Super User grant separately opens up
+// in the sidebar.
+export async function setUserRole(userId: number, role: UserRole): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await djangoFetch<AccountUser>(`/users/${userId}/`, {
+      method: "PATCH",
+      body: JSON.stringify({ role }),
+    });
+    revalidatePath(`/users/${userId}`);
+    revalidatePath("/users");
+    return { ok: true };
+  } catch (err) {
+    if (err instanceof DjangoApiError) return { ok: false, error: describeUserCreateError(err) };
+    throw err;
+  }
+}
+
 // Both gated server-side to IsSuperuser — "only me the super super user
 // can do this," per the user's own words. A non-superuser attempting
 // either gets a clean 403, surfaced as the error string below.

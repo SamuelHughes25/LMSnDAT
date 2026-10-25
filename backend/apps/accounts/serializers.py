@@ -1,6 +1,9 @@
+from django.db.models import Q
 from rest_framework import serializers
 
 from apps.core.permissions import DASHBOARD_TABS, user_can_access_tab
+from apps.courses.models import Course
+from apps.templates_app.models import Template
 from .models import Group, PermissionSet, Team, User
 
 
@@ -21,6 +24,21 @@ class UserSerializer(serializers.ModelSerializer):
     # the frontend doesn't need a second round-trip to the user's
     # permission_set to build its own sidebar/page gating).
     accessible_tabs = serializers.SerializerMethodField()
+    # Which specific courses/templates this user can open the builder for
+    # purely via ownership/editor status, without the matching 'courses'/
+    # 'templates' tab itself — lets the frontend show a scoped-down nav
+    # link + list ("just this one course") for an office user who's been
+    # made an editor but not handed the whole tab, instead of either the
+    # full catalog or nothing. Only ever computed for the user fetching
+    # their OWN row (obj.id == the requesting user's id) — a cheap id
+    # comparison, no query — so this never turns the Users list page (one
+    # row per user in the system) into an N+1; every other row's value is
+    # an unconditional empty list. Mirrors user_can_edit_content's own
+    # role=='member' cutoff: an operative's ownership/editor rows still
+    # unlock nothing here, exactly as they unlock nothing in the real
+    # builder-save permission check.
+    manageable_course_ids = serializers.SerializerMethodField()
+    manageable_template_ids = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -29,6 +47,7 @@ class UserSerializer(serializers.ModelSerializer):
             'content_groups', 'password', 'date_joined', 'is_active',
             'archived_by', 'archived_by_username', 'archived_at',
             'permission_set', 'permission_set_name', 'is_platform_admin', 'is_superuser', 'accessible_tabs',
+            'manageable_course_ids', 'manageable_template_ids',
         ]
         # is_active/archived_by/archived_at are read-only here on purpose —
         # they should only ever change together, via UserViewSet's destroy/
@@ -46,10 +65,33 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'id', 'date_joined', 'is_active', 'archived_by', 'archived_by_username', 'archived_at', 'is_superuser',
             'permission_set_name', 'is_platform_admin', 'accessible_tabs',
+            'manageable_course_ids', 'manageable_template_ids',
         ]
 
     def get_accessible_tabs(self, obj):
         return [tab for tab in DASHBOARD_TABS if user_can_access_tab(obj, tab)]
+
+    def _is_self(self, obj):
+        request = self.context.get('request')
+        return bool(request and request.user.is_authenticated and request.user.id == obj.id)
+
+    def get_manageable_course_ids(self, obj):
+        if not self._is_self(obj) or obj.role == 'member':
+            return []
+        return list(
+            Course.objects.filter(Q(owner=obj) | Q(editors=obj), is_archived=False)
+            .values_list('id', flat=True)
+            .distinct()
+        )
+
+    def get_manageable_template_ids(self, obj):
+        if not self._is_self(obj) or obj.role == 'member':
+            return []
+        return list(
+            Template.objects.filter(Q(owner=obj) | Q(editors=obj), is_archived=False)
+            .values_list('id', flat=True)
+            .distinct()
+        )
 
     def create(self, validated_data):
         password = validated_data.pop('password', None)

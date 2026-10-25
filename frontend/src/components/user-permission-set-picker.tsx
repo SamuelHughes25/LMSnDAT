@@ -8,11 +8,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 const NONE_VALUE = "__none__";
 
-// A dashboard user's PermissionSet assignment — replaces the old fixed
-// admin/manager distinction with a pick from whatever custom sets exist
-// (see the new /permissions page). Only meaningful for a non-member
-// (role=="member" never reaches the dashboard at all, so there's nothing
-// a permission set would grant them) — the caller decides whether to
+// A user's PermissionSet assignment — replaces the old fixed admin/manager
+// distinction with a pick from whatever custom sets exist (see the new
+// /permissions page). Meaningful for ANY account now, operative included —
+// (dashboard)/layout.tsx no longer role-gates reaching a Manage route at
+// all, only app-shell.tsx's own nav visibility does, which is driven by
+// this same grant (see accessible_tabs) — the caller decides whether to
 // render this at all.
 export function UserPermissionSetPicker({
   userId,
