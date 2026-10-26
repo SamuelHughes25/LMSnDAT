@@ -7,10 +7,11 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import SAFE_METHODS, IsAuthenticated
 from rest_framework.response import Response
 
-from apps.accounts.models import User
+from apps.accounts.models import Group, User
 from apps.core.permissions import (
-    HasArchiveTabAccessOrIsOwner, HasDashboardTabAccess, IsContentOwnerEditorOrAdmin, IsContentOwnerOrAdmin, IsSuperuser,
-    user_can_access_tab, user_can_edit_content,
+    CanManageCourseGroups, CanManageCourseMembers, CanManageCourseSettings, HasArchiveTabAccessOrIsOwner,
+    HasDashboardTabAccess, IsContentOwnerEditorOrAdmin, IsContentOwnerOrAdmin, IsSuperuser, user_can_access_tab,
+    user_can_edit_content, user_can_manage_course_admin,
 )
 from apps.core.utils import parse_int_pk
 from . import services
@@ -37,7 +38,7 @@ class CourseViewSet(viewsets.ModelViewSet):
     # which hits this same endpoint) visibly slower as the catalog grew.
     queryset = Course.objects.all().select_related(
         'editing_user', 'owner', 'created_by', 'archived_by',
-    ).prefetch_related('editors')
+    ).prefetch_related('editors', 'groups')
     serializer_class = CourseSerializer
     required_tab = 'courses'
 
@@ -58,14 +59,21 @@ class CourseViewSet(viewsets.ModelViewSet):
         # PORTAL (member-facing, no permission set at all) also reads
         # course data directly, same as the old IsAdminOrReadOnly's open-
         # read behavior this replaced.
-        if self.action in ('update', 'partial_update', 'create_draft'):
+        if self.action == 'create_draft':
+            # Starting a new draft version is builder-content work, same
+            # tier as actually editing lessons/slides — editor status
+            # alone is enough, no can_edit_course_settings needed (unlike
+            # update/partial_update just below, which is the Settings
+            # tab's own save action).
             return [IsContentOwnerEditorOrAdmin()]
+        if self.action in ('update', 'partial_update'):
+            return [CanManageCourseSettings()]
         if self.action == 'transfer_ownership':
             # Super-super-user only now — not the owner, not even someone
             # with the Courses tab. See IsSuperuser's own comment for why.
             return [IsSuperuser()]
-        if self.action == 'set_editors':
-            return [IsContentOwnerOrAdmin()]
+        if self.action in ('set_editors', 'set_groups'):
+            return [CanManageCourseMembers() if self.action == 'set_editors' else CanManageCourseGroups()]
         if self.action in ('claim_edit', 'release_edit'):
             # Same tier as actually editing the course — claiming the lock
             # is meaningless for someone who couldn't open the builder in
@@ -128,6 +136,26 @@ class CourseViewSet(viewsets.ModelViewSet):
         # Group.courses/templates and User.content_groups elsewhere in
         # this app — not an incremental add/remove.
         course.editors.set(User.objects.filter(pk__in=parsed_ids))
+        return Response(CourseSerializer(course, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'], url_path='set-groups')
+    def set_groups(self, request, pk=None):
+        # The Groups tab's own save action, from the course's side —
+        # deliberately NOT a PATCH to /groups/{id}/ (that still requires
+        # the full 'groups' tab, unchanged) so an owner/editor-with-
+        # can_edit_course_groups can toggle which groups bundle THIS
+        # course without needing broader group-management access. `groups`
+        # is the reverse accessor for Group.courses (related_name
+        # ='groups'), so .set() here mutates the exact same M2M a plain
+        # GroupViewSet PATCH would, just from the other side of it.
+        course = self.get_object()
+        group_ids = request.data.get('groups', [])
+        if not isinstance(group_ids, list):
+            return Response({'groups': 'Must be a list of group ids.'}, status=400)
+        matched = Group.objects.filter(pk__in=group_ids)
+        if len(matched) != len(set(group_ids)):
+            return Response({'groups': 'Must be a list of valid group ids.'}, status=400)
+        course.groups.set(matched)
         return Response(CourseSerializer(course, context={'request': request}).data)
 
     def destroy(self, request, *args, **kwargs):
@@ -590,9 +618,18 @@ class CourseAssignmentViewSet(
     required_tab = 'courses'
 
     def get_permissions(self):
+        # create/destroy now need the SAME "owner, or editor with
+        # can_edit_course_members" tier as CourseViewSet.set_editors — see
+        # CanManageCourseMembers' own docstring. Its has_permission lets
+        # create through at the class level (no object exists yet);
+        # perform_create below re-checks it against the resolved course,
+        # same pattern IsContentOwnerEditorOrAdmin's docstring describes
+        # for every create action in this app. destroy goes through the
+        # normal get_object() -> check_object_permissions path, which
+        # fires has_object_permission correctly on its own.
         if self.request.method in SAFE_METHODS:
             return [IsAuthenticated()]
-        return [HasDashboardTabAccess()]
+        return [CanManageCourseMembers()]
 
     def get_queryset(self):
         user = self.request.user
@@ -613,4 +650,7 @@ class CourseAssignmentViewSet(
         return qs
 
     def perform_create(self, serializer):
+        course = serializer.validated_data.get('course')
+        if not user_can_manage_course_admin(self.request.user, course, 'can_edit_course_members'):
+            raise PermissionDenied("You don't have permission to manage this course's members.")
         serializer.save(assigned_by=self.request.user)

@@ -1,7 +1,7 @@
 from django.db.models import Q
 from rest_framework import serializers
 
-from apps.core.permissions import DASHBOARD_TABS, user_can_access_tab
+from apps.core.permissions import DASHBOARD_TABS, user_can_access_tab, user_can_manage_users_admin
 from apps.courses.models import Course
 from apps.templates_app.models import Template
 from .models import Group, PermissionSet, Team, User
@@ -39,6 +39,13 @@ class UserSerializer(serializers.ModelSerializer):
     # builder-save permission check.
     manageable_course_ids = serializers.SerializerMethodField()
     manageable_template_ids = serializers.SerializerMethodField()
+    # Which Users-admin sub-permissions the REQUESTING user has, self-only
+    # same as manageable_course_ids above (an empty list for anyone else's
+    # row) — drives whether the frontend's Users page shows New
+    # user/Delete/Reset password/Edit controls at all, mirroring
+    # accessible_tabs' own "precompute server-side, one source of truth"
+    # shape instead of the frontend re-deriving this from permission_set.
+    user_permissions = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -47,7 +54,7 @@ class UserSerializer(serializers.ModelSerializer):
             'content_groups', 'password', 'date_joined', 'is_active',
             'archived_by', 'archived_by_username', 'archived_at',
             'permission_set', 'permission_set_name', 'is_platform_admin', 'is_superuser', 'accessible_tabs',
-            'manageable_course_ids', 'manageable_template_ids',
+            'manageable_course_ids', 'manageable_template_ids', 'user_permissions',
         ]
         # is_active/archived_by/archived_at are read-only here on purpose —
         # they should only ever change together, via UserViewSet's destroy/
@@ -65,11 +72,17 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'id', 'date_joined', 'is_active', 'archived_by', 'archived_by_username', 'archived_at', 'is_superuser',
             'permission_set_name', 'is_platform_admin', 'accessible_tabs',
-            'manageable_course_ids', 'manageable_template_ids',
+            'manageable_course_ids', 'manageable_template_ids', 'user_permissions',
         ]
 
     def get_accessible_tabs(self, obj):
         return [tab for tab in DASHBOARD_TABS if user_can_access_tab(obj, tab)]
+
+    def get_user_permissions(self, obj):
+        if not self._is_self(obj):
+            return []
+        sub_perms = ['create_users', 'delete_users', 'reset_user_passwords', 'edit_users']
+        return [p for p in sub_perms if user_can_manage_users_admin(obj, f'can_{p}')]
 
     def _is_self(self, obj):
         request = self.context.get('request')
@@ -126,7 +139,10 @@ class PermissionSetSerializer(serializers.ModelSerializer):
         model = PermissionSet
         fields = [
             'id', 'name', 'can_access_templates', 'can_access_courses', 'can_access_users',
-            'can_access_groups', 'can_access_permissions', 'can_access_archive', 'created_at', 'updated_at',
+            'can_access_groups', 'can_access_permissions', 'can_access_archive',
+            'can_create_users', 'can_delete_users', 'can_reset_user_passwords', 'can_edit_users',
+            'can_edit_course_members', 'can_edit_course_groups', 'can_edit_course_settings',
+            'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 

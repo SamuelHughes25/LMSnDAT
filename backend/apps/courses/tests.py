@@ -860,7 +860,16 @@ class CourseDeadlineTests(APIAuthTestCase):
         # replacing the old "sees/manages only their own team" tier with
         # a clean has-tab-access-or-doesn't split.
         courses_set = PermissionSet.objects.create(name='Course Manager', can_access_courses=True)
-        self.admin = User.objects.create_user(username='deadline_admin', password='pw', permission_set=courses_set)
+        # role=ADMIN explicitly, and owner=self.admin below — see
+        # apps.core.permissions.user_can_manage_course_admin: editing a
+        # course's own fields (the Settings tab's save action) now needs
+        # owner status or can_edit_course_settings on top of plain tab
+        # access, and the owner/editor bypass itself is hard-blocked for
+        # role=='member' (User.role's own default), which this fixture
+        # never needed to override before CanManageCourseSettings existed.
+        self.admin = User.objects.create_user(
+            username='deadline_admin', password='pw', role=User.Role.ADMIN, permission_set=courses_set,
+        )
         self.team = Team.objects.create(name='Deadline Team')
         self.other_team = Team.objects.create(name='Other Deadline Team')
         self.manager = User.objects.create_user(username='deadline_manager', password='pw', team=self.team)
@@ -871,7 +880,7 @@ class CourseDeadlineTests(APIAuthTestCase):
             username='deadline_other_member', password='pw', role=User.Role.MEMBER, team=self.other_team
         )
         self.course = Course.objects.create(
-            name='Deadline Course', created_by=self.admin, is_assessment=True, passing_score=70,
+            name='Deadline Course', created_by=self.admin, owner=self.admin, is_assessment=True, passing_score=70,
             deadline=datetime.date(2026, 1, 31),
         )
 
@@ -1157,7 +1166,16 @@ class CourseAssignmentTests(APIAuthTestCase):
         # .user_can_access_tab's own comment). ca_manager deliberately has
         # no permission set, replacing the old team-scoped middle tier.
         courses_set = PermissionSet.objects.create(name='Course Manager', can_access_courses=True)
-        self.admin = User.objects.create_user(username='ca_admin', password='pw', permission_set=courses_set)
+        # role=ADMIN explicitly — User.role defaults to MEMBER, and
+        # user_can_manage_course_admin (like user_can_edit_content before
+        # it) deliberately hard-blocks the owner/editor bypass for
+        # role=='member' regardless of tab/permission_set grants. This
+        # fixture's own intent has always been an office-user admin, just
+        # never surfaced before since the old plain HasDashboardTabAccess
+        # check never looked at role at all.
+        self.admin = User.objects.create_user(
+            username='ca_admin', password='pw', role=User.Role.ADMIN, permission_set=courses_set,
+        )
         self.team = Team.objects.create(name='CA Team')
         self.other_team = Team.objects.create(name='CA Other Team')
         self.manager = User.objects.create_user(username='ca_manager', password='pw', team=self.team)
@@ -1167,7 +1185,13 @@ class CourseAssignmentTests(APIAuthTestCase):
         self.other_team_member = User.objects.create_user(
             username='ca_other_member', password='pw', role=User.Role.MEMBER, team=self.other_team
         )
-        self.course = Course.objects.create(name='CA Course', created_by=self.admin)
+        # owner=self.admin, not just created_by — managing a course's
+        # members now needs owner status or can_edit_course_members on top
+        # of plain tab access (see apps.core.permissions
+        # .user_can_manage_course_admin); ca_admin owning the course it
+        # creates matches how CourseViewSet.perform_create actually works
+        # in production (owner always starts out as the creator too).
+        self.course = Course.objects.create(name='CA Course', created_by=self.admin, owner=self.admin)
 
     def test_admin_can_assign_course_directly_to_a_user(self):
         admin_client = self.auth('ca_admin', 'pw')
@@ -1300,7 +1324,15 @@ class CourseAssignmentTests(APIAuthTestCase):
         )
         manager_client = self.auth('ca_manager', 'pw')
         resp = manager_client.delete(f'/api/v1/course-assignments/{assignment.id}/')
-        self.assertEqual(resp.status_code, 403)
+        # 404, not 403 — get_queryset() scopes anyone without Courses tab
+        # access down to their OWN assignments (same as list), so this row
+        # (someone else's) is never even findable by ca_manager in the
+        # first place; the permission check on CanManageCourseMembers
+        # never gets a chance to return its own 403 since get_object()
+        # already 404s before has_object_permission runs. A reasonable
+        # outcome either way — not confirming whether the row exists to
+        # someone who can't see it is arguably the more correct one.
+        self.assertEqual(resp.status_code, 404)
         self.assertTrue(CourseAssignment.objects.filter(id=assignment.id).exists())
 
     def test_update_is_not_allowed_at_all(self):
@@ -1491,10 +1523,20 @@ class CourseOwnershipTests(APIAuthTestCase):
         self.course.editors.add(self.editor)
         self.version = CourseVersion.objects.create(course=self.course, version_number=1, created_by=self.admin)
 
-    def test_editor_can_edit_course_fields_and_create_lesson_and_slide(self):
+    def test_editor_can_create_lesson_and_slide_but_not_edit_course_settings(self):
+        # Builder content (lessons/slides/versions) vs. the Settings tab's
+        # own save action (the course's own fields, via CourseViewSet
+        # update/partial_update) are deliberately different tiers now —
+        # plain editor status alone is still enough for the former
+        # (user_can_edit_content, unchanged) but needs
+        # can_edit_course_settings on top for the latter
+        # (user_can_manage_course_admin) — see that function's own
+        # docstring. own_editor has no permission_set at all here, so the
+        # Settings PATCH correctly 403s while lesson/slide creation still
+        # succeeds.
         editor_client = self.auth('own_editor', 'pw')
         resp = editor_client.patch(f'/api/v1/courses/{self.course.id}/', {'name': 'Renamed'}, format='json')
-        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.status_code, 403, resp.content)
 
         resp = editor_client.post(
             '/api/v1/lessons/',
@@ -1510,6 +1552,14 @@ class CourseOwnershipTests(APIAuthTestCase):
             format='json',
         )
         self.assertEqual(resp.status_code, 201, resp.content)
+
+    def test_editor_with_can_edit_course_settings_can_edit_course_fields(self):
+        settings_set = PermissionSet.objects.create(name='Course Settings Editor', can_edit_course_settings=True)
+        self.editor.permission_set = settings_set
+        self.editor.save(update_fields=['permission_set'])
+        editor_client = self.auth('own_editor', 'pw')
+        resp = editor_client.patch(f'/api/v1/courses/{self.course.id}/', {'name': 'Renamed'}, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
 
     def test_owner_can_edit_too(self):
         owner_client = self.auth('own_owner', 'pw')
@@ -1604,10 +1654,16 @@ class CourseOwnershipTests(APIAuthTestCase):
         self.assertEqual(resp.status_code, 200, resp.content)
         self.assertEqual(set(self.course.editors.values_list('id', flat=True)), {self.outsider.id})
 
-        # Outsider is now an editor, the old editor is not (full replace).
+        # Outsider is now an editor, the old editor is not (full replace) —
+        # confirmed via editors.values_list above. Editing the course's
+        # own fields (Settings) is a DIFFERENT, stricter tier now though
+        # (CanManageCourseSettings) — plain editor status alone no longer
+        # unlocks it without can_edit_course_settings, which this fixture
+        # never grants, so this correctly 403s rather than 200s the way a
+        # bare editor-content check would have before that split existed.
         outsider_client = self.auth('own_outsider', 'pw')
         resp = outsider_client.patch(f'/api/v1/courses/{self.course.id}/', {'name': 'x'}, format='json')
-        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.status_code, 403, resp.content)
 
         # A malformed id anywhere in the list comes back as a clean 400,
         # not an unhandled 500 — same reasoning as transfer-ownership.
@@ -1671,12 +1727,20 @@ class DemotedOwnerLockoutTests(APIAuthTestCase):
         # The data-preservation half: demotion itself (already true before
         # any of this session's lockout changes — owner/editor rows are
         # never touched by a role/permission_set/is_platform_admin change)
-        # plus the UI/access half: a courses-tab grant immediately restores
-        # full editing, with nothing about the Course row needing to
-        # change for that to work.
+        # plus the UI/access half: being promoted back off role=='member'
+        # immediately restores full Settings editing through the still-
+        # intact ownership alone — no re-granted tab or sub-permission
+        # needed for that specifically, since CanManageCourseSettings'
+        # owner branch (apps.core.permissions.user_can_manage_course_admin)
+        # has no tab-access shortcut of its own, unlike the builder-
+        # content bypass (user_can_edit_content) a plain courses-tab grant
+        # alone used to be enough for. The permission_set is still
+        # granted here too, matching what a real "promoted back to an
+        # office role" change would actually look like end to end.
         self.assertEqual(self.course.owner_id, self.owner.id)
+        self.owner.role = User.Role.ADMIN
         self.owner.permission_set = PermissionSet.objects.create(name='Re-granted', can_access_courses=True)
-        self.owner.save(update_fields=['permission_set'])
+        self.owner.save(update_fields=['role', 'permission_set'])
         client = self.auth('demoted_owner', 'pw')
         resp = client.patch(f'/api/v1/courses/{self.course.id}/', {'name': 'Resumed'}, format='json')
         self.assertEqual(resp.status_code, 200, resp.content)

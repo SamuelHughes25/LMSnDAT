@@ -83,6 +83,14 @@ class PermissionSet(BaseModel):
 
     name = models.CharField(max_length=255, unique=True)
     can_access_templates = models.BooleanField(default=False)
+    # Unlike every other can_access_* flag, this one no longer means "see
+    # every course" — it grants the Courses section itself (and the
+    # ability to create a new course, which makes you its owner) plus
+    # read access to whatever course you already own/are an editor on.
+    # Which SPECIFIC courses show up, and whether you can touch their
+    # Members/Groups/Settings tabs, is governed by ownership/editor status
+    # and the four can_edit_course_* flags below — see
+    # apps.core.permissions.user_can_manage_course_admin.
     can_access_courses = models.BooleanField(default=False)
     can_access_users = models.BooleanField(default=False)
     can_access_groups = models.BooleanField(default=False)
@@ -92,6 +100,29 @@ class PermissionSet(BaseModel):
     # the ability to grant it to others too.
     can_access_permissions = models.BooleanField(default=False)
     can_access_archive = models.BooleanField(default=False)
+
+    # --- Users sub-permissions ---
+    # Each is meaningless without can_access_users itself (see
+    # user_can_manage_users_admin) — the parent flag is what gets you to
+    # the tab/search at all; these further split WHAT you can do there,
+    # same granularity the user asked for on top of the old "one flat
+    # switch = full capability" model.
+    can_create_users = models.BooleanField(default=False)
+    can_delete_users = models.BooleanField(default=False)
+    can_reset_user_passwords = models.BooleanField(default=False)
+    # Role/permission_set/content_groups/team and other ordinary profile
+    # fields — NOT password (see can_reset_user_passwords above, its own,
+    # separate sub-permission).
+    can_edit_users = models.BooleanField(default=False)
+
+    # --- Courses sub-permissions ---
+    # Each only matters for a course you already own or are an editor on
+    # (can_access_courses's own docstring) — the owner always has all
+    # three regardless of these flags; a plain editor needs the matching
+    # one on top of editor status. See user_can_manage_course_admin.
+    can_edit_course_members = models.BooleanField(default=False)
+    can_edit_course_groups = models.BooleanField(default=False)
+    can_edit_course_settings = models.BooleanField(default=False)
 
     class Meta:
         ordering = ['name']

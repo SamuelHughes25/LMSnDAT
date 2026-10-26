@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { toggleCourseInGroup } from "@/app/actions/groups";
+import { toggleCourseGroup } from "@/app/actions/courses";
 import { RoleAssignmentToggle } from "@/components/role-assignment-toggle";
 import type { Group } from "@/lib/accounts-types";
 import type { Course } from "@/lib/course-types";
@@ -47,8 +47,9 @@ export default async function CourseRolesPage({ params }: { params: Promise<{ id
             <RoleAssignmentToggle
               key={group.id}
               group={group}
-              checked={group.courses.includes(id)}
-              onToggle={toggleCourseInGroup.bind(null, group.id, id)}
+              checked={course.group_ids.includes(group.id)}
+              onToggle={toggleCourseGroup.bind(null, id, group.id, course.group_ids)}
+              canEdit={course.viewer_can_edit_groups}
             />
           ))}
           {groups.results.length === 0 && (

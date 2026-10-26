@@ -45,6 +45,7 @@ export function ContentOwnershipCard({
   candidateUsers,
   ownershipCandidateUsers,
   viewerIsSuperuser,
+  canEditMembers = true,
 }: {
   kind: "course" | "template";
   contentId: string;
@@ -70,6 +71,12 @@ export function ContentOwnershipCard({
   // them without also making them pickable as an editor.
   ownershipCandidateUsers: UserOption[];
   viewerIsSuperuser: boolean;
+  // Whether the viewer can add/remove editors here — courses only (see
+  // CourseSerializer.viewer_can_edit_members); templates don't have this
+  // sub-permission yet (still a plain owner-or-templates-tab check), so
+  // the prop defaults to true there, matching the old unconditional
+  // behavior.
+  canEditMembers?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -129,7 +136,7 @@ export function ContentOwnershipCard({
         <div className="text-xs text-muted-foreground">Owner</div>
         <div className="mt-1.5 flex flex-wrap items-center gap-2">
           <Badge variant="outline">{owner.username}</Badge>
-          {viewerIsSuperuser && transferCandidates.length > 0 && (
+          {viewerIsSuperuser && (
             <UserSearchCombobox
               candidates={transferCandidates}
               placeholder="Transfer ownership to…"
@@ -178,22 +185,33 @@ export function ContentOwnershipCard({
         <div className="text-xs text-muted-foreground">Editors</div>
         <div className="mt-1.5 flex flex-wrap gap-2">
           {editors.length === 0 && <span className="text-sm text-muted-foreground">No editors yet.</span>}
-          {editors.map((editor) => (
-            <Badge key={editor.id} variant="secondary" className="gap-1 py-1 pr-1">
-              {editor.username}
-              <button
-                type="button"
-                onClick={() => handleRemoveEditor(editor.id)}
-                disabled={pending}
-                aria-label={`Remove ${editor.username} as editor`}
-                className="rounded-full p-0.5 hover:bg-muted-foreground/20"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </Badge>
-          ))}
+          {editors.map((editor) =>
+            canEditMembers ? (
+              <Badge key={editor.id} variant="secondary" className="gap-1 py-1 pr-1">
+                {editor.username}
+                <button
+                  type="button"
+                  onClick={() => handleRemoveEditor(editor.id)}
+                  disabled={pending}
+                  aria-label={`Remove ${editor.username} as editor`}
+                  className="rounded-full p-0.5 hover:bg-muted-foreground/20"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </Badge>
+            ) : (
+              <Badge key={editor.id} variant="secondary">
+                {editor.username}
+              </Badge>
+            ),
+          )}
         </div>
-        {editorCandidates.length > 0 && (
+        {/* Always rendered (not gated on candidates.length) once the
+            viewer can edit members at all — an empty/near-empty candidate
+            list still types into "No matching users," never just
+            vanishes, which is what made this read as "I can't add anyone"
+            before. */}
+        {canEditMembers && (
           <UserSearchCombobox
             candidates={editorCandidates}
             placeholder="Search to add editor…"

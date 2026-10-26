@@ -15,11 +15,27 @@ export type PermissionSet = {
   id: string;
   name: string;
   can_access_templates: boolean;
+  // No longer "see every course" — see backend's PermissionSet.can_access_courses
+  // own comment. Grants the Courses section + course creation; which
+  // specific courses are visible/editable comes from ownership/editor
+  // status plus the can_edit_course_* flags below.
   can_access_courses: boolean;
   can_access_users: boolean;
   can_access_groups: boolean;
   can_access_permissions: boolean;
   can_access_archive: boolean;
+  // Users sub-permissions — each meaningless without can_access_users
+  // itself (apps.core.permissions.user_can_manage_users_admin).
+  can_create_users: boolean;
+  can_delete_users: boolean;
+  can_reset_user_passwords: boolean;
+  can_edit_users: boolean;
+  // Courses sub-permissions — each only matters for a course the user
+  // already owns or is an editor on; the owner always has all three
+  // regardless (apps.core.permissions.user_can_manage_course_admin).
+  can_edit_course_members: boolean;
+  can_edit_course_groups: boolean;
+  can_edit_course_settings: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -116,6 +132,11 @@ export type AccountUser = {
   // irrelevant (the full list already includes anything in here).
   manageable_course_ids: string[];
   manageable_template_ids: string[];
+  // Which Users-admin sub-permissions the REQUESTING user has, self-only
+  // (always [] for anyone else's row) — entries are "create_users"/
+  // "delete_users"/"reset_user_passwords"/"edit_users". See
+  // UserSerializer.get_user_permissions on the backend.
+  user_permissions: ("create_users" | "delete_users" | "reset_user_passwords" | "edit_users")[];
   // The one permanently-protected super-super-user tier — Django's own
   // builtin field, repurposed here. Always false for everyone except the
   // one account created directly via a one-off shell command; never

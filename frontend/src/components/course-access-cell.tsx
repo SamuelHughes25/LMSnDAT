@@ -24,10 +24,17 @@ export function CourseAccessCell({
   courseId,
   userId,
   assignmentId,
+  canEdit = true,
 }: {
   courseId: string;
   userId: number;
   assignmentId: string | null;
+  // See CourseSerializer.viewer_can_edit_members — an owner always has
+  // this; a plain editor needs the matching PermissionSet sub-permission.
+  // Without it this cell is read-only (a plain "Assigned" badge, no X, or
+  // nothing at all), not hidden entirely — there's still something worth
+  // showing, just nothing to click.
+  canEdit?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -64,6 +71,14 @@ export function CourseAccessCell({
       }
       router.refresh();
     });
+  }
+
+  if (!canEdit) {
+    return assignmentId ? (
+      <Badge variant="secondary">Assigned</Badge>
+    ) : (
+      <span className="text-sm text-muted-foreground">—</span>
+    );
   }
 
   return (

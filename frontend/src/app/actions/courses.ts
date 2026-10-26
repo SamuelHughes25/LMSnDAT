@@ -271,6 +271,51 @@ export async function setCourseEditors(
   }
 }
 
+// The Groups tab's save action, from the course's own side — see
+// CourseViewSet.set_groups's own comment for why this is deliberately NOT
+// a PATCH to /groups/{id}/ (that's still gated by the full 'groups' tab;
+// this lets an owner/editor-with-can_edit_course_groups toggle just THIS
+// course's own membership without needing broader group-management
+// access). Full-replace, same "send the complete list" convention as
+// setCourseEditors above.
+export async function setCourseGroups(
+  courseId: string,
+  groupIds: string[],
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await djangoFetch<Course>(`/courses/${courseId}/set-groups/`, {
+      method: "POST",
+      body: JSON.stringify({ groups: groupIds }),
+    });
+    revalidatePath(`/courses/${courseId}/roles`);
+    return { ok: true };
+  } catch (err) {
+    if (err instanceof DjangoApiError && (err.status === 400 || err.status === 403)) {
+      return { ok: false, error: describeAssignmentError(err) };
+    }
+    throw err;
+  }
+}
+
+// One group's checkbox worth of change, computed into the full-replace
+// list setCourseGroups needs — same "the toggle component only knows
+// about ONE group, the page/action does the list math" shape as
+// toggleCourseInGroup in actions/groups.ts, just from the course's own
+// side. `currentGroupIds` comes from the already-fetched course.group_ids
+// (bound in by the page, same pattern as toggleCourseInGroup.bind(null,
+// group.id, id) there), not re-fetched here.
+export async function toggleCourseGroup(
+  courseId: string,
+  groupId: string,
+  currentGroupIds: string[],
+  add: boolean,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const nextIds = add
+    ? [...new Set([...currentGroupIds, groupId])]
+    : currentGroupIds.filter((gId) => gId !== groupId);
+  return setCourseGroups(courseId, nextIds);
+}
+
 export async function updateCourseAssessmentSettings(
   courseId: string,
   isAssessment: boolean,

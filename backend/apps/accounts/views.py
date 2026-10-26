@@ -5,7 +5,10 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.core.permissions import HasArchiveTabAccess, HasDashboardTabAccess, IsSuperuser, user_can_access_tab
+from apps.core.permissions import (
+    CanManageUsersAdmin, HasArchiveTabAccessOrCanDeleteUsers, HasDashboardTabAccess, IsSuperuser,
+    user_can_access_tab,
+)
 from apps.courses.models import Course
 from apps.templates_app.models import Template
 from .models import Group, PermissionSet, Team, User
@@ -25,18 +28,45 @@ class UserViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ('create', 'update', 'partial_update'):
-            return [HasDashboardTabAccess()]
+            return [CanManageUsersAdmin()]
         if self.action in ('destroy', 'restore', 'purge'):
-            return [HasArchiveTabAccess()]
+            return [HasArchiveTabAccessOrCanDeleteUsers()]
         if self.action in ('grant_platform_admin', 'revoke_platform_admin'):
             # "Only me the super super user can do this" — not tab-based
             # at all, see IsSuperuser's own docstring.
             return [IsSuperuser()]
+        if self.action == 'picker':
+            return [IsAuthenticated()]
         return [IsAuthenticated()]
 
     @action(detail=False, methods=['get'])
     def me(self, request):
         return Response(UserSerializer(request.user, context={'request': request}).data)
+
+    @action(detail=False, methods=['get'])
+    def picker(self, request):
+        # A deliberately minimal, unscoped alternative to the plain
+        # /users/ list — that one is scoped down to self-only for anyone
+        # without the Users tab (get_queryset's own user_can_access_tab
+        # check), which broke the course/template editor and transfer-
+        # ownership search combobox for exactly the people who most need
+        # it: an office user with Courses/Templates tab access but no
+        # Users tab couldn't search up ANY other user to add as an editor
+        # — reported directly as "the search bar disappears, I can't add
+        # anyone I want." Content ownership/editor assignment is its own,
+        # separate concern from the Users admin section, so this returns
+        # id+username only (nothing sensitive — no email, role,
+        # permission_set, etc.) to every authenticated user, same
+        # "minimal public-enough fields" precedent as CourseAssignmentSerializer
+        # /CourseSerializer's own *_username convenience fields. Same
+        # is_superuser exclusion as the plain list action — the
+        # super-super-user still isn't a selectable editor/assignment
+        # target here; ContentOwnershipCard adds them back in separately,
+        # for transfer-ownership only, when the viewer IS the super-super-user.
+        users = User.objects.filter(is_active=True).exclude(is_superuser=True).order_by('username').values(
+            'id', 'username',
+        )[:500]
+        return Response(list(users))
 
     # Self-service only — `detail=False` and always acts on request.user,
     # same "no pk, operates on the caller" shape as `me` above, deliberately

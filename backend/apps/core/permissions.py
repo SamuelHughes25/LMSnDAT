@@ -218,6 +218,164 @@ def user_can_edit_content(user, content, tab):
     return content.owner_id == user.id or content.editors.filter(pk=user.pk).exists()
 
 
+def user_can_manage_course_admin(user, course, sub_permission_attr):
+    """Stricter than user_can_edit_content above — used specifically for a
+    course's Members/Groups/Settings tabs (CourseViewSet.update/
+    partial_update, set_editors, set_groups, and CourseAssignmentViewSet),
+    NOT its builder content (Lesson/Slide/CourseVersion/etc — those stay on
+    user_can_edit_content, unchanged).
+
+    Reflects a deliberate split the user asked for: being an editor is
+    still enough, on its own, to edit a course's actual training content,
+    but touching WHO else can edit it, WHICH groups see it, or its own
+    core metadata needs either being the course's owner outright, or
+    editor status PLUS the matching PermissionSet sub-permission
+    (`sub_permission_attr`, one of 'can_edit_course_members'/
+    'can_edit_course_groups'/'can_edit_course_settings'). Plain
+    can_access_courses tab access is deliberately NOT sufficient here on
+    its own, unlike user_can_edit_content's own bypass — this mirrors the
+    new course-list visibility rule (apps.accounts.serializers
+    .get_manageable_course_ids): a course you're not owner/editor of
+    doesn't show up in your Courses management page at all any more, so
+    letting tab access alone unlock editing one you have no relationship
+    to would be a hole leading right back to the old "any tab-haver can
+    touch any course" behavior this change is meant to close.
+    """
+    if course is None or not (user and user.is_authenticated):
+        return False
+    if user.is_superuser or user.is_platform_admin:
+        return True
+    if user.role == 'member':
+        return False
+    if course.owner_id == user.id:
+        return True
+    # .all() over .filter(pk=...).exists() specifically so this reuses
+    # CourseViewSet's own prefetch_related('editors') cache when this runs
+    # from CourseSerializer's viewer_can_edit_* fields across a LIST of
+    # courses — .filter() always issues a fresh query regardless of any
+    # prefetch, which would otherwise be a 3-query-per-row N+1 (one per
+    # sub-permission field) on the Courses management page.
+    if not any(editor.pk == user.pk for editor in course.editors.all()):
+        return False
+    return bool(user.permission_set and getattr(user.permission_set, sub_permission_attr, False))
+
+
+class CanManageCourseSettings(BasePermission):
+    """Gates CourseViewSet.update/partial_update (the Settings tab's own
+    save action) — see user_can_manage_course_admin's docstring. Reading
+    stays open via get_permissions' own SAFE_METHODS branch; this class is
+    only ever reached for the write methods."""
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated)
+
+    def has_object_permission(self, request, view, obj):
+        return user_can_manage_course_admin(request.user, view.get_owning_content(obj), 'can_edit_course_settings')
+
+
+class CanManageCourseMembers(BasePermission):
+    """Gates CourseViewSet.set_editors and CourseAssignmentViewSet's
+    create/destroy — see user_can_manage_course_admin's docstring.
+    CourseAssignmentViewSet has no get_owning_content of its own (it's not
+    an IsContentOwnerEditorOrAdmin-style viewset), so this reads the
+    course directly off the object (a CourseAssignment has its own
+    `.course`) or, for CourseViewSet itself, via get_owning_content (obj
+    IS the course there)."""
+
+    def has_permission(self, request, view):
+        if request.method in SAFE_METHODS:
+            return bool(request.user and request.user.is_authenticated)
+        if view.action == 'create':
+            # No object yet — CourseAssignmentViewSet.perform_create
+            # re-checks this against the resolved course too, same
+            # "class-level permission is just a safety net, the real
+            # check happens once the parent is resolved" pattern
+            # IsContentOwnerEditorOrAdmin's own docstring describes.
+            return bool(request.user and request.user.is_authenticated)
+        return bool(request.user and request.user.is_authenticated)
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        course = view.get_owning_content(obj) if hasattr(view, 'get_owning_content') else obj.course
+        return user_can_manage_course_admin(request.user, course, 'can_edit_course_members')
+
+
+class CanManageCourseGroups(BasePermission):
+    """Gates CourseViewSet.set_groups — see user_can_manage_course_admin's
+    docstring. Deliberately separate from GroupViewSet's own
+    create/update/destroy (still gated by the plain 'groups' tab,
+    unchanged) — this only ever touches ONE course's membership across
+    groups, from the course's own side, not groups wholesale."""
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated)
+
+    def has_object_permission(self, request, view, obj):
+        return user_can_manage_course_admin(request.user, view.get_owning_content(obj), 'can_edit_course_groups')
+
+
+def user_can_manage_users_admin(user, sub_permission_attr):
+    """True if `user` can perform a specific Users-admin action
+    (sub_permission_attr: one of 'can_create_users'/'can_delete_users'/
+    'can_reset_user_passwords'/'can_edit_users') beyond plain read access.
+    Each sub-permission requires can_access_users itself as a
+    prerequisite — a flag like can_edit_users with the parent tab off is a
+    no-op, same "sub-permission is meaningless without its parent"
+    relationship can_edit_course_* above has with course ownership/editor
+    status. is_superuser/is_platform_admin bypass as always."""
+    if not (user and user.is_authenticated):
+        return False
+    if user.is_superuser or user.is_platform_admin:
+        return True
+    if not user_can_access_tab(user, 'users'):
+        return False
+    return bool(user.permission_set and getattr(user.permission_set, sub_permission_attr, False))
+
+
+class CanManageUsersAdmin(BasePermission):
+    """Gates UserViewSet.create/update/partial_update — splits the old
+    single HasDashboardTabAccess('users') gate into create vs. field-
+    specific update checks. A password-only payload needs
+    can_reset_user_passwords; any other field (role/permission_set/
+    content_groups/team/email/first_name/last_name/etc) needs
+    can_edit_users; a payload touching both needs both. Doesn't special-
+    case self-edits — UserViewSet.update's own is_superuser/
+    is_platform_admin PROTECTION guards (not this class) are what let an
+    is_superuser/is_platform_admin account touch their own row; this
+    class still requires the matching sub-permission regardless of whose
+    row it is, same as the plain tab gate it replaces always did."""
+
+    def has_permission(self, request, view):
+        if not (request.user and request.user.is_authenticated):
+            return False
+        if view.action == 'create':
+            return user_can_manage_users_admin(request.user, 'can_create_users')
+        if view.action in ('update', 'partial_update'):
+            data = request.data
+            if 'password' in data and not user_can_manage_users_admin(request.user, 'can_reset_user_passwords'):
+                return False
+            other_fields = set(data.keys()) - {'password'}
+            if other_fields and not user_can_manage_users_admin(request.user, 'can_edit_users'):
+                return False
+            return True
+        return True
+
+
+class HasArchiveTabAccessOrCanDeleteUsers(BasePermission):
+    """Gates UserViewSet.destroy/restore/purge — additive on top of the
+    plain Archive tab (HasArchiveTabAccess, unchanged for Courses/
+    Templates), not a replacement for it: an Archive-tab admin who
+    manages archiving platform-wide still can, and now a Users-focused
+    admin who was specifically granted can_delete_users (but not the
+    broader Archive tab) can too, without needing both."""
+
+    def has_permission(self, request, view):
+        return user_can_access_tab(request.user, 'archive') or user_can_manage_users_admin(
+            request.user, 'can_delete_users',
+        )
+
+
 class IsContentOwnerEditorOrAdmin(BasePermission):
     """Any authenticated user can read; writing requires being the owner,
     a designated editor, or someone with dashboard access to the relevant

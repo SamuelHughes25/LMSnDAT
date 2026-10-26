@@ -157,8 +157,12 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
                   <Badge variant="outline" className="mt-1">
                     {getUserKindLabel(user)}
                   </Badge>
-                ) : (
+                ) : viewer.user_permissions.includes("edit_users") ? (
                   <UserAccountTypePicker userId={user.id} currentRole={user.role} />
+                ) : (
+                  <Badge variant="outline" className="mt-1">
+                    {getUserKindLabel(user)}
+                  </Badge>
                 )}
               </div>
               <div>
@@ -167,13 +171,17 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
                   <Badge className="mt-1">Super-super-user (protected)</Badge>
                 ) : user.is_platform_admin ? (
                   <Badge className="mt-1">Super user (full access)</Badge>
-                ) : (
+                ) : viewer.user_permissions.includes("edit_users") ? (
                   <UserPermissionSetPicker
                     userId={user.id}
                     currentPermissionSetId={user.permission_set}
                     currentPermissionSetName={user.permission_set_name}
                     availablePermissionSets={permissionSets.results}
                   />
+                ) : (
+                  <Badge variant="secondary" className="mt-1">
+                    {user.permission_set_name ?? "No access"}
+                  </Badge>
                 )}
               </div>
             </div>
@@ -200,6 +208,19 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
                 </div>
               </div>
             )}
+            {/* can_reset_user_passwords — a non-superuser viewer gets just
+                the reset button on its own (no grant/revoke tier control,
+                that stays is_superuser-only above), consistent with the
+                new Users sub-permission split. Never on an is_superuser
+                row regardless (same reasoning as the block above). */}
+            {!viewer.is_superuser && !user.is_superuser && viewer.user_permissions.includes("reset_user_passwords") && (
+              <div>
+                <div className="text-xs text-muted-foreground">Password</div>
+                <div className="mt-1">
+                  <AdminResetPasswordButton userId={user.id} username={user.username} />
+                </div>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -209,7 +230,12 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
           <CardTitle>Groups</CardTitle>
         </CardHeader>
         <CardContent>
-          <UserGroupsEditor userId={user.id} currentGroups={currentGroups} availableGroups={groups.results} />
+          <UserGroupsEditor
+            userId={user.id}
+            currentGroups={currentGroups}
+            availableGroups={groups.results}
+            canEdit={viewer.user_permissions.includes("edit_users")}
+          />
         </CardContent>
       </Card>
 

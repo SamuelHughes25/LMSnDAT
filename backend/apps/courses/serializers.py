@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from apps.core.permissions import user_can_manage_course_admin
 from .constants import SlideType
 from .models import (
     Course, CourseAsset, CourseAssignment, CourseAttempt, CourseDeadlineExtension, CourseVersion, Lesson,
@@ -383,24 +384,44 @@ class CourseSerializer(serializers.ModelSerializer):
     # "Being edited by X" (see CourseViewSet.claim_edit/release_edit for
     # how this actually gets set/cleared).
     currently_editing_by = serializers.SerializerMethodField()
+    # Which Groups currently bundle this course — the reverse side of
+    # Group.courses (related_name='groups'), exposed here so the Groups
+    # tab (roles/page.tsx) can show current membership from the course's
+    # own side without a second round-trip, and so set_groups's caller
+    # knows the current full list before computing a toggle's next state.
+    group_ids = serializers.SerializerMethodField()
+    # Whether the REQUESTING user can save changes on this course's
+    # Members/Groups/Settings tabs respectively — computed here via
+    # user_can_manage_course_admin so the frontend never has to re-derive
+    # owner/editor/sub-permission logic itself (same "precompute it
+    # server-side" convention as UserSerializer.accessible_tabs). All
+    # three are independent: an editor might have one sub-permission but
+    # not another, or none at all (view-only, per the user's own "allows
+    # you to click in and view all the settings... however you shouldn't
+    # be able to edit" framing).
+    viewer_can_edit_members = serializers.SerializerMethodField()
+    viewer_can_edit_groups = serializers.SerializerMethodField()
+    viewer_can_edit_settings = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
         fields = [
             'id', 'name', 'description', 'thumbnail', 'created_by', 'created_by_username', 'is_archived',
             'archived_by', 'archived_by_username', 'archived_at',
-            'owner', 'owner_username', 'editors', 'editor_usernames', 'currently_editing_by',
+            'owner', 'owner_username', 'editors', 'editor_usernames', 'currently_editing_by', 'group_ids',
+            'viewer_can_edit_members', 'viewer_can_edit_groups', 'viewer_can_edit_settings',
             'is_assessment', 'passing_score', 'deadline', 'my_deadline', 'created_at', 'updated_at',
         ]
         # is_archived/archived_by/archived_at/owner/editors are all
         # read-only here — they only ever change together with their own
         # audit trail, via CourseViewSet's destroy/restore/purge/
-        # transfer_ownership/set_editors actions, never a raw PATCH (same
-        # reasoning as UserSerializer's equivalent fields).
+        # transfer_ownership/set_editors/set_groups actions, never a raw
+        # PATCH (same reasoning as UserSerializer's equivalent fields).
         read_only_fields = [
             'id', 'created_by', 'created_by_username', 'created_at', 'updated_at',
             'is_archived', 'archived_by', 'archived_by_username', 'archived_at',
-            'owner', 'owner_username', 'editors', 'editor_usernames', 'currently_editing_by',
+            'owner', 'owner_username', 'editors', 'editor_usernames', 'currently_editing_by', 'group_ids',
+            'viewer_can_edit_members', 'viewer_can_edit_groups', 'viewer_can_edit_settings',
         ]
 
     def get_editor_usernames(self, obj):
@@ -408,6 +429,22 @@ class CourseSerializer(serializers.ModelSerializer):
 
     def get_currently_editing_by(self, obj):
         return obj.editing_user.username if obj.is_being_edited() else None
+
+    def get_group_ids(self, obj):
+        return [g.id for g in obj.groups.all()]
+
+    def _viewer(self):
+        request = self.context.get('request')
+        return request.user if request and request.user.is_authenticated else None
+
+    def get_viewer_can_edit_members(self, obj):
+        return user_can_manage_course_admin(self._viewer(), obj, 'can_edit_course_members')
+
+    def get_viewer_can_edit_groups(self, obj):
+        return user_can_manage_course_admin(self._viewer(), obj, 'can_edit_course_groups')
+
+    def get_viewer_can_edit_settings(self, obj):
+        return user_can_manage_course_admin(self._viewer(), obj, 'can_edit_course_settings')
 
     def get_my_deadline(self, obj):
         request = self.context.get('request')

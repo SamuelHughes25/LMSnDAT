@@ -1,8 +1,8 @@
 import { redirect } from "next/navigation";
+import { Check, X } from "lucide-react";
 
 import { DeletePermissionSetButton } from "@/components/delete-permission-set-button";
-import { NewPermissionSetDialog } from "@/components/new-permission-set-dialog";
-import { PermissionSetTabCheckbox } from "@/components/permission-set-tab-checkbox";
+import { PermissionSetFormDialog } from "@/components/permission-set-form-dialog";
 import {
   Table,
   TableBody,
@@ -14,22 +14,20 @@ import {
 import type { PermissionSet } from "@/lib/accounts-types";
 import { getCurrentUser } from "@/lib/dal";
 import { djangoFetch } from "@/lib/django";
+import { PERMISSION_SET_SECTIONS } from "@/lib/permission-set-sections";
 import type { Paginated } from "@/lib/types";
-
-const TAB_COLUMNS: { field: keyof PermissionSet & `can_access_${string}`; label: string }[] = [
-  { field: "can_access_templates", label: "Templates" },
-  { field: "can_access_courses", label: "Courses" },
-  { field: "can_access_users", label: "Users" },
-  { field: "can_access_groups", label: "Groups" },
-  { field: "can_access_permissions", label: "Permissions" },
-  { field: "can_access_archive", label: "Archive" },
-];
 
 // Replaces the old fixed admin/manager roles — a permission set is a
 // named bundle of dashboard tab access an admin builds themselves (see
 // PermissionSet's own comment in accounts-types.ts), assigned to users
 // from their own profile page. is_superuser/is_platform_admin accounts
 // bypass this entirely and don't need one.
+//
+// The table itself only ever shows the parent tabs (read-only — a plain
+// check/cross, not a clickable toggle) — all actual editing, including
+// the Courses/Users sub-permissions, happens through the Edit dialog
+// (permission-set-form-dialog.tsx), which also doubles as the New
+// permission set form so creating and editing look and work identically.
 export default async function PermissionsPage() {
   const user = await getCurrentUser();
   if (!user.accessible_tabs.includes("permissions")) redirect("/dashboard");
@@ -42,11 +40,11 @@ export default async function PermissionsPage() {
         <div>
           <h1 className="text-2xl font-semibold">Permissions</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Build named bundles of dashboard access, then assign one to each user from their profile page.
-            Checking a tab here gives full access to that section — view, create, edit, and archive.
+            Build named bundles of dashboard access, then assign one to each user from their profile page. Edit a
+            set to grant specific tabs and, for Courses and Users, the finer actions on top of them.
           </p>
         </div>
-        <NewPermissionSetDialog />
+        <PermissionSetFormDialog mode="create" />
       </div>
 
       <div className="mt-4 rounded-lg border-2 border-border bg-card shadow-sm">
@@ -54,35 +52,38 @@ export default async function PermissionsPage() {
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>
-              {TAB_COLUMNS.map((col) => (
-                <TableHead key={col.field} className="text-center">
-                  {col.label}
+              {PERMISSION_SET_SECTIONS.map((section) => (
+                <TableHead key={section.tab} className="text-center">
+                  {section.label}
                 </TableHead>
               ))}
-              <TableHead className="w-10" />
+              <TableHead className="w-20" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {permissionSets.results.map((permissionSet) => (
               <TableRow key={permissionSet.id}>
                 <TableCell className="font-medium">{permissionSet.name}</TableCell>
-                {TAB_COLUMNS.map((col) => (
-                  <TableCell key={col.field} className="text-center">
-                    <PermissionSetTabCheckbox
-                      permissionSetId={permissionSet.id}
-                      field={col.field}
-                      checked={permissionSet[col.field]}
-                    />
+                {PERMISSION_SET_SECTIONS.map((section) => (
+                  <TableCell key={section.tab} className="text-center">
+                    {permissionSet[section.tab] ? (
+                      <Check className="mx-auto h-4 w-4 text-primary" />
+                    ) : (
+                      <X className="mx-auto h-4 w-4 text-muted-foreground/40" />
+                    )}
                   </TableCell>
                 ))}
                 <TableCell>
-                  <DeletePermissionSetButton permissionSetId={permissionSet.id} name={permissionSet.name} />
+                  <div className="flex items-center justify-end gap-1">
+                    <PermissionSetFormDialog mode="edit" permissionSet={permissionSet} />
+                    <DeletePermissionSetButton permissionSetId={permissionSet.id} name={permissionSet.name} />
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
             {permissionSets.results.length === 0 && (
               <TableRow>
-                <TableCell colSpan={TAB_COLUMNS.length + 2} className="text-center text-muted-foreground">
+                <TableCell colSpan={PERMISSION_SET_SECTIONS.length + 2} className="text-center text-muted-foreground">
                   No permission sets yet.
                 </TableCell>
               </TableRow>

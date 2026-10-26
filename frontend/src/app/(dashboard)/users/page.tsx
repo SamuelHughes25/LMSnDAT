@@ -65,7 +65,11 @@ export default async function UsersPage({
     <div>
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Users</h1>
-        <NewUserDialog permissionSets={permissionSets.results} />
+        {/* can_create_users — a separate sub-permission from plain
+            can_access_users now, see PermissionSet's own comment. */}
+        {currentUser.user_permissions.includes("create_users") && (
+          <NewUserDialog permissionSets={permissionSets.results} />
+        )}
       </div>
 
       <div className="mt-4 flex items-center gap-2">
@@ -138,11 +142,18 @@ export default async function UsersPage({
                   </TableCell>
                   <TableCell>{new Date(user.date_joined).toLocaleDateString()}</TableCell>
                   <TableCell>
-                    <DeleteUserButton
-                      userId={user.id}
-                      username={user.username}
-                      disableSelf={user.id === currentUser.id}
-                    />
+                    {/* can_delete_users OR the Archive tab — either path
+                        still reaches destroy/restore/purge server-side
+                        (HasArchiveTabAccessOrCanDeleteUsers), so the
+                        button stays hidden here only when NEITHER does. */}
+                    {(currentUser.user_permissions.includes("delete_users") ||
+                      currentUser.accessible_tabs.includes("archive")) && (
+                      <DeleteUserButton
+                        userId={user.id}
+                        username={user.username}
+                        disableSelf={user.id === currentUser.id}
+                      />
+                    )}
                   </TableCell>
                 </TableRow>
               );

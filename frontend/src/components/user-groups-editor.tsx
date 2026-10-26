@@ -23,10 +23,15 @@ export function UserGroupsEditor({
   userId,
   currentGroups,
   availableGroups,
+  canEdit = true,
 }: {
   userId: number;
   currentGroups: GroupOption[];
   availableGroups: GroupOption[];
+  // See UserSerializer.user_permissions' "edit_users" entry — "user
+  // account changes" explicitly includes group membership. Same
+  // "disabled, not hidden" convention as this app's other canEdit props.
+  canEdit?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
@@ -55,20 +60,26 @@ export function UserGroupsEditor({
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
         {currentGroups.length === 0 && <span className="text-sm text-muted-foreground">No groups yet.</span>}
-        {currentGroups.map((group) => (
-          <Badge key={group.id} variant="secondary" className="gap-1 py-1 pr-1">
-            {group.name}
-            <button
-              type="button"
-              onClick={() => handleRemove(group.id)}
-              disabled={pending && pendingRemoveId === group.id}
-              aria-label={`Remove ${group.name}`}
-              className="rounded-full p-0.5 hover:bg-muted-foreground/20"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </Badge>
-        ))}
+        {currentGroups.map((group) =>
+          canEdit ? (
+            <Badge key={group.id} variant="secondary" className="gap-1 py-1 pr-1">
+              {group.name}
+              <button
+                type="button"
+                onClick={() => handleRemove(group.id)}
+                disabled={pending && pendingRemoveId === group.id}
+                aria-label={`Remove ${group.name}`}
+                className="rounded-full p-0.5 hover:bg-muted-foreground/20"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </Badge>
+          ) : (
+            <Badge key={group.id} variant="secondary">
+              {group.name}
+            </Badge>
+          ),
+        )}
       </div>
 
       {/* Always renders SOME form of the add control — a Select with zero
@@ -80,7 +91,7 @@ export function UserGroupsEditor({
           already in it, the old `addableGroups.length > 0` guard hid this
           entire section, which reads identically to "the add feature isn't
           here" as a genuine missing feature would. */}
-      {availableGroups.length === 0 ? (
+      {!canEdit ? null : availableGroups.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No groups exist yet —{" "}
           <Link href="/groups" className="text-primary hover:underline">

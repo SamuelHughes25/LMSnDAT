@@ -580,6 +580,19 @@ export type Course = {
   // via claimCourseEdit/releaseCourseEdit in actions/courses.ts, never a
   // plain PATCH.
   currently_editing_by: string | null;
+  // Which Groups currently bundle this course — reverse side of
+  // Group.courses, read-only (set via the Groups tab's own setCourseGroups
+  // action, never a plain PATCH).
+  group_ids: string[];
+  // Whether the REQUESTING user can save changes on the Members/Groups/
+  // Settings tabs respectively — server-computed (CourseSerializer's own
+  // viewer_can_edit_* fields), already folding in owner/editor status and
+  // the matching PermissionSet sub-permission so the frontend never has
+  // to re-derive this itself. See apps.core.permissions
+  // .user_can_manage_course_admin for the full reasoning.
+  viewer_can_edit_members: boolean;
+  viewer_can_edit_groups: boolean;
+  viewer_can_edit_settings: boolean;
   // Marks this course as a scored assessment rather than free-form
   // training content. passing_score (0-100) is only meaningful when this
   // is true — see backend/apps/courses/models.py's Course model and

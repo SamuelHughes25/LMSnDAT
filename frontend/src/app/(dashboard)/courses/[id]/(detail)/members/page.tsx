@@ -58,18 +58,21 @@ export default async function CourseMembersPage({
   const usersQuery = new URLSearchParams({ page_size: "200" });
   if (q) usersQuery.set("search", q);
 
-  const [assignments, allGroups, users, allUsers, viewer] = await Promise.all([
+  const [assignments, allGroups, users, pickerUsers, viewer] = await Promise.all([
     djangoFetch<Paginated<CourseAssignment>>(`/course-assignments/?course=${id}&page_size=200`),
     // Resolves each listed user's own full group badge set — same
     // "always show everything, never filtered down" convention
     // groups/[id]/page.tsx already established.
     djangoFetch<Paginated<Group>>("/groups/?page_size=200"),
     djangoFetch<Paginated<AccountUser>>(`/users/?${usersQuery.toString()}`),
-    // Unfiltered — separate from `users` above (which is search-narrowed
-    // for the member table) since the Ownership card's transfer/add-editor
-    // pickers need every user as a candidate regardless of whatever's
-    // typed into the member-table search box.
-    djangoFetch<Paginated<AccountUser>>("/users/?page_size=200"),
+    // /users/picker/, not the plain /users/ list — that one is scoped
+    // down to self-only for anyone without the Users tab, which broke the
+    // Ownership card's transfer/add-editor combobox for exactly the
+    // people who most need it: an editor with Courses tab access but no
+    // Users tab. The picker returns id+username for every active user
+    // regardless of the VIEWER's own Users-tab access — see its own
+    // comment on the backend.
+    djangoFetch<{ id: number; username: string }[]>("/users/picker/"),
     // Whether to even show the transfer-ownership control at all — see
     // ContentOwnershipCard's own comment: that action is is_superuser-only
     // server-side now, so showing it to anyone else would just be a
@@ -92,9 +95,9 @@ export default async function CourseMembersPage({
   // candidates), reading as "I can't transfer ownership at all" rather
   // than "there's no one to transfer it to but me."
   const ownershipCandidates =
-    viewer.is_superuser && !allUsers.results.some((u) => u.id === viewer.id)
-      ? [...allUsers.results, viewer]
-      : allUsers.results;
+    viewer.is_superuser && !pickerUsers.some((u) => u.id === viewer.id)
+      ? [...pickerUsers, { id: viewer.id, username: viewer.username }]
+      : pickerUsers;
   // editors/editor_usernames come from the same obj.editors.all() queryset
   // on the backend (CourseSerializer), ordered identically (User.Meta
   // .ordering = ['username']) — safe to zip by index.
@@ -115,9 +118,10 @@ export default async function CourseMembersPage({
         owner={{ id: course.owner, username: course.owner_username }}
         originalOwnerUsername={course.created_by_username}
         editors={editors}
-        candidateUsers={allUsers.results.map((u) => ({ id: u.id, username: u.username }))}
-        ownershipCandidateUsers={ownershipCandidates.map((u) => ({ id: u.id, username: u.username }))}
+        candidateUsers={pickerUsers}
+        ownershipCandidateUsers={ownershipCandidates}
         viewerIsSuperuser={viewer.is_superuser}
+        canEditMembers={course.viewer_can_edit_members}
       />
 
       <div className="flex items-center justify-between">
@@ -172,6 +176,7 @@ export default async function CourseMembersPage({
                       courseId={id}
                       userId={user.id}
                       assignmentId={assignmentByUserId.get(user.id) ?? null}
+                      canEdit={course.viewer_can_edit_members}
                     />
                   </TableCell>
                 </TableRow>

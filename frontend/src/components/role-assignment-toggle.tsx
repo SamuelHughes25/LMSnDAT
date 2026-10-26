@@ -14,10 +14,15 @@ export function RoleAssignmentToggle({
   group,
   checked,
   onToggle,
+  canEdit = true,
 }: {
   group: { name: string; description: string };
   checked: boolean;
   onToggle: (add: boolean) => Promise<unknown>;
+  // See CourseSerializer.viewer_can_edit_groups — courses only for now.
+  // Still shows the current state, just non-interactive, same "disabled,
+  // not hidden" convention as CourseAccessCell's own read-only fallback.
+  canEdit?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
 
@@ -33,7 +38,7 @@ export function RoleAssignmentToggle({
         <div className="font-medium">{group.name}</div>
         {group.description && <div className="text-sm text-muted-foreground">{group.description}</div>}
       </div>
-      <Checkbox checked={checked} onCheckedChange={(c) => handleChange(c === true)} disabled={pending} />
+      <Checkbox checked={checked} onCheckedChange={(c) => handleChange(c === true)} disabled={pending || !canEdit} />
     </label>
   );
 }

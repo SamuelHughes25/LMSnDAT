@@ -145,7 +145,7 @@ class GroupTests(APIAuthTestCase):
 
 class UserCreationTests(APIAuthTestCase):
     def setUp(self):
-        users_set = PermissionSet.objects.create(name='User Manager', can_access_users=True)
+        users_set = PermissionSet.objects.create(name='User Manager', can_access_users=True, can_create_users=True)
         self.admin = User.objects.create_user(username='admin', password='pw', permission_set=users_set)
         self.group = Group.objects.create(name='Gas Engineers')
 
@@ -320,7 +320,9 @@ class SuperuserProtectionTests(APIAuthTestCase):
         # with Users tab access could silently overwrite the
         # super-super-user's password (a full account takeover) or demote
         # its role. UserViewSet.update is what closes this.
-        users_tab = PermissionSet.objects.create(name='Users Tab', can_access_users=True)
+        users_tab = PermissionSet.objects.create(
+            name='Users Tab', can_access_users=True, can_edit_users=True, can_reset_user_passwords=True,
+        )
         attacker = User.objects.create_user(username='attacker', password='pw', permission_set=users_tab)
         client = self.auth('attacker', 'pw')
         original_role = self.superuser.role
@@ -391,7 +393,9 @@ class PlatformAdminEditProtectionTests(APIAuthTestCase):
         self.platform_admin = User.objects.create_user(
             username='plat_admin', password='pw', role=User.Role.ADMIN, is_platform_admin=True,
         )
-        users_tab = PermissionSet.objects.create(name='Users Tab', can_access_users=True)
+        users_tab = PermissionSet.objects.create(
+            name='Users Tab', can_access_users=True, can_edit_users=True, can_reset_user_passwords=True,
+        )
         self.attacker = User.objects.create_user(username='attacker', password='pw', permission_set=users_tab)
 
     def test_plain_users_tab_admin_cannot_edit_a_platform_admin(self):
