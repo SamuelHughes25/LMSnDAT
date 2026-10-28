@@ -43,5 +43,8 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
 
 export async function logout() {
   await clearAuthCookies();
-  redirect("/login");
+  // "/" is the public marketing home page now (see login()'s own comment
+  // above) — "/login" is the old standalone page, now unreachable from
+  // anywhere else in the app.
+  redirect("/");
 }

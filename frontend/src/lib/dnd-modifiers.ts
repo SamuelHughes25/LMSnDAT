@@ -18,6 +18,15 @@ export const restrictToVerticalAxis: Modifier = ({ transform }) => ({
   x: 0,
 });
 
+// Mirror of restrictToVerticalAxis for a horizontal list (see
+// analytics-stat-slider.tsx) — zeroes out vertical movement so a dragged
+// stat card only ever slides left/right along the track, never off-axis
+// toward the cursor's actual y position.
+export const restrictToHorizontalAxis: Modifier = ({ transform }) => ({
+  ...transform,
+  y: 0,
+});
+
 // Clamps the drag transform so the dragged item's own bounding box can
 // never move outside its container's bounding box — this is what actually
 // stops a slide from visually floating anywhere on the screen while

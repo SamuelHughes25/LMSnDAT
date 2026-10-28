@@ -259,7 +259,19 @@ export function AppShell({
         </button>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col">
+      {/* min-w-0 — without it, this flex-row item defaults to
+          min-width:auto, so a wide-enough page (any fixed-width content
+          that doesn't wrap, like analytics-stat-slider.tsx's card track)
+          lets this column grow past the space actually available next to
+          the sidebar instead of shrinking to it. The outer shell's own
+          overflow-hidden then just CLIPS that extra width at the browser
+          edge rather than scrolling to it — confirmed as exactly what cut
+          the analytics page's stat slider's own right-scroll button off
+          the edge of the screen instead of the slider scrolling to reveal
+          it internally, as main's own overflow-y-auto sibling rule
+          (overflow-x computes to auto, not visible, once overflow-y is
+          set) already intends for any content that genuinely needs it. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* Hidden on the course player specifically — one more "give the
             content the whole screen" request on top of the sidebar
             auto-collapse above, and it's not just wasted space here: with

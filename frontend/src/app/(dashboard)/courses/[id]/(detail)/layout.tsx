@@ -31,7 +31,7 @@ export default async function CourseDetailLayout({
     // h-full flex column (not the previous plain block div): gives the
     // content row below a genuine, bounded remaining height to hand to
     // `self-stretch` — most of the four tabs sharing this layout
-    // (settings/members/activity/analytics) never needed that, they're
+    // (settings/members/version-history/analytics) never needed that, they're
     // fine with their own natural height and `main`'s own overflow-y-auto
     // scrolling if they ever run long, same as before. The preview tab is
     // the one that needs a real ceiling to fit its canvas under instead of

@@ -287,6 +287,20 @@ class CourseVersionViewSet(viewsets.ModelViewSet):
         published = services.publish_version(version, request.user)
         return Response(CourseVersionSerializer(published).data)
 
+    @action(detail=True, methods=['post'])
+    def revert(self, request, pk=None):
+        version = self.get_object()
+        try:
+            new_draft = services.revert_to_version(version, request.user)
+        except ValueError as e:
+            # services.revert_to_version's own "a draft already exists"
+            # guard raises plain ValueError — turned into a real 400 here
+            # (not DRF's default 500-on-unhandled-exception) so the
+            # frontend's existing extractErrorDetail convention picks up
+            # a clean {detail: "..."} message instead of a stack trace.
+            raise ValidationError({'detail': str(e)})
+        return Response(CourseVersionSerializer(new_draft).data, status=201)
+
 
 class LessonViewSet(viewsets.ModelViewSet):
     queryset = Lesson.objects.all()

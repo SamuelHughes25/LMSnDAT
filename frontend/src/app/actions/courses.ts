@@ -106,6 +106,32 @@ export async function deleteCourseDraft(
   }
 }
 
+// Clones `sourceVersionId`'s own lessons/slides into a brand new,
+// unpublished draft (see services.revert_to_version on the backend) — the
+// version-history tab's "revert to this version" action. Same
+// {ok,error} shape as deleteCourseDraft above, for the same reason: the
+// one real failure mode (a draft already in progress) is an expected,
+// recoverable business-rule rejection, not a crash, so the confirm
+// dialog can show it inline instead of a generic error boundary.
+export async function revertToVersion(
+  courseId: string,
+  sourceVersionId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await djangoFetch<CourseVersion>(`/course-versions/${sourceVersionId}/revert/`, {
+      method: "POST",
+    });
+    revalidatePath(`/courses/${courseId}`);
+    return { ok: true };
+  } catch (err) {
+    if (err instanceof DjangoApiError) {
+      const detail = extractErrorDetail(err, "Couldn't revert to this version right now.");
+      return { ok: false, error: detail ?? "Couldn't revert to this version right now." };
+    }
+    throw err;
+  }
+}
+
 // --- Hard edit lock ("someone's already in the builder") ---
 //
 // NOT real-time collaborative editing — see Course.editing_user's own

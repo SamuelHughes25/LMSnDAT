@@ -2,6 +2,31 @@
 
 import type { CourseAttempt, SlideResult } from "@/lib/attempt-types";
 import { djangoFetch } from "@/lib/django";
+import type { Paginated } from "@/lib/types";
+
+// Read-only check for the course player's own "Continue where you left off,
+// or start again?" prompt (see course-preview-viewer.tsx) — unlike
+// startCourseAttempt, this never creates anything, so it's safe to call
+// before the learner has made that choice. Already scoped to "my own
+// attempts only" for a member by CourseAttemptViewSet.get_queryset's own
+// role-scoping, same as startCourseAttempt.
+export async function getInProgressAttempt(courseVersionId: string): Promise<CourseAttempt | null> {
+  const results = await djangoFetch<Paginated<CourseAttempt>>(
+    `/course-attempts/?course_version=${courseVersionId}&status=in_progress`,
+  );
+  return results.results[0] ?? null;
+}
+
+// "Start again": discards the still-in_progress attempt outright (its
+// SlideResults cascade-delete with it — see CourseAttempt's FK on the
+// backend) so startCourseAttempt's own resume-or-create call genuinely
+// creates a fresh one afterward, rather than resuming the very attempt the
+// learner just chose to abandon. Only ever called on an IN_PROGRESS attempt
+// — a COMPLETED one's score/answers are the permanent record "Retake"
+// already preserves by creating an entirely new attempt instead.
+export async function discardCourseAttempt(attemptId: string): Promise<void> {
+  await djangoFetch<void>(`/course-attempts/${attemptId}/`, { method: "DELETE" });
+}
 
 // RESUMES the caller's own existing in_progress attempt at this course
 // version if one already exists, rather than always creating a new one —

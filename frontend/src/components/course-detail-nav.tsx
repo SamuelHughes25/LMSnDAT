@@ -18,12 +18,18 @@ export function CourseDetailNav({ courseId }: { courseId: string }) {
     { href: `${base}/members`, label: "Members" },
     { href: `${base}/roles`, label: "Groups" },
     { href: `${base}/settings`, label: "Settings" },
-    { href: `${base}/activity`, label: "Activity" },
+    { href: `${base}/version-history`, label: "Version history" },
     { href: `${base}/analytics`, label: "Analytics" },
   ];
 
   return (
-    <nav className="w-48 shrink-0 space-y-1">
+    // w-40 (was w-48) — every label here ("Analytics" is the longest) fits
+    // comfortably well under this with room to spare, so the extra 32px
+    // was just unused whitespace; freeing it gives the content column next
+    // to this nav (particularly analytics-stat-slider.tsx's own card
+    // track) a little more room before it needs to fade/scroll its own
+    // content — reported directly as a way to claw back space for it.
+    <nav className="w-40 shrink-0 space-y-1">
       {links.map((link) => {
         // Overview's href equals the base course URL, so it must match
         // exactly (not by prefix) or every sub-page would highlight it too.

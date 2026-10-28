@@ -644,3 +644,78 @@ export const SLIDE_TYPE_LABELS: Record<SlideType, string> = {
   sequencing: "Sequencing",
   hotspot_image: "Hotspot Image",
 };
+
+// Rough, display-only plain-text extraction from a slide's authored HTML
+// question/prompt field — used only to show a short, readable label in the
+// course Analytics tab's per-question stats and attempt breakdown, never
+// rendered via dangerouslySetInnerHTML. Unlike stripHtml in lib/utils.ts,
+// this doesn't need real DOM-parsing accuracy (no nested-markup edge cases
+// matter for a truncated analytics label) and has to work from a Server
+// Component, where `document` doesn't exist — a plain regex is fine here
+// specifically because the output is never trusted as sanitized HTML.
+function plainTextFromHtml(html: string): string {
+  return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Best-effort "what is this question actually asking" text for a gradable
+// slide, pulled from whichever config field that slide_type uses as its
+// main authored prompt (see SlideConfig's own per-type field comments
+// above: question/paragraph/instructions). accordion/flashcards/
+// hotspot_image have no such field — their UI is already self-explanatory
+// ("open every section," "review every card," "find every hotspot"), so
+// this returns null for those rather than a misleading empty string; call
+// sites fall back to SLIDE_TYPE_LABELS instead.
+export function getSlideQuestionText(slide: Pick<Slide, "slide_type" | "config">): string | null {
+  const field =
+    slide.slide_type === "multiple_choice"
+      ? "question"
+      : slide.slide_type === "missing_word"
+        ? "paragraph"
+        : slide.slide_type === "sequencing" || slide.slide_type === "match_pairs"
+          ? "instructions"
+          : null;
+  if (!field) return null;
+  const raw = slide.config[field];
+  if (typeof raw !== "string") return null;
+  const text = plainTextFromHtml(raw);
+  return text.length > 0 ? text : null;
+}
+
+// Everything the course Analytics tab needs to label a SlideResult without
+// re-reading the raw Slide/config itself — built once per course-versions
+// fetch (see buildSlideAnalyticsIndex below) and looked up by slide id.
+export type SlideAnalyticsInfo = {
+  // 1-indexed position within its OWN CourseVersion, counting every slide
+  // (content included, not just gradable ones) in lesson-then-slide order —
+  // deliberately the exact same numbering course-preview-viewer.tsx shows
+  // the learner as "Slide X of N", so a manager reading "Slide 7 was wrong"
+  // here matches what the learner themselves saw.
+  number: number;
+  slideType: SlideType;
+  questionText: string | null;
+  versionNumber: number;
+};
+
+// Different CourseVersions of the same course have entirely different Slide
+// rows (a republish creates fresh copies — slides are never edited after
+// their version is published), so this indexes EVERY version's slides by
+// their own id, not just the currently-published one — a completed
+// CourseAttempt can reference a slide from a since-superseded version, and
+// that history should still resolve to a real label instead of "Slide ?".
+export function buildSlideAnalyticsIndex(versions: CourseVersion[]): Record<string, SlideAnalyticsInfo> {
+  const index: Record<string, SlideAnalyticsInfo> = {};
+  for (const version of versions) {
+    const orderedSlides = [...version.lessons]
+      .sort((a, b) => a.order - b.order)
+      .flatMap((lesson) => [...lesson.slides].sort((a, b) => a.order - b.order));
+    orderedSlides.forEach((slide, i) => {
+      index[slide.id] = {
+        number: i + 1,
+        slideType: slide.slide_type,
+        questionText: getSlideQuestionText(slide),
+        versionNumber: version.version_number,
+      };
+    });
+  }
+  return index;
+}

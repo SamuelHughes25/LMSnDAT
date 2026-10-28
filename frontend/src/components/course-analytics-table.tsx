@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { AccountUser } from "@/lib/accounts-types";
 import type { CourseAttempt } from "@/lib/attempt-types";
+import { SLIDE_TYPE_LABELS, type SlideAnalyticsInfo } from "@/lib/course-types";
 import { cn } from "@/lib/utils";
 
 // Grouped-by-user summary row, aggregated in the server component (see
@@ -43,6 +44,15 @@ export type UserSummary = {
 function PassedBadge({ passed, isAssessment }: { passed: boolean | null; isAssessment: boolean }) {
   if (!isAssessment) return <span className="text-muted-foreground">N/A</span>;
   return passed ? <Badge>Passed</Badge> : <Badge variant="destructive">Failed</Badge>;
+}
+
+// Same two-color convention as PassedBadge, one level down — per-QUESTION
+// correctness within a single attempt, not the attempt's own overall
+// pass/fail (which stays assessment-gated; a single slide's right/wrong is
+// meaningful on every course, assessment or not — see slideStats' own
+// comment on analytics/page.tsx for why that section isn't gated either).
+function SlideCorrectBadge({ correct }: { correct: boolean }) {
+  return correct ? <Badge>Correct</Badge> : <Badge variant="destructive">Incorrect</Badge>;
 }
 
 // One user's effective deadline for this course (their own extension if
@@ -127,6 +137,7 @@ export function CourseAnalyticsTable({
   courseId,
   isAssessment,
   deadlineByUser,
+  slideInfoById,
 }: {
   summaries: UserSummary[];
   usersById: Record<number, AccountUser>;
@@ -137,8 +148,13 @@ export function CourseAnalyticsTable({
   // Deadline column only ever appears for a course that actually has one
   // to show/edit.
   deadlineByUser?: Record<number, string | null>;
+  // Labels every SlideResult an attempt sub-row can expand into — see
+  // buildSlideAnalyticsIndex (lib/course-types.ts) for how this gets built
+  // once, server-side, in analytics/page.tsx.
+  slideInfoById: Record<string, SlideAnalyticsInfo>;
 }) {
   const [expandedUserId, setExpandedUserId] = useState<number | null>(null);
+  const [expandedAttemptId, setExpandedAttemptId] = useState<string | null>(null);
   const showDeadlineColumn = deadlineByUser !== undefined;
   const columnCount = showDeadlineColumn ? 7 : 6;
 
@@ -199,7 +215,10 @@ export function CourseAnalyticsTable({
                       size="icon-sm"
                       aria-label={isOpen ? `Hide ${label}'s attempts` : `Show ${label}'s attempts`}
                       aria-expanded={isOpen}
-                      onClick={() => setExpandedUserId(isOpen ? null : summary.userId)}
+                      onClick={() => {
+                        setExpandedUserId(isOpen ? null : summary.userId);
+                        setExpandedAttemptId(null);
+                      }}
                     >
                       <ChevronDown className={cn("h-4 w-4 transition-transform", isOpen && "rotate-180")} />
                     </Button>
@@ -222,26 +241,93 @@ export function CourseAnalyticsTable({
                     inline in a table cell than a badge shape does) names
                     the section without the earlier caption line's verbosity. */}
                 {isOpen &&
-                  attempts.map((attempt, index) => (
-                    <TableRow
-                      key={attempt.id}
-                      className={cn("bg-muted hover:bg-muted", index === 0 && "border-t-2 border-t-border")}
-                    >
-                      <TableCell>
-                        {index === 0 && (
-                          <span className="text-xs font-semibold text-muted-foreground">Attempt history</span>
+                  attempts.map((attempt, index) => {
+                    const isAttemptOpen = expandedAttemptId === attempt.id;
+                    const hasSlideResults = attempt.slide_results.length > 0;
+                    // Question order, not submission order — same numbering
+                    // as slideInfoById's own "Slide X of N" (see
+                    // buildSlideAnalyticsIndex); unresolvable slides (no
+                    // metadata — shouldn't happen, but see that function's
+                    // own defensive-skip reasoning) sort last rather than
+                    // crashing the comparator.
+                    const orderedResults = [...attempt.slide_results].sort(
+                      (a, b) =>
+                        (slideInfoById[a.slide]?.number ?? Number.MAX_SAFE_INTEGER) -
+                        (slideInfoById[b.slide]?.number ?? Number.MAX_SAFE_INTEGER),
+                    );
+                    return (
+                      <Fragment key={attempt.id}>
+                        <TableRow className={cn("bg-muted hover:bg-muted", index === 0 && "border-t-2 border-t-border")}>
+                          <TableCell>
+                            {index === 0 && (
+                              <span className="text-xs font-semibold text-muted-foreground">Attempt history</span>
+                            )}
+                          </TableCell>
+                          <TableCell />
+                          <TableCell>{attempt.score === null ? "—" : `${attempt.score}%`}</TableCell>
+                          <TableCell>
+                            <PassedBadge passed={attempt.passed} isAssessment={isAssessment} />
+                          </TableCell>
+                          <TableCell>{new Date(attempt.started_at).toLocaleDateString()}</TableCell>
+                          {showDeadlineColumn && <TableCell />}
+                          <TableCell>
+                            {hasSlideResults && (
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                aria-label={
+                                  isAttemptOpen
+                                    ? "Hide this attempt's question-by-question results"
+                                    : "Show this attempt's question-by-question results"
+                                }
+                                aria-expanded={isAttemptOpen}
+                                onClick={() => setExpandedAttemptId(isAttemptOpen ? null : attempt.id)}
+                              >
+                                <ChevronDown
+                                  className={cn("h-4 w-4 transition-transform", isAttemptOpen && "rotate-180")}
+                                />
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                        {/* Third level: this one attempt's own question-by-
+                            question breakdown. A single colSpan'd cell with
+                            its own compact list, not more same-width
+                            columns like the two levels above — a slide
+                            result has no "attempts"/"best score"/"deadline"
+                            concept to put in those columns, so reusing them
+                            here would mean mostly-blank cells rather than
+                            genuinely aligned data. */}
+                        {isAttemptOpen && (
+                          <TableRow className="bg-muted hover:bg-muted">
+                            <TableCell colSpan={columnCount} className="py-2">
+                              <div className="space-y-1.5 rounded-md border bg-card p-2">
+                                {orderedResults.map((result) => {
+                                  const info = slideInfoById[result.slide];
+                                  return (
+                                    <div key={result.id} className="flex items-start justify-between gap-3 text-sm">
+                                      <div className="min-w-0 truncate">
+                                        <span className="mr-2 font-medium text-muted-foreground">
+                                          Slide {info?.number ?? "?"}
+                                        </span>
+                                        <span
+                                          className={cn(!info?.questionText && "text-muted-foreground")}
+                                          title={info?.questionText ?? undefined}
+                                        >
+                                          {info?.questionText ?? (info ? SLIDE_TYPE_LABELS[info.slideType] : "Question")}
+                                        </span>
+                                      </div>
+                                      <SlideCorrectBadge correct={result.is_correct} />
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </TableCell>
+                          </TableRow>
                         )}
-                      </TableCell>
-                      <TableCell />
-                      <TableCell>{attempt.score === null ? "—" : `${attempt.score}%`}</TableCell>
-                      <TableCell>
-                        <PassedBadge passed={attempt.passed} isAssessment={isAssessment} />
-                      </TableCell>
-                      <TableCell>{new Date(attempt.started_at).toLocaleDateString()}</TableCell>
-                      {showDeadlineColumn && <TableCell />}
-                      <TableCell />
-                    </TableRow>
-                  ))}
+                      </Fragment>
+                    );
+                  })}
               </Fragment>
             );
           })}

@@ -1,10 +1,28 @@
+import { type AnalyticsStat, AnalyticsStatSlider } from "@/components/analytics-stat-slider";
 import { CourseAnalyticsTable, type UserSummary } from "@/components/course-analytics-table";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { AccountUser } from "@/lib/accounts-types";
 import type { CourseAttempt, CourseDeadlineExtension } from "@/lib/attempt-types";
-import type { Course } from "@/lib/course-types";
+import {
+  buildSlideAnalyticsIndex,
+  SLIDE_TYPE_LABELS,
+  type Course,
+  type CourseVersion,
+  type SlideType,
+} from "@/lib/course-types";
 import { djangoFetch } from "@/lib/django";
 import type { Paginated } from "@/lib/types";
+
+// One gradable slide's aggregate right/wrong record across every attempt
+// ever submitted against it (any version — see buildSlideAnalyticsIndex's
+// own comment on why a slide id is never reused across a republish).
+type SlideStat = {
+  slideId: string;
+  total: number;
+  correct: number;
+  number: number;
+  slideType: SlideType;
+  questionText: string | null;
+};
 
 // A simple, dependency-free horizontal bar — no charting library exists
 // anywhere in this frontend and "basic" metrics don't warrant adding one
@@ -30,11 +48,51 @@ export default async function CourseAnalyticsPage({ params }: { params: Promise<
 
   // page_size=200 (DRF's configured max — see backend/apps/core/pagination.py)
   // rather than building pagination UI, fine at this app's scale.
-  const [course, attempts] = await Promise.all([
+  const [course, attempts, versions] = await Promise.all([
     djangoFetch<Course>(`/courses/${id}/`),
     djangoFetch<Paginated<CourseAttempt>>(`/course-attempts/?course=${id}&page_size=200`),
+    // Every version, not just the published one — see
+    // buildSlideAnalyticsIndex's own comment on why a completed attempt can
+    // still reference a slide from a since-superseded version.
+    djangoFetch<Paginated<CourseVersion>>(`/course-versions/?course=${id}&page_size=200`),
   ]);
   const allAttempts = attempts.results;
+  const slideInfoById = buildSlideAnalyticsIndex(versions.results);
+
+  // Per-question difficulty, aggregated across every SlideResult on every
+  // fetched attempt (including still in_progress ones — a submitted answer
+  // is real signal about that question regardless of whether the learner
+  // ever finished the rest of the course). Slides with no metadata (an
+  // orphaned reference — shouldn't happen, but see the same defensive
+  // skip pattern elsewhere in this app) are left out rather than shown
+  // with a broken label.
+  const slideTotals = new Map<string, { total: number; correct: number }>();
+  for (const attempt of allAttempts) {
+    for (const result of attempt.slide_results) {
+      const entry = slideTotals.get(result.slide) ?? { total: 0, correct: 0 };
+      entry.total += 1;
+      if (result.is_correct) entry.correct += 1;
+      slideTotals.set(result.slide, entry);
+    }
+  }
+  const slideStats: SlideStat[] = Array.from(slideTotals.entries())
+    .map(([slideId, { total, correct }]) => {
+      const info = slideInfoById[slideId];
+      return info
+        ? { slideId, total, correct, number: info.number, slideType: info.slideType, questionText: info.questionText }
+        : null;
+    })
+    .filter((s): s is SlideStat => s !== null)
+    // Hardest (lowest correct rate) first — doubling as what makes
+    // slideStats[0]/slideStats.at(-1) below the most-failed/most-passed
+    // stat cards without a separate sort. Shown independently (each only
+    // needs ONE qualifying slide, not two) — when there's exactly one
+    // gradable slide with any data at all, both cards legitimately point
+    // at the same slide; that's not a bug, there's just nothing to
+    // contrast it against yet.
+    .sort((a, b) => a.correct / a.total - b.correct / b.total);
+  const mostFailed = slideStats.length > 0 ? slideStats[0] : null;
+  const mostPassed = slideStats.length > 0 ? slideStats[slideStats.length - 1] : null;
   const completed = allAttempts.filter((a) => a.status === "completed");
   const scored = completed.filter((a) => a.score !== null);
   const graded = completed.filter((a) => a.passed !== null);
@@ -102,61 +160,60 @@ export default async function CourseAnalyticsPage({ params }: { params: Promise<
     );
   }
 
+  // The slider's card set — 5 always-present course-level stats, plus up
+  // to 2 more only once there's real per-question data to show (see
+  // mostFailed/mostPassed above). Every card stays in this row regardless
+  // of how many there are — it's a slider specifically so the row never
+  // needs to shed cards to fit; extras just scroll off rather than being
+  // dropped. Order here is just this array's construction order, i.e. the
+  // DEFAULT before any per-browser reordering — AnalyticsStatSlider owns
+  // actually arranging/persisting what the viewer sees.
+  const stats: AnalyticsStat[] = [
+    // Attempts on the COURSE — one row per full play-through
+    // (CourseAttempt), never a per-slide/per-question count (that's what
+    // SlideResult is, and it never surfaces as a top-level metric here).
+    { id: "attempts", label: "Attempts", value: allAttempts.length },
+    {
+      id: "avgAttempts",
+      label: "Avg. attempts per person",
+      value: averageAttemptsPerPerson === null ? "—" : averageAttemptsPerPerson.toFixed(1),
+    },
+    { id: "usersAttempted", label: "Users attempted", value: uniqueUserIds.length },
+    { id: "avgScore", label: "Average score", value: averageScore === null ? "—" : `${Math.round(averageScore)}%` },
+    { id: "passRate", label: "Pass rate", value: passRate === null ? "—" : `${Math.round(passRate)}%` },
+  ];
+  if (mostFailed) {
+    stats.push({
+      id: "mostFailed",
+      label: "Most failed question",
+      value: `Slide ${mostFailed.number}`,
+      detail: `${mostFailed.questionText ?? SLIDE_TYPE_LABELS[mostFailed.slideType]} · ${mostFailed.correct}/${mostFailed.total} (${Math.round((mostFailed.correct / mostFailed.total) * 100)}%)`,
+    });
+  }
+  if (mostPassed) {
+    stats.push({
+      id: "mostPassed",
+      label: "Most passed question",
+      value: `Slide ${mostPassed.number}`,
+      detail: `${mostPassed.questionText ?? SLIDE_TYPE_LABELS[mostPassed.slideType]} · ${mostPassed.correct}/${mostPassed.total} (${Math.round((mostPassed.correct / mostPassed.total) * 100)}%)`,
+    });
+  }
+
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
-        <Card>
-          <CardHeader>
-            {/* Attempts on the COURSE — one row per full play-through
-                (CourseAttempt), never a per-slide/per-question count (that's
-                what SlideResult is, and it never surfaces as a top-level
-                metric here). */}
-            <CardTitle className="text-sm text-muted-foreground">Attempts</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-semibold">{allAttempts.length}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">Avg. attempts per person</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-semibold">
-              {averageAttemptsPerPerson === null ? "—" : averageAttemptsPerPerson.toFixed(1)}
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">Users attempted</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-semibold">{uniqueUserIds.length}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">Average score</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-semibold">
-              {averageScore === null ? "—" : `${Math.round(averageScore)}%`}
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">Pass rate</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-semibold">{passRate === null ? "—" : `${Math.round(passRate)}%`}</div>
-          </CardContent>
-        </Card>
-      </div>
+      <AnalyticsStatSlider stats={stats} />
 
       {(averageScore !== null || passRate !== null) && (
-        <div className="max-w-md space-y-3 rounded-lg border-2 border-border bg-card p-4 shadow-sm">
+        // ml-10 — matches the slider's own left arrow column (w-9) + its
+        // gap-1 to the card track in analytics-stat-slider.tsx, so this
+        // box's left edge lines up with the first STAT CARD above it, not
+        // with the page's plain left margin (which is where it sat before
+        // — reported directly as looking out of position once the arrows
+        // moved into their own reserved column instead of overlaying the
+        // cards). Deliberately NOT applied to the table further down —
+        // that one still aligns with the page's own heading/breadcrumb,
+        // which is the more natural match for a full-width element.
+        <div className="ml-10 max-w-md space-y-3 rounded-lg border-2 border-border bg-card p-4 shadow-sm">
           {averageScore !== null && <StatBar label="Average score" percent={averageScore} />}
           {passRate !== null && <StatBar label="Pass rate" percent={passRate} />}
         </div>
@@ -169,6 +226,7 @@ export default async function CourseAnalyticsPage({ params }: { params: Promise<
         courseId={id}
         isAssessment={course.is_assessment}
         deadlineByUser={deadlineByUser}
+        slideInfoById={slideInfoById}
       />
     </div>
   );

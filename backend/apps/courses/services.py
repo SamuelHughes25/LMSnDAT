@@ -100,6 +100,40 @@ def import_reusable_lesson(reusable_lesson, target_version, order):
 
 
 @transaction.atomic
+def revert_to_version(source_version, user):
+    """Starts a new, unpublished draft cloned from `source_version`'s own
+    lessons/slides — the version-history tab's "revert to this version"
+    action. Deliberately NOT a variant of create_draft_version above: that
+    function always clones from the course's latest version and silently
+    reuses an existing draft if one's already open; reverting needs to
+    clone from an arbitrary (often much older) version instead, and must
+    NOT silently fold into — or overwrite — a draft the author might
+    already be partway through, so it refuses outright if one exists
+    rather than guessing which content should win.
+    """
+    course = source_version.course
+    if course.versions.filter(status=CourseVersion.Status.DRAFT).exists():
+        raise ValueError(
+            'This course already has an unpublished draft in progress. '
+            'Publish or delete it before reverting to an older version.'
+        )
+
+    # last_version always exists here — source_version is itself one of
+    # course.versions, so this can never be None the way
+    # create_draft_version's own lookup can be for a brand new course.
+    last_version = course.versions.order_by('-version_number').first()
+    new_version = CourseVersion.objects.create(
+        course=course,
+        version_number=last_version.version_number + 1,
+        status=CourseVersion.Status.DRAFT,
+        created_by=user,
+        transition_style=source_version.transition_style,
+    )
+    _clone_lessons(source_version, new_version)
+    return new_version
+
+
+@transaction.atomic
 def publish_version(version, user):
     if version.status != CourseVersion.Status.DRAFT:
         raise ValueError('Only draft versions can be published.')

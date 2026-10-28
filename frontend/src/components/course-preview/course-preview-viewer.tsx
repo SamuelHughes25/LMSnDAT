@@ -4,7 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
-import { completeCourseAttempt, startCourseAttempt, submitSlideResult } from "@/app/actions/attempts";
+import {
+  completeCourseAttempt,
+  discardCourseAttempt,
+  getInProgressAttempt,
+  startCourseAttempt,
+  submitSlideResult,
+} from "@/app/actions/attempts";
 import { ActiveEditorProvider } from "@/components/course-builder/active-editor-context";
 import { CANVAS_H, CANVAS_W } from "@/components/course-builder/slide-canvas";
 import { SLIDE_TYPE_FACES } from "@/components/course-builder/slide-faces";
@@ -13,6 +19,14 @@ import { SlideSelectionProvider } from "@/components/course-builder/slide-select
 import { SnapGuideProvider } from "@/components/course-builder/snap-guide-context";
 import { TextBoxPlacementProvider } from "@/components/course-builder/text-box-placement-context";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import type { CourseAttempt } from "@/lib/attempt-types";
 import type { Slide } from "@/lib/course-types";
 import type { SlideInteractionResult } from "@/lib/slide-interaction";
@@ -135,6 +149,17 @@ export function CoursePreviewViewer({
     attemptIdRef.current = attemptId;
   }, [attemptId]);
 
+  // Set only when the mount effect below finds an existing in_progress
+  // attempt on a NON-assessment course — the learner left partway through
+  // last time without clicking Finish, and the course player used to just
+  // silently resume onto it. An assessment course keeps that old silent-
+  // resume behavior unconditionally (no prompt here at all): retaking an
+  // assessment mid-attempt isn't a "pick up where you left off" convenience
+  // the same way a plain informational course is, and nothing about
+  // scored/pass-fail content should ever invite "start again" by default.
+  const [resumePrompt, setResumePrompt] = useState<CourseAttempt | null>(null);
+  const [resumeDecisionPending, setResumeDecisionPending] = useState(false);
+
   const isTrackingAttempt = Boolean(attemptTracking);
 
   // startCourseAttempt RESUMES an existing in_progress attempt at this
@@ -204,7 +229,29 @@ export function CoursePreviewViewer({
   }, [attemptTracking, slides]);
 
   useEffect(() => {
-    startAttempt();
+    // Non-assessment courses only get the resume/start-again prompt — see
+    // resumePrompt's own comment above. getInProgressAttempt is a pure read
+    // (unlike startCourseAttempt, it never creates anything), so it's safe
+    // to call before the learner has made that choice; startAttempt only
+    // ever runs once a decision is actually in effect, either because
+    // there was nothing to decide (no existing attempt / an assessment
+    // course) or because the learner just picked one via the dialog below.
+    if (attemptTracking && !attemptTracking.isAssessment) {
+      getInProgressAttempt(attemptTracking.courseVersionId)
+        .then((existing) => {
+          if (existing) setResumePrompt(existing);
+          else startAttempt();
+        })
+        .catch(() => {
+          // Best-effort, same reasoning as startAttempt's own catch below —
+          // if the check itself fails, fall back to the always-safe
+          // resume-or-create call rather than leaving the learner stuck on
+          // a course that never starts.
+          startAttempt();
+        });
+    } else {
+      startAttempt();
+    }
     // Mount-only — startAttempt itself is stable per attemptTracking
     // identity, and re-running this on every render would restart the
     // attempt endlessly.
@@ -213,13 +260,38 @@ export function CoursePreviewViewer({
 
   // "Retake": a real user event (a button click), so synchronously
   // resetting local state here — unlike in the mount effect above — is
-  // completely ordinary, not the pattern the lint rule warns about.
+  // completely ordinary, not the pattern the lint rule warns about. Only
+  // ever reachable after a completed attempt (see the render below), so
+  // there's never an existing in_progress one here to prompt about — this
+  // always goes straight to startAttempt, same as before.
   function handleRetake() {
     setCompletedAttempt(null);
     setResults({});
     setCurrentIndex(0);
     setAttemptId(null);
     startAttempt();
+  }
+
+  function handleContinueResume() {
+    setResumePrompt(null);
+    startAttempt();
+  }
+
+  function handleStartOver() {
+    if (!resumePrompt) return;
+    setResumeDecisionPending(true);
+    discardCourseAttempt(resumePrompt.id)
+      .then(startAttempt)
+      .catch(() => {
+        // Best-effort: if discarding it failed, startAttempt still runs
+        // (it just resumes the attempt that's still there — the learner
+        // keeps going rather than being left on a stuck prompt).
+        startAttempt();
+      })
+      .finally(() => {
+        setResumeDecisionPending(false);
+        setResumePrompt(null);
+      });
   }
 
   const handleInteraction = useCallback(
@@ -318,6 +390,30 @@ export function CoursePreviewViewer({
       <SlideSelectionProvider>
         <SnapGuideProvider>
           <TextBoxPlacementProvider>
+          {/* Forced choice, not a dismissible confirm — no close button, and
+              onOpenChange/disablePointerDismissal both ignore an outside
+              click or Escape, since "do nothing" isn't a valid third option
+              here (the learner is sitting on an existing in_progress
+              attempt either way; this dialog is just deciding which one). */}
+          <Dialog open={resumePrompt !== null} onOpenChange={() => {}} disablePointerDismissal>
+            <DialogContent showCloseButton={false} className="sm:max-w-sm">
+              <DialogHeader>
+                <DialogTitle>Resume this course?</DialogTitle>
+                <DialogDescription>
+                  You left this course partway through last time. Continue where you left off, or start again from
+                  the beginning?
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="outline" disabled={resumeDecisionPending} onClick={handleStartOver}>
+                  {resumeDecisionPending ? "Starting over…" : "Start again"}
+                </Button>
+                <Button disabled={resumeDecisionPending} onClick={handleContinueResume}>
+                  Continue where I left off
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
           {/* h-full flex column: the caller (either the admin preview tab's
               self-stretch content slot, or the portal player's min-h-0
               flex-1 wrapper) is expected to hand this a genuinely bounded
