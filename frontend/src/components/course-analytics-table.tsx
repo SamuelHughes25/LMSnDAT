@@ -1,16 +1,25 @@
 "use client";
 
-import { Fragment, useState, useTransition } from "react";
-import { ChevronDown, Pencil } from "lucide-react";
+import { Fragment, useMemo, useState, useTransition } from "react";
+import { ChevronDown, ListFilter, Pencil } from "lucide-react";
 
 import { removeDeadlineExtension, setDeadlineExtension } from "@/app/actions/deadlines";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { AccountUser } from "@/lib/accounts-types";
+import { ScrollableTableContainer } from "@/components/scrollable-table-container";
+import { ACCOUNT_TYPES, FilterCategory } from "@/components/user-filters-panel";
 import type { CourseAttempt } from "@/lib/attempt-types";
-import { SLIDE_TYPE_LABELS, type SlideAnalyticsInfo } from "@/lib/course-types";
+import { describeSlideAnswer, QUESTION_SLIDE_TYPES, SLIDE_TYPE_LABELS, type SlideAnalyticsInfo } from "@/lib/course-types";
 import { cn } from "@/lib/utils";
 
 // Grouped-by-user summary row, aggregated in the server component (see
@@ -21,6 +30,23 @@ export type UserSummary = {
   bestScore: number | null;
   passed: boolean | null;
   lastAttemptAt: string;
+};
+
+// Deliberately NOT AccountUser — that requires a per-user /users/{id}/
+// fetch, which is Users-tab-gated and 404s for anyone else once the
+// viewer doesn't hold that tab (UserViewSet.get_queryset falls back to
+// self-only without it). This table's own viewer only ever needs these
+// four fields to label/filter a row, and analytics/page.tsx now builds
+// this straight from each attempt's own denormalized user_*  fields (see
+// CourseAttemptSerializer's own comment) instead of a separate fetch —
+// confirmed directly as the fix for a course editor without the Users
+// tab seeing this whole table crash the instant the course had more than
+// one attempting user.
+export type AttemptUserInfo = {
+  username: string;
+  role: string;
+  permission_set: string | null;
+  permission_set_name: string | null;
 };
 
 // An assessment attempt is always either Passed or Failed, never a bare
@@ -56,13 +82,27 @@ function SlideCorrectBadge({ correct }: { correct: boolean }) {
 }
 
 // One user's effective deadline for this course (their own extension if
-// they have one, else the course's own default — see
-// Course.effective_deadline_for() in backend/apps/courses/models.py) plus
-// a small inline editor for granting/changing that extension. Surfaced
+// they have one, else deadline_days after their own CourseAccessGrant —
+// see Course.effective_deadline_for() in backend/apps/courses/models.py)
+// plus a small inline editor for granting/changing that extension. Surfaced
 // here, in the same table an admin/manager is already looking at this
 // course's users through, rather than a separate page — this is where
-// they'd realistically notice someone needs more time.
-function DeadlineCell({ courseId, userId, effectiveDeadline }: { courseId: string; userId: number; effectiveDeadline: string | null }) {
+// they'd realistically notice someone needs more time. The pencil only
+// renders at all for a viewer with canEditDeadlines (its own sub-
+// permission, separate from general course-member management — see
+// CanManageCourseDeadlines on the backend) — everyone else just sees the
+// date, same read-only treatment as every other column here.
+function DeadlineCell({
+  courseId,
+  userId,
+  effectiveDeadline,
+  canEdit,
+}: {
+  courseId: string;
+  userId: number;
+  effectiveDeadline: string | null;
+  canEdit: boolean;
+}) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(effectiveDeadline ?? "");
   const [pending, startTransition] = useTransition();
@@ -71,14 +111,16 @@ function DeadlineCell({ courseId, userId, effectiveDeadline }: { courseId: strin
     return (
       <div className="flex items-center gap-1">
         <span>{effectiveDeadline ? new Date(effectiveDeadline).toLocaleDateString() : "—"}</span>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={`Edit deadline for user ${userId}`}
-          onClick={() => setEditing(true)}
-        >
-          <Pencil className="h-3 w-3" />
-        </Button>
+        {canEdit && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Edit deadline for user ${userId}`}
+            onClick={() => setEditing(true)}
+          >
+            <Pencil className="h-3 w-3" />
+          </Button>
+        )}
       </div>
     );
   }
@@ -136,14 +178,20 @@ export function CourseAnalyticsTable({
   attemptsByUser,
   courseId,
   isAssessment,
+  canEditDeadlines,
   deadlineByUser,
   slideInfoById,
 }: {
   summaries: UserSummary[];
-  usersById: Record<number, AccountUser>;
+  usersById: Record<number, AttemptUserInfo>;
   attemptsByUser: Record<number, CourseAttempt[]>;
   courseId: string;
   isAssessment: boolean;
+  // Whether the viewer can edit deadlines on this course at all — see
+  // DeadlineCell's own comment. Irrelevant (and unused) when
+  // deadlineByUser is undefined, since there's no Deadline column to put
+  // a pencil in either way.
+  canEditDeadlines: boolean;
   // Omitted entirely when the course has no deadline set at all — the
   // Deadline column only ever appears for a course that actually has one
   // to show/edit.
@@ -155,32 +203,149 @@ export function CourseAnalyticsTable({
 }) {
   const [expandedUserId, setExpandedUserId] = useState<number | null>(null);
   const [expandedAttemptId, setExpandedAttemptId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [selectedRoles, setSelectedRoles] = useState<Set<string>>(new Set());
+  const [selectedPermissionSets, setSelectedPermissionSets] = useState<Set<string>>(new Set());
   const showDeadlineColumn = deadlineByUser !== undefined;
   const columnCount = showDeadlineColumn ? 7 : 6;
 
+  // Every permission set actually held by someone in THIS course's user
+  // list — not the full site-wide list of permission sets (most of which
+  // would have nothing to do with this course's users and just be dead
+  // options), derived straight from usersById rather than a separate fetch.
+  const availablePermissionSets = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const user of Object.values(usersById)) {
+      if (user.permission_set && user.permission_set_name) byId.set(user.permission_set, user.permission_set_name);
+    }
+    return [...byId.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [usersById]);
+
+  const activeAccountTypeCount = ACCOUNT_TYPES.filter((type) => type.roles.every((r) => selectedRoles.has(r))).length;
+  const activeFilterCount = activeAccountTypeCount + selectedPermissionSets.size;
+
+  function toggleRoleGroup(roles: string[]) {
+    setSelectedRoles((current) => {
+      const next = new Set(current);
+      const isActive = roles.every((r) => next.has(r));
+      for (const r of roles) {
+        if (isActive) next.delete(r);
+        else next.add(r);
+      }
+      return next;
+    });
+  }
+
+  function togglePermissionSet(id: string) {
+    setSelectedPermissionSets((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // Plain local filter, not a URL param — every row's data (usersById,
+  // attemptsByUser) is already fully loaded client-side for this table, so
+  // there's no server round trip to debounce/wait on the way the main
+  // Users list's UsersSearchBar needs.
+  const query = search.trim().toLowerCase();
+  const visibleSummaries = summaries.filter((s) => {
+    const user = usersById[s.userId];
+    const label = user?.username ?? String(s.userId);
+    if (query && !label.toLowerCase().includes(query)) return false;
+    if (selectedRoles.size > 0 && !(user && selectedRoles.has(user.role))) return false;
+    if (selectedPermissionSets.size > 0 && !(user?.permission_set && selectedPermissionSets.has(user.permission_set)))
+      return false;
+    return true;
+  });
+  const hasActiveFilters = query.length > 0 || activeFilterCount > 0;
+
   return (
     <div className="rounded-lg border-2 border-border bg-card shadow-sm">
-      {/* table-fixed + explicit column widths below — without this, the
-          browser's default "auto" table layout recomputes every column's
-          width from whichever rows happen to be in the DOM, so expanding a
-          row (adding cells with different content/widths, like the blank
-          history sub-row cells) visibly shifted every column in the WHOLE
-          table, summary rows included. Fixed widths make column widths
-          depend only on the header row, never on which rows are expanded. */}
-      <Table className="table-fixed">
-        <TableHeader>
-          <TableRow>
-            <TableHead className="w-[24%]">Username</TableHead>
-            <TableHead className="w-[10%]">Attempts</TableHead>
-            <TableHead className="w-[13%]">Best score</TableHead>
-            <TableHead className="w-[13%]">Result</TableHead>
-            <TableHead className="w-[16%]">Last attempt</TableHead>
-            {showDeadlineColumn && <TableHead className="w-[18%]">Deadline</TableHead>}
-            <TableHead className="w-10" />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {summaries.map((summary) => {
+      <div className="flex items-center gap-2 border-b border-border p-3">
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by username…"
+          className="w-64"
+        />
+        <DropdownMenu>
+          <DropdownMenuTrigger render={<Button variant="outline" size="sm" />}>
+            <ListFilter className="h-3.5 w-3.5" />
+            Filters
+            {activeFilterCount > 0 && (
+              <Badge variant="secondary" className="ml-1 px-1.5">
+                {activeFilterCount}
+              </Badge>
+            )}
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-64">
+            <FilterCategory label="Account type" count={activeAccountTypeCount}>
+              {ACCOUNT_TYPES.map((type) => (
+                <DropdownMenuCheckboxItem
+                  key={type.label}
+                  checked={type.roles.every((r) => selectedRoles.has(r))}
+                  onCheckedChange={() => toggleRoleGroup(type.roles)}
+                >
+                  {type.label}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </FilterCategory>
+            {availablePermissionSets.length > 0 && (
+              <>
+                <DropdownMenuSeparator />
+                <FilterCategory label="Permissions" count={selectedPermissionSets.size}>
+                  {availablePermissionSets.map((permissionSet) => (
+                    <DropdownMenuCheckboxItem
+                      key={permissionSet.id}
+                      checked={selectedPermissionSets.has(permissionSet.id)}
+                      onCheckedChange={() => togglePermissionSet(permissionSet.id)}
+                    >
+                      {permissionSet.name}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                </FilterCategory>
+              </>
+            )}
+            {activeFilterCount > 0 && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => {
+                    setSelectedRoles(new Set());
+                    setSelectedPermissionSets(new Set());
+                  }}
+                >
+                  Clear filters
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      <ScrollableTableContainer>
+        {/* table-fixed + explicit column widths below — without this, the
+            browser's default "auto" table layout recomputes every column's
+            width from whichever rows happen to be in the DOM, so expanding a
+            row (adding cells with different content/widths, like the blank
+            history sub-row cells) visibly shifted every column in the WHOLE
+            table, summary rows included. Fixed widths make column widths
+            depend only on the header row, never on which rows are expanded. */}
+        <Table className="table-fixed">
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[24%]">Username</TableHead>
+              <TableHead className="w-[10%]">Attempts</TableHead>
+              <TableHead className="w-[13%]">Best score</TableHead>
+              <TableHead className="w-[13%]">Result</TableHead>
+              <TableHead className="w-[16%]">Last attempt</TableHead>
+              {showDeadlineColumn && <TableHead className="w-[18%]">Deadline</TableHead>}
+              <TableHead className="w-10" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {visibleSummaries.map((summary) => {
             const user = usersById[summary.userId];
             const label = user?.username ?? String(summary.userId);
             const isOpen = expandedUserId === summary.userId;
@@ -206,6 +371,7 @@ export function CourseAnalyticsTable({
                         courseId={courseId}
                         userId={summary.userId}
                         effectiveDeadline={deadlineByUser[summary.userId] ?? null}
+                        canEdit={canEditDeadlines}
                       />
                     </TableCell>
                   )}
@@ -243,14 +409,25 @@ export function CourseAnalyticsTable({
                 {isOpen &&
                   attempts.map((attempt, index) => {
                     const isAttemptOpen = expandedAttemptId === attempt.id;
-                    const hasSlideResults = attempt.slide_results.length > 0;
+                    // Only the four genuine question types (see
+                    // QUESTION_SLIDE_TYPES' own comment) ever appear in this
+                    // breakdown — accordion/flashcards/hotspot_image are
+                    // self-paced completion gates with no right/wrong
+                    // concept, so showing them here as a "question" that's
+                    // always Correct would be actively misleading, not just
+                    // unhelpful.
+                    const questionResults = attempt.slide_results.filter((r) => {
+                      const info = slideInfoById[r.slide];
+                      return info && QUESTION_SLIDE_TYPES.has(info.slideType);
+                    });
+                    const hasSlideResults = questionResults.length > 0;
                     // Question order, not submission order — same numbering
                     // as slideInfoById's own "Slide X of N" (see
                     // buildSlideAnalyticsIndex); unresolvable slides (no
                     // metadata — shouldn't happen, but see that function's
                     // own defensive-skip reasoning) sort last rather than
                     // crashing the comparator.
-                    const orderedResults = [...attempt.slide_results].sort(
+                    const orderedResults = [...questionResults].sort(
                       (a, b) =>
                         (slideInfoById[a.slide]?.number ?? Number.MAX_SAFE_INTEGER) -
                         (slideInfoById[b.slide]?.number ?? Number.MAX_SAFE_INTEGER),
@@ -304,17 +481,48 @@ export function CourseAnalyticsTable({
                               <div className="space-y-1.5 rounded-md border bg-card p-2">
                                 {orderedResults.map((result) => {
                                   const info = slideInfoById[result.slide];
+                                  // info is always defined here — orderedResults is
+                                  // already filtered to slides with resolvable
+                                  // metadata (see questionResults above) — but the
+                                  // fallbacks stay as a defensive guard, same as the
+                                  // rest of this file's slideInfoById lookups.
+                                  const { answer, correctAnswer } = info
+                                    ? describeSlideAnswer(info.slideType, info.config, result.detail)
+                                    : { answer: null, correctAnswer: null };
                                   return (
-                                    <div key={result.id} className="flex items-start justify-between gap-3 text-sm">
-                                      <div className="min-w-0 truncate">
+                                    <div
+                                      key={result.id}
+                                      className="flex items-start justify-between gap-3 text-sm"
+                                    >
+                                      <div className="min-w-0">
                                         <span className="mr-2 font-medium text-muted-foreground">
-                                          Slide {info?.number ?? "?"}
+                                          Slide {info?.number ?? "?"}:
                                         </span>
                                         <span
                                           className={cn(!info?.questionText && "text-muted-foreground")}
                                           title={info?.questionText ?? undefined}
                                         >
                                           {info?.questionText ?? (info ? SLIDE_TYPE_LABELS[info.slideType] : "Question")}
+                                        </span>
+                                        {/* Answer shown either way — even when
+                                            right, a manager reviewing this later
+                                            may not know the answer off the top of
+                                            their head. Correct answer only added
+                                            on top of that when wrong; when right,
+                                            the answer given already IS the correct
+                                            one, so repeating it a second time would
+                                            add nothing. */}
+                                        <span className="ml-2 text-xs text-muted-foreground">
+                                          — Answer:{" "}
+                                          <span className={cn(!answer && "italic")}>
+                                            {answer ?? "No answer given"}
+                                          </span>
+                                          {!result.is_correct && correctAnswer && (
+                                            <>
+                                              {" · Correct answer: "}
+                                              <span className="font-medium text-foreground">{correctAnswer}</span>
+                                            </>
+                                          )}
                                         </span>
                                       </div>
                                       <SlideCorrectBadge correct={result.is_correct} />
@@ -331,15 +539,23 @@ export function CourseAnalyticsTable({
               </Fragment>
             );
           })}
-          {summaries.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={columnCount} className="text-center text-muted-foreground">
-                No one has attempted this course yet.
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
+            {summaries.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={columnCount} className="text-center text-muted-foreground">
+                  No one has attempted this course yet.
+                </TableCell>
+              </TableRow>
+            )}
+            {summaries.length > 0 && visibleSummaries.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={columnCount} className="text-center text-muted-foreground">
+                  {hasActiveFilters ? "No users match the current search/filters." : "No users match this search."}
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </ScrollableTableContainer>
     </div>
   );
 }

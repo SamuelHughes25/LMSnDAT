@@ -2,10 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { toggleCourseGroup } from "@/app/actions/courses";
+import { AccessDenied } from "@/components/access-denied";
 import { RoleAssignmentToggle } from "@/components/role-assignment-toggle";
 import type { Group } from "@/lib/accounts-types";
 import type { Course } from "@/lib/course-types";
 import { DjangoApiError, djangoFetch } from "@/lib/django";
+import { hasTabAccess } from "@/lib/role-access";
 import type { Paginated } from "@/lib/types";
 
 // Lets an admin pick which group(s) this course belongs to — a group's own
@@ -24,6 +26,26 @@ export default async function CourseRolesPage({ params }: { params: Promise<{ id
     if (err instanceof DjangoApiError && err.status === 404) notFound();
     throw err;
   }
+
+  // Hard gate, not just hiding the edit controls — this tab is full
+  // capability or nothing, same "one on/off switch, no read-only tier"
+  // design as every other course sub-permission (see course-detail-nav.tsx's
+  // own matching Groups-link gate). Previously this page rendered
+  // regardless, for anyone who could merely view the course at all.
+  if (!course.viewer_can_edit_groups) {
+    return <AccessDenied message="You don't have permission to manage this course's groups." />;
+  }
+
+  // Needs its own, SEPARATE permission check — can_edit_course_groups only
+  // grants picking which EXISTING groups this course belongs to, not the
+  // ability to create new ones (that's the global Groups tab). Reported
+  // directly as a real gap: the "no groups yet" empty state below used to
+  // link to /groups unconditionally, which a course editor without that
+  // tab can't actually open — the backend now also refuses to even list
+  // Groups for a portal member (GroupViewSet's own IsOfficeUser gate), but
+  // an office user without the tab could still reach a page they can't use
+  // without this.
+  const canManageGroupsGlobally = await hasTabAccess("groups");
 
   const groups = await djangoFetch<Paginated<Group>>("/groups/");
 
@@ -54,11 +76,17 @@ export default async function CourseRolesPage({ params }: { params: Promise<{ id
           ))}
           {groups.results.length === 0 && (
             <p className="rounded-lg border-2 border-border bg-card p-4 text-center text-sm text-muted-foreground shadow-sm">
-              No groups yet —{" "}
-              <Link href="/groups" className="text-primary hover:underline">
-                create one
-              </Link>{" "}
-              first.
+              {canManageGroupsGlobally ? (
+                <>
+                  No groups yet —{" "}
+                  <Link href="/groups" className="text-primary hover:underline">
+                    create one
+                  </Link>{" "}
+                  first.
+                </>
+              ) : (
+                "No groups yet — ask someone with Groups access to create one."
+              )}
             </p>
           )}
         </div>

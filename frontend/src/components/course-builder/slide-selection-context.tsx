@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 // Every independently-selectable thing on the slide canvas — each text box
@@ -34,8 +34,9 @@ import type { ReactNode } from "react";
 // no extra reset effect required, and one less thing to keep in sync with
 // slide-canvas.tsx's own key={slide.id} remount boundary.
 type SlideSelectionContextValue = {
-  selectedId: string | null;
-  select: (id: string) => void;
+  selectedIds: Set<string>;
+  isSelected: (id: string) => boolean;
+  select: (id: string, additive: boolean) => void;
   // Functional-updater under the hood (see the comment on `deselect` in the
   // provider) — only clears the slot if `id` is still the one currently
   // selected, so a stale/late deselect from a box that's already lost the
@@ -49,15 +50,40 @@ type SlideSelectionContextValue = {
 const SlideSelectionContext = createContext<SlideSelectionContextValue | null>(null);
 
 export function SlideSelectionProvider({ children }: { children: ReactNode }) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+
+  // additive = e.shiftKey at the pointerdown/click that triggered this —
+  // true toggles `id`'s membership in the existing set (standard
+  // shift-click behavior: already selected -> remove it, not selected ->
+  // add it), false replaces the set with just `id`. Only a move-band
+  // pointerdown (positionable-box.tsx, background-image-field.tsx) ever
+  // passes true — focus-driven selection (clicking into a box's own text
+  // content to edit it) always passes false, since "start typing here"
+  // should never silently fold that box into an existing multi-selection.
+  const select = useCallback((id: string, additive: boolean) => {
+    setSelectedIds((current) => {
+      if (!additive) return new Set([id]);
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const deselect = useCallback((id: string) => {
+    setSelectedIds((current) => {
+      if (!current.has(id)) return current;
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const isSelected = useCallback((id: string) => selectedIds.has(id), [selectedIds]);
 
   const value = useMemo<SlideSelectionContextValue>(
-    () => ({
-      selectedId,
-      select: (id) => setSelectedId(id),
-      deselect: (id) => setSelectedId((current) => (current === id ? null : current)),
-    }),
-    [selectedId],
+    () => ({ selectedIds, isSelected, select, deselect }),
+    [selectedIds, isSelected, select, deselect],
   );
 
   return <SlideSelectionContext.Provider value={value}>{children}</SlideSelectionContext.Provider>;

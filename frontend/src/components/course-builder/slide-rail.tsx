@@ -11,15 +11,16 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { BookmarkPlus, ChevronDown, ChevronRight, GripVertical, Library, Plus, Trash2 } from "lucide-react";
+import { BookmarkPlus, ChevronDown, ChevronRight, GripVertical, LayoutTemplate, Library, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { Lesson, SlideType } from "@/lib/course-types";
+import type { Lesson, SlideTemplate, SlideType } from "@/lib/course-types";
 import { restrictToParentElement, restrictToVerticalAxis } from "@/lib/dnd-modifiers";
 import { cn } from "@/lib/utils";
 import { AddSlideMenu } from "./add-slide-menu";
 import { ManageLessonsDialog } from "./manage-lessons-dialog";
+import { ManageSlideTemplatesDialog } from "./manage-slide-templates-dialog";
 import { SaveLessonDialog } from "./save-lesson-dialog";
 import { SlideThumbnail } from "./slide-thumbnail";
 
@@ -31,37 +32,56 @@ import { SlideThumbnail } from "./slide-thumbnail";
 // isn't supported).
 export function SlideRail({
   lessons,
+  slideTemplates,
   selectedLessonId,
   selectedSlideId,
   onSelectLesson,
   onSelectSlide,
   onLessonTitleChange,
+  onLessonTitleFocus,
+  onLessonTitleBlur,
   onDeleteLesson,
   onDeleteSlide,
   onSlideDragEnd,
   onLessonDragEnd,
   onAddSlide,
+  onImportSlideTemplate,
+  onRenameSlideTemplate,
+  onReorderSlideTemplates,
+  onDeleteSlideTemplate,
   onAddLesson,
   onSaveLessonAsReusable,
   onImportLesson,
 }: {
   lessons: Lesson[];
+  slideTemplates: SlideTemplate[];
   selectedLessonId: string | null;
   selectedSlideId: string | null;
   onSelectLesson: (lessonId: string) => void;
   onSelectSlide: (lessonId: string, slideId: string) => void;
   onLessonTitleChange: (lessonId: string, title: string) => void;
+  // See course-builder.tsx's lessonTitleBaselineRef comment — this is the
+  // one plain per-keystroke text input in the builder, so it's the one
+  // that needs an explicit focus/blur pair to coalesce undo history into
+  // one step per edit session instead of one per character.
+  onLessonTitleFocus: (lessonId: string) => void;
+  onLessonTitleBlur: (lessonId: string) => void;
   onDeleteLesson: (lessonId: string) => void;
   onDeleteSlide: (lessonId: string, slideId: string) => void;
   onSlideDragEnd: (lessonId: string, event: DragEndEvent) => void;
   onLessonDragEnd: (event: DragEndEvent) => void;
   onAddSlide: (lessonId: string, type: SlideType) => void;
+  onImportSlideTemplate: (lessonId: string, slideTemplateId: string) => void;
+  onRenameSlideTemplate: (slideTemplateId: string, name: string) => Promise<void>;
+  onReorderSlideTemplates: (reordered: SlideTemplate[]) => void;
+  onDeleteSlideTemplate: (slideTemplateId: string) => Promise<void>;
   onAddLesson: () => void;
   onSaveLessonAsReusable: (lessonId: string, name: string, description: string) => Promise<void>;
   onImportLesson: (reusableLessonId: string) => Promise<void>;
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const [manageDialogOpen, setManageDialogOpen] = useState(false);
+  const [manageTemplatesOpen, setManageTemplatesOpen] = useState(false);
 
   return (
     <div className="flex h-full flex-col">
@@ -77,10 +97,14 @@ export function SlideRail({
                 onSelect={() => onSelectLesson(lesson.id)}
                 onSelectSlide={(slideId) => onSelectSlide(lesson.id, slideId)}
                 onTitleChange={(title) => onLessonTitleChange(lesson.id, title)}
+                onTitleFocus={() => onLessonTitleFocus(lesson.id)}
+                onTitleBlur={() => onLessonTitleBlur(lesson.id)}
                 onDelete={() => onDeleteLesson(lesson.id)}
                 onDeleteSlide={(slideId) => onDeleteSlide(lesson.id, slideId)}
                 onSlideDragEnd={(event) => onSlideDragEnd(lesson.id, event)}
                 onAddSlide={(type) => onAddSlide(lesson.id, type)}
+                slideTemplates={slideTemplates}
+                onImportSlideTemplate={(slideTemplateId) => onImportSlideTemplate(lesson.id, slideTemplateId)}
                 onSaveAsReusable={(name, description) => onSaveLessonAsReusable(lesson.id, name, description)}
               />
             ))}
@@ -101,9 +125,25 @@ export function SlideRail({
         >
           <Library className="h-4 w-4" />
         </Button>
+        <Button
+          variant="outline"
+          onClick={() => setManageTemplatesOpen(true)}
+          aria-label="Manage slide templates"
+          title="Manage slide templates"
+        >
+          <LayoutTemplate className="h-4 w-4" />
+        </Button>
       </div>
 
       <ManageLessonsDialog open={manageDialogOpen} onOpenChange={setManageDialogOpen} onImport={onImportLesson} />
+      <ManageSlideTemplatesDialog
+        open={manageTemplatesOpen}
+        onOpenChange={setManageTemplatesOpen}
+        templates={slideTemplates}
+        onRename={onRenameSlideTemplate}
+        onReorder={onReorderSlideTemplates}
+        onDelete={onDeleteSlideTemplate}
+      />
     </div>
   );
 }
@@ -115,10 +155,14 @@ function LessonSection({
   onSelect,
   onSelectSlide,
   onTitleChange,
+  onTitleFocus,
+  onTitleBlur,
   onDelete,
   onDeleteSlide,
   onSlideDragEnd,
   onAddSlide,
+  slideTemplates,
+  onImportSlideTemplate,
   onSaveAsReusable,
 }: {
   lesson: Lesson;
@@ -127,10 +171,14 @@ function LessonSection({
   onSelect: () => void;
   onSelectSlide: (slideId: string) => void;
   onTitleChange: (title: string) => void;
+  onTitleFocus: () => void;
+  onTitleBlur: () => void;
   onDelete: () => void;
   onDeleteSlide: (slideId: string) => void;
   onSlideDragEnd: (event: DragEndEvent) => void;
   onAddSlide: (type: SlideType) => void;
+  slideTemplates: SlideTemplate[];
+  onImportSlideTemplate: (slideTemplateId: string) => void;
   onSaveAsReusable: (name: string, description: string) => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -187,6 +235,8 @@ function LessonSection({
         <Input
           value={lesson.title}
           onChange={(e) => onTitleChange(e.target.value)}
+          onFocus={onTitleFocus}
+          onBlur={onTitleBlur}
           onClick={(e) => e.stopPropagation()}
           className="h-7 flex-1 border-transparent bg-transparent text-sm font-medium shadow-none focus-visible:border-input focus-visible:bg-background"
         />
@@ -259,7 +309,7 @@ function LessonSection({
             </SortableContext>
           </DndContext>
 
-          <AddSlideMenu onSelect={onAddSlide} />
+          <AddSlideMenu templates={slideTemplates} onSelect={onAddSlide} onSelectTemplate={onImportSlideTemplate} />
         </div>
       )}
     </div>

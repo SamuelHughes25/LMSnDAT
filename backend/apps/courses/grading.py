@@ -17,6 +17,8 @@ one-draft-per-course constraint), so `slide.config` read here is always
 the exact content the learner actually saw.
 """
 
+import re
+
 
 def _multiple_choice(config, detail):
     options = config.get('options') or []
@@ -122,13 +124,27 @@ _GRADERS = {
     'flashcards': _flashcards,
 }
 
-# Public: which slide_type values are actually gradable/interactive, for
-# CourseAttemptViewSet.complete() to enumerate every assessment slide a
-# course has — not just the ones a learner happened to submit a SlideResult
-# for. A slide type with no grader (content, or any future type not yet
-# wired above) never contributes a SlideResult row at all (its present-mode
-# component never calls onInteraction), so it's correctly excluded here too.
+# Public: every slide_type that has a grader wired above and therefore
+# produces a real SlideResult row at all (a type with no grader — content,
+# or any future type not yet wired here — never contributes one; its
+# present-mode component never calls onInteraction in the first place).
 GRADABLE_SLIDE_TYPES = frozenset(_GRADERS)
+
+# The SUBSET of GRADABLE_SLIDE_TYPES that are genuine questions with a
+# reachable wrong answer: multiple_choice/missing_word/sequencing/match_pairs
+# all let a learner submit something incorrect. accordion/hotspot_image
+# (via _id_set_covers) and flashcards are deliberately excluded — they're
+# self-paced "view every section/find every hotspot/flip every card"
+# completion gates, structurally incapable of ever grading as wrong (their
+# present-mode components only call onInteraction once EVERY element has
+# been visited), so is_correct is always True once they fire at all. Treating
+# them as scoreable questions — which is what happened before this constant
+# existed — silently inflated every course's score/pass-fail with a handful
+# of guaranteed-free points and mislabeled pure interactivity as an
+# assessment question. Used by CourseAttemptViewSet.complete() for the
+# score/pass-fail denominator, and mirrored on the frontend
+# (course-types.ts's QUESTION_SLIDE_TYPES) for the analytics breakdown.
+SCORABLE_SLIDE_TYPES = frozenset({'multiple_choice', 'missing_word', 'sequencing', 'match_pairs'})
 
 
 def grade_slide(slide, detail):
@@ -145,3 +161,50 @@ def grade_slide(slide, detail):
         return False, 0.0
     config = slide.config or {}
     return grader(config, detail if isinstance(detail, dict) else {})
+
+
+_HTML_TAG_RE = re.compile(r'<[^>]*>')
+
+
+def _has_real_text(value):
+    return isinstance(value, str) and bool(_HTML_TAG_RE.sub(' ', value).strip())
+
+
+def slide_is_configured(slide):
+    """Whether a SCORABLE_SLIDE_TYPES slide actually has the minimum real
+    content needed to BE a question, as opposed to an empty placeholder a
+    course author added in the builder and never finished (a blank
+    question, a missing_word slide with no blanks defined, etc). Reported
+    directly: a course with two such unfinished placeholder slides left in
+    its published version was permanently docking a learner two points off
+    their score for questions they were never actually capable of
+    answering right or wrong — SCORABLE_SLIDE_TYPES membership alone isn't
+    enough, since that's a property of the slide TYPE, not of whether this
+    particular slide instance was ever actually finished being authored.
+
+    missing_word/sequencing/match_pairs already refuse to grade an empty
+    one as correct (see each one's own early return above) — reused here
+    so emptiness is only ever defined once. multiple_choice has no
+    equivalent case in its own grader (a blank `question` with real,
+    correctly-flagged options still grades the selection normally), so
+    it's checked here instead: the builder's own MultipleChoiceStatic
+    (course-builder/slide-faces/multiple-choice-slide-face.tsx) always
+    renders a literal "Click to add question"/"Untitled question"
+    placeholder when this is blank — there's no other way for a learner to
+    even know what's being asked, so a blank one was never a real
+    question. sequencing/match_pairs' own `instructions` field is
+    deliberately NOT checked the same way as multiple_choice's `question`
+    — unlike that field, `instructions` is optional even on a fully real,
+    intentional question (see e.g. match-pairs-slide-face.tsx's own
+    conditional rendering, which only shows it at all when non-empty), so
+    an empty one there says nothing about whether the slide is finished.
+    """
+    config = slide.config or {}
+    if slide.slide_type == 'multiple_choice':
+        return _has_real_text(config.get('question'))
+    content_key = {'missing_word': 'blanks', 'sequencing': 'sequence_items', 'match_pairs': 'pairs'}.get(
+        slide.slide_type,
+    )
+    if content_key is None:
+        return False
+    return bool(config.get(content_key))

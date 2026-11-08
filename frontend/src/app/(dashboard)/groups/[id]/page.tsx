@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
+import { AccessDenied } from "@/components/access-denied";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -11,11 +12,20 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { ScrollableTableContainer } from "@/components/scrollable-table-container";
+import { UserFiltersPanel } from "@/components/user-filters-panel";
 import { UsersSearchBar } from "@/components/users-search-bar";
-import type { AccountUser, Group } from "@/lib/accounts-types";
+import type { AccountUser, Group, PermissionSet } from "@/lib/accounts-types";
 import type { Course } from "@/lib/course-types";
 import { DjangoApiError, djangoFetch } from "@/lib/django";
+import { hasTabAccess } from "@/lib/role-access";
 import type { Paginated, Template } from "@/lib/types";
+
+// Same repeated-query-param normalization as users/page.tsx's own toArray.
+function toArray(value: string | string[] | undefined): string[] {
+  if (value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
 
 // Read-only drill-down into one group — the courses/templates lists here
 // are just for VIEWING what a group actually bundles; editing which
@@ -29,10 +39,18 @@ export default async function GroupDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{ q?: string; permission_set?: string | string[]; role?: string | string[] }>;
 }) {
   const { id } = await params;
-  const { q } = await searchParams;
+  const { q, permission_set: permissionSetFilter, role: roleFilter } = await searchParams;
+
+  // Same reasoning as groups/page.tsx's own gate — this drill-down exposes
+  // the full user list (with permission sets/roles) for every member of
+  // the group, not just course/template membership, so it needs the real
+  // Groups tab too, not the narrower can_edit_course_groups-style access.
+  if (!(await hasTabAccess("groups"))) {
+    return <AccessDenied message="You don't have permission to view groups." />;
+  }
 
   let group: Group;
   try {
@@ -55,14 +73,17 @@ export default async function GroupDetailPage({
   // instead of on /users).
   const usersQuery = new URLSearchParams({ group: id, page_size: "200" });
   if (q) usersQuery.set("search", q);
+  for (const permissionSetId of toArray(permissionSetFilter)) usersQuery.append("permission_set", permissionSetId);
+  for (const role of toArray(roleFilter)) usersQuery.append("role", role);
 
-  const [allCourses, allTemplates, allGroups, users] = await Promise.all([
+  const [allCourses, allTemplates, allGroups, permissionSets, users] = await Promise.all([
     djangoFetch<Paginated<Course>>("/courses/?page_size=200"),
     djangoFetch<Paginated<Template>>("/templates/?page_size=200"),
     // Resolves each listed user's OWN full group badge set below — mirrors
     // the standard Users page exactly, so a user who belongs to this group
     // AND others still shows all of them, not just this one.
     djangoFetch<Paginated<Group>>("/groups/?page_size=200"),
+    djangoFetch<Paginated<PermissionSet>>("/permission-sets/"),
     djangoFetch<Paginated<AccountUser>>(`/users/?${usersQuery.toString()}`),
   ]);
 
@@ -154,9 +175,18 @@ export default async function GroupDetailPage({
       <div>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Users</h2>
-          <UsersSearchBar />
+          <div className="flex items-center gap-2">
+            <UsersSearchBar />
+            {/* groups={[]} — every row here already belongs to THIS one
+                group (see usersQuery's own fixed `group: id` above), so a
+                "Group" filter category would just be a pointless re-ask of
+                the obvious; the shared panel already skips rendering that
+                section when its groups list is empty. */}
+            <UserFiltersPanel groups={[]} permissionSets={permissionSets.results} />
+          </div>
         </div>
         <div className="rounded-lg border-2 border-border bg-card shadow-sm">
+          <ScrollableTableContainer>
           <Table>
             <TableHeader>
               <TableRow>
@@ -209,6 +239,7 @@ export default async function GroupDetailPage({
               )}
             </TableBody>
           </Table>
+          </ScrollableTableContainer>
         </div>
       </div>
     </div>

@@ -1,9 +1,9 @@
 import { type AnalyticsStat, AnalyticsStatSlider } from "@/components/analytics-stat-slider";
-import { CourseAnalyticsTable, type UserSummary } from "@/components/course-analytics-table";
-import type { AccountUser } from "@/lib/accounts-types";
-import type { CourseAttempt, CourseDeadlineExtension } from "@/lib/attempt-types";
+import { CourseAnalyticsTable, type AttemptUserInfo, type UserSummary } from "@/components/course-analytics-table";
+import type { CourseAttempt } from "@/lib/attempt-types";
 import {
   buildSlideAnalyticsIndex,
+  QUESTION_SLIDE_TYPES,
   SLIDE_TYPE_LABELS,
   type Course,
   type CourseVersion,
@@ -65,10 +65,16 @@ export default async function CourseAnalyticsPage({ params }: { params: Promise<
   // ever finished the rest of the course). Slides with no metadata (an
   // orphaned reference — shouldn't happen, but see the same defensive
   // skip pattern elsewhere in this app) are left out rather than shown
-  // with a broken label.
+  // with a broken label — as are accordion/flashcards/hotspot_image
+  // results: those slide types are self-paced completion gates with no
+  // reachable wrong answer (see QUESTION_SLIDE_TYPES' own comment), so
+  // they're not real questions and would only ever show up here as a
+  // trivial, always-100%-correct "question," crowding out genuine ones.
   const slideTotals = new Map<string, { total: number; correct: number }>();
   for (const attempt of allAttempts) {
     for (const result of attempt.slide_results) {
+      const info = slideInfoById[result.slide];
+      if (!info || !QUESTION_SLIDE_TYPES.has(info.slideType)) continue;
       const entry = slideTotals.get(result.slide) ?? { total: 0, correct: 0 };
       entry.total += 1;
       if (result.is_correct) entry.correct += 1;
@@ -97,8 +103,36 @@ export default async function CourseAnalyticsPage({ params }: { params: Promise<
   const scored = completed.filter((a) => a.score !== null);
   const graded = completed.filter((a) => a.passed !== null);
 
-  const uniqueUserIds = Array.from(new Set(allAttempts.map((a) => a.user)));
-  const users = await Promise.all(uniqueUserIds.map((userId) => djangoFetch<AccountUser>(`/users/${userId}/`)));
+  // The table below (and everything derived for it — uniqueUserIds,
+  // attemptsByUser, summaries) only ever looks at COMPLETED attempts — an
+  // in_progress one isn't a real result yet, just a learner partway through
+  // (or who left mid-course and hasn't come back to either resume or start
+  // over — see course-preview-viewer.tsx's resume prompt). Showing it here
+  // as if it were a finished attempt read as a stray, permanently-unscored
+  // row in someone's history; it should simply not exist yet, from this
+  // page's point of view, until it's actually finished (or discarded and
+  // replaced by a fresh one, same effect). slideTotals above is the one
+  // deliberate exception — a submitted answer's correctness is real signal
+  // about that question regardless of whether the rest of the course ever
+  // got finished.
+  const uniqueUserIds = Array.from(new Set(completed.map((a) => a.user)));
+  // Built straight from each attempt's own denormalized user_* fields, NOT
+  // a per-user /users/{id}/ fetch — that endpoint is Users-tab-gated
+  // (UserViewSet.get_queryset falls back to self-only without it) and
+  // 404'd for every user besides the viewer themself the moment a course
+  // editor without the Users tab opened their own course's Analytics tab,
+  // crashing this whole page with a generic error the instant the course
+  // had more than one attempting user. See CourseAttemptSerializer's own
+  // comment on the backend for the fix.
+  const usersById: Record<number, AttemptUserInfo> = {};
+  for (const attempt of completed) {
+    usersById[attempt.user] ??= {
+      username: attempt.user_username,
+      role: attempt.user_role,
+      permission_set: attempt.user_permission_set_id,
+      permission_set_name: attempt.user_permission_set_name,
+    };
+  }
 
   const averageScore = scored.length
     ? scored.reduce((sum, a) => sum + (a.score ?? 0), 0) / scored.length
@@ -124,7 +158,7 @@ export default async function CourseAnalyticsPage({ params }: { params: Promise<
   // powers the table's own expand-to-see-every-attempt row.
   const attemptsByUser: Record<number, CourseAttempt[]> = {};
   for (const userId of uniqueUserIds) {
-    attemptsByUser[userId] = allAttempts.filter((a) => a.user === userId);
+    attemptsByUser[userId] = completed.filter((a) => a.user === userId);
   }
 
   const summaries: UserSummary[] = uniqueUserIds.map((userId) => {
@@ -145,18 +179,20 @@ export default async function CourseAnalyticsPage({ params }: { params: Promise<
   summaries.sort((a, b) => (a.lastAttemptAt < b.lastAttemptAt ? 1 : -1));
 
   // Only fetched/shown at all when the course actually has a deadline —
-  // effective deadline is a per-user extension if one exists, else the
-  // course's own default (see Course.effective_deadline_for() in
-  // backend/apps/courses/models.py, mirrored here client-side since this
-  // page already has both pieces in hand).
+  // each user's own effective deadline (their own extension if they have
+  // one, else deadline_days after their own CourseAccessGrant) can no
+  // longer be derived here client-side the way it used to be (a single
+  // shared Course.deadline plus a per-user extension): the base due date
+  // is per-user now, anchored to each learner's own access-grant time,
+  // which only the backend has — see CourseViewSet.deadlines and
+  // Course.effective_deadline_for() in backend/apps/courses/models.py.
   let deadlineByUser: Record<number, string | null> | undefined;
-  if (course.deadline) {
-    const extensions = await djangoFetch<Paginated<CourseDeadlineExtension>>(
-      `/course-deadline-extensions/?course=${id}&page_size=200`,
+  if (course.deadline_days !== null) {
+    const deadlinesByUserIdString = await djangoFetch<Record<string, string | null>>(
+      `/courses/${id}/deadlines/`,
     );
-    const extensionByUser = new Map(extensions.results.map((e) => [e.user, e.extended_deadline]));
     deadlineByUser = Object.fromEntries(
-      uniqueUserIds.map((userId) => [userId, extensionByUser.get(userId) ?? course.deadline]),
+      uniqueUserIds.map((userId) => [userId, deadlinesByUserIdString[String(userId)] ?? null]),
     );
   }
 
@@ -210,24 +246,28 @@ export default async function CourseAnalyticsPage({ params }: { params: Promise<
         // with the page's plain left margin (which is where it sat before
         // — reported directly as looking out of position once the arrows
         // moved into their own reserved column instead of overlaying the
-        // cards). Deliberately NOT applied to the table further down —
-        // that one still aligns with the page's own heading/breadcrumb,
-        // which is the more natural match for a full-width element.
+        // cards). The table below now gets the exact same offset for the
+        // same reason — reported directly as starting "too early" lined up
+        // against the page's own heading/breadcrumb instead of the stat row
+        // right above it.
         <div className="ml-10 max-w-md space-y-3 rounded-lg border-2 border-border bg-card p-4 shadow-sm">
           {averageScore !== null && <StatBar label="Average score" percent={averageScore} />}
           {passRate !== null && <StatBar label="Pass rate" percent={passRate} />}
         </div>
       )}
 
-      <CourseAnalyticsTable
-        summaries={summaries}
-        usersById={Object.fromEntries(users.map((u) => [u.id, u]))}
-        attemptsByUser={attemptsByUser}
-        courseId={id}
-        isAssessment={course.is_assessment}
-        deadlineByUser={deadlineByUser}
-        slideInfoById={slideInfoById}
-      />
+      <div className="ml-10">
+        <CourseAnalyticsTable
+          summaries={summaries}
+          usersById={usersById}
+          attemptsByUser={attemptsByUser}
+          courseId={id}
+          isAssessment={course.is_assessment}
+          canEditDeadlines={course.viewer_can_edit_deadlines}
+          deadlineByUser={deadlineByUser}
+          slideInfoById={slideInfoById}
+        />
+      </div>
     </div>
   );
 }

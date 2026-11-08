@@ -106,7 +106,7 @@ export function FreeformContentSlide({
     const box: FreeTextBox = { id, html: "", ...rect };
     const ref: SlideObjectRef = { type: "text", id };
     onConfigChange?.({ text_boxes: [...textBoxes, box], object_order: [...order, ref] });
-    select(`${slide.id}:text:${id}`);
+    select(`${slide.id}:text:${id}`, false);
   }
 
   function handlePointerDown(e: React.PointerEvent) {
@@ -119,6 +119,26 @@ export function FreeformContentSlide({
     e.preventDefault();
     const slideEl = slideRef.current;
     if (!slideEl) return;
+    const pointerId = e.pointerId;
+    // Pointer capture pins every subsequent event for this gesture to
+    // slideEl specifically, rather than relying on normal hit-testing —
+    // reported directly as "doesn't even allow dragging, creates a default
+    // sized one instead" for a drag that visually, on the user's end,
+    // looked completely normal. Hit-testing re-evaluates the target at
+    // every single pointermove against whatever's currently in the DOM,
+    // and this gesture inserts the dashed preview rect (see previewRect's
+    // render below) as a new sibling the MOMENT it first appears — a
+    // once-per-gesture change to the DOM mid-drag that a raw `document`
+    // listener shouldn't care about (it fires regardless of hit-tested
+    // target), but capture removes even the possibility, and is the
+    // standard, more robust primitive for a drag gesture generally. Falls
+    // back silently if unsupported (no browser this app targets lacks it,
+    // but this must never be what throws if one somehow does).
+    try {
+      slideEl.setPointerCapture(pointerId);
+    } catch {
+      // no-op
+    }
     const startX = e.clientX;
     const startY = e.clientY;
     let moved = false;
@@ -133,10 +153,19 @@ export function FreeformContentSlide({
     const start = toPct(startX, startY);
 
     function onMove(moveEvent: PointerEvent) {
-      if (!moved && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < CLICK_VS_DRAG_THRESHOLD_PX) {
-        return;
+      if (moveEvent.pointerId !== pointerId) return;
+      // The click-vs-drag THRESHOLD (whether releasing now commits a
+      // custom-sized box or falls back to a default-sized one) still
+      // needs real travel, same as before — but the dashed preview box
+      // itself now tracks the pointer from the very first pixel of
+      // movement, not just once that threshold is crossed. Before this,
+      // a drag that stayed under CLICK_VS_DRAG_THRESHOLD_PX for its first
+      // few pixels rendered literally nothing at all until release —
+      // indistinguishable, from the user's seat, from the drag just not
+      // being recognized.
+      if (Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) >= CLICK_VS_DRAG_THRESHOLD_PX) {
+        moved = true;
       }
-      moved = true;
       const current = toPct(moveEvent.clientX, moveEvent.clientY);
       const rect: Rect = {
         xPct: Math.min(start.xPct, current.xPct),
@@ -148,9 +177,15 @@ export function FreeformContentSlide({
       setPreviewRect(rect);
     }
 
-    function onUp() {
+    function onUp(upEvent: PointerEvent) {
+      if (upEvent.pointerId !== pointerId) return;
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
+      try {
+        slideEl!.releasePointerCapture(pointerId);
+      } catch {
+        // no-op — already released (e.g. the pointer left the window)
+      }
       if (moved && previewRectRef.current) {
         createTextBox(previewRectRef.current);
       } else {

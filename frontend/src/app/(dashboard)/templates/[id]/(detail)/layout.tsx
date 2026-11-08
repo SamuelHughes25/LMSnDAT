@@ -2,8 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
+import { AccessDenied } from "@/components/access-denied";
 import { TemplateDetailNav } from "@/components/template-detail-nav";
 import { DjangoApiError, djangoFetch } from "@/lib/django";
+import { canEditOwnedContent } from "@/lib/role-access";
 import type { Template } from "@/lib/types";
 
 // Mirrors courses/[id]/(detail)/layout.tsx exactly — scoped to
@@ -25,6 +27,16 @@ export default async function TemplateDetailLayout({
   } catch (err) {
     if (err instanceof DjangoApiError && err.status === 404) notFound();
     throw err;
+  }
+
+  // Mirrors courses/[id]/(detail)/layout.tsx's identical gate — previously
+  // this whole route group (Overview/Preview/Activity/Analytics/Members/
+  // Roles/Settings) had no permission check at all; only /templates/ itself
+  // (the list page) filtered down to owned/edited templates, but a
+  // direct/bookmarked URL to someone else's template id still rendered
+  // the real thing underneath.
+  if (!(await canEditOwnedContent(template, "templates"))) {
+    return <AccessDenied message="You don't have permission to manage this template." />;
   }
 
   return (

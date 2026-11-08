@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 
+import { AccessDenied } from "@/components/access-denied";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -12,12 +13,22 @@ import {
 } from "@/components/ui/table";
 import { CourseAccessCell } from "@/components/course-access-cell";
 import { ContentOwnershipCard } from "@/components/content-ownership-card";
+import { ScrollableTableContainer } from "@/components/scrollable-table-container";
+import { UserFiltersPanel } from "@/components/user-filters-panel";
 import { UsersSearchBar } from "@/components/users-search-bar";
-import type { AccountUser, Group } from "@/lib/accounts-types";
+import type { AccountUser, Group, PermissionSet } from "@/lib/accounts-types";
 import type { Course, CourseAssignment } from "@/lib/course-types";
 import { getCurrentUser } from "@/lib/dal";
 import { DjangoApiError, djangoFetch } from "@/lib/django";
 import type { Paginated } from "@/lib/types";
+
+// Same repeated-query-param normalization as users/page.tsx's own
+// toArray — see that file's comment for why a single value still needs
+// coercing into an array.
+function toArray(value: string | string[] | undefined): string[] {
+  if (value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
 
 // Looks and behaves like the main Users admin page (full searchable table
 // of every user — see frontend/src/app/(dashboard)/users/page.tsx), not
@@ -42,10 +53,15 @@ export default async function CourseMembersPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{
+    q?: string;
+    group?: string | string[];
+    permission_set?: string | string[];
+    role?: string | string[];
+  }>;
 }) {
   const { id } = await params;
-  const { q } = await searchParams;
+  const { q, group: groupFilter, permission_set: permissionSetFilter, role: roleFilter } = await searchParams;
 
   let course: Course;
   try {
@@ -55,15 +71,36 @@ export default async function CourseMembersPage({
     throw err;
   }
 
-  const usersQuery = new URLSearchParams({ page_size: "200" });
-  if (q) usersQuery.set("search", q);
+  // Hard gate, not just the soft "disable the edit controls, still show
+  // the real data" this page did before — same "one on/off switch, full
+  // capability or nothing" design as the Groups sub-tab (see
+  // courses/[id]/(detail)/roles/page.tsx's identical comment). This table
+  // exposes direct-assignment controls AND the ownership-transfer card, so
+  // rendering it at all for someone without can_edit_course_members was
+  // the actual gap, not just the buttons inside it being clickable.
+  if (!course.viewer_can_edit_members) {
+    return <AccessDenied message="You don't have permission to manage this course's members." />;
+  }
 
-  const [assignments, allGroups, users, pickerUsers, viewer] = await Promise.all([
+  // course=<id> — lets UserViewSet.get_queryset grant full visibility to
+  // an editor with can_edit_course_members on THIS course specifically,
+  // even without the blanket Users tab (see that function's own comment
+  // on the backend). Without it, an editor with only the course-scoped
+  // permission saw just their OWN row here — no way to add/remove anyone
+  // via direct assignment from a table that only ever showed themselves.
+  const usersQuery = new URLSearchParams({ page_size: "200", course: id });
+  if (q) usersQuery.set("search", q);
+  for (const groupId of toArray(groupFilter)) usersQuery.append("group", groupId);
+  for (const permissionSetId of toArray(permissionSetFilter)) usersQuery.append("permission_set", permissionSetId);
+  for (const role of toArray(roleFilter)) usersQuery.append("role", role);
+
+  const [assignments, allGroups, permissionSets, users, pickerUsers, viewer] = await Promise.all([
     djangoFetch<Paginated<CourseAssignment>>(`/course-assignments/?course=${id}&page_size=200`),
     // Resolves each listed user's own full group badge set — same
     // "always show everything, never filtered down" convention
     // groups/[id]/page.tsx already established.
     djangoFetch<Paginated<Group>>("/groups/?page_size=200"),
+    djangoFetch<Paginated<PermissionSet>>("/permission-sets/"),
     djangoFetch<Paginated<AccountUser>>(`/users/?${usersQuery.toString()}`),
     // /users/picker/, not the plain /users/ list — that one is scoped
     // down to self-only for anyone without the Users tab, which broke the
@@ -128,10 +165,14 @@ export default async function CourseMembersPage({
         <Link href={`/courses/${id}/roles`} className="text-sm text-muted-foreground hover:text-foreground">
           Manage group-based access on the Groups tab →
         </Link>
-        <UsersSearchBar />
+        <div className="flex items-center gap-2">
+          <UsersSearchBar />
+          <UserFiltersPanel groups={allGroups.results} permissionSets={permissionSets.results} />
+        </div>
       </div>
 
       <div className="rounded-lg border-2 border-border bg-card shadow-sm">
+        <ScrollableTableContainer>
         <Table>
           <TableHeader>
             <TableRow>
@@ -191,6 +232,7 @@ export default async function CourseMembersPage({
             )}
           </TableBody>
         </Table>
+        </ScrollableTableContainer>
       </div>
     </div>
   );

@@ -38,7 +38,7 @@ export function SlideLayersPanel({
   slide: Slide;
   onConfigChange: (config: Partial<SlideConfig>) => void;
 }) {
-  const { selectedId, select, deselect } = useSlideSelection();
+  const { selectedIds, select, deselect } = useSlideSelection();
   const textBoxes = slide.config.text_boxes ?? [];
   const extraImages = slide.config.extra_images ?? [];
   const hasBackground = !!slide.config.background_image_url;
@@ -215,7 +215,15 @@ export function SlideLayersPanel({
   return (
     <div className="space-y-1.5">
       <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Layers</div>
-      <div className="space-y-1">
+      {/* Fixed height (~4 rows), not a flexible one — this panel is now
+          pinned at the bottom of the side panel alongside the image
+          dropbox and delete-slide button (see properties-panel.tsx), so it
+          needs a predictable size of its own rather than growing with
+          however many objects are on the slide; a slide with more than ~4
+          layers scrolls within this box instead of pushing the delete
+          button further down. pr-0.5 keeps the scrollbar from overlapping
+          each row's own hover/delete controls at the right edge. */}
+      <div className="max-h-[120px] space-y-1 overflow-y-auto pr-0.5">
         {displayRows.map((ref, displayIndex) => {
           const orderIndex = order.length - 1 - displayIndex;
           const key = refKey(ref);
@@ -224,8 +232,8 @@ export function SlideLayersPanel({
               <LayerRow
                 icon={ref.type === "text" ? Type : ImageIcon}
                 name={refName(ref, orderIndex)}
-                selected={selectedId === selectionIdFor(ref)}
-                onSelect={() => select(selectionIdFor(ref))}
+                selected={selectedIds.has(selectionIdFor(ref))}
+                onSelect={() => select(selectionIdFor(ref), false)}
                 onRename={(name) => renameRef(ref, name)}
                 onDelete={() => deleteRef(ref)}
                 onMoveUp={displayIndex > 0 ? () => moveInOrder(ref, "up") : undefined}
@@ -238,8 +246,8 @@ export function SlideLayersPanel({
           <LayerRow
             icon={ImageIcon}
             name="Background image"
-            selected={selectedId === `${slide.id}:background-image`}
-            onSelect={() => select(`${slide.id}:background-image`)}
+            selected={selectedIds.has(`${slide.id}:background-image`)}
+            onSelect={() => select(`${slide.id}:background-image`, false)}
             // Background stays non-reorderable and non-renameable — it's a
             // backdrop, not a stackable object, see this file's top comment.
           />

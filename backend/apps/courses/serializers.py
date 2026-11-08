@@ -4,7 +4,7 @@ from apps.core.permissions import user_can_manage_course_admin
 from .constants import SlideType
 from .models import (
     Course, CourseAsset, CourseAssignment, CourseAttempt, CourseDeadlineExtension, CourseVersion, Lesson,
-    ReusableLesson, Slide, SlideResult,
+    ReusableLesson, ReusableSlide, Slide, SlideResult, SlideTemplate,
 )
 
 
@@ -290,20 +290,61 @@ class LessonSerializer(serializers.ModelSerializer):
 
 
 class ReusableLessonSerializer(serializers.ModelSerializer):
-    # A count, not the nested slides themselves — the manage/import dialog
-    # only needs to show "12 slides" per entry in a list; the full slide
+    # A count, not the nested slides themselves — the manage/import dialog's
+    # own LIST view only needs to show "12 slides" per entry; the full slide
     # configs (potentially large — rich text, image URLs, per-type payloads)
-    # would bloat that list response for no UI benefit. The actual slides
-    # only ever move server-side, via services.import_reusable_lesson.
+    # would bloat that list response for no benefit most of the time. The
+    # one time the real slides ARE needed client-side — previewing a lesson
+    # before importing it — fetches them via the detail endpoint instead,
+    # see ReusableLessonDetailSerializer below.
     slide_count = serializers.SerializerMethodField()
 
     class Meta:
         model = ReusableLesson
-        fields = ['id', 'name', 'description', 'created_by', 'created_at', 'updated_at', 'slide_count']
+        fields = ['id', 'name', 'description', 'order', 'created_by', 'created_at', 'updated_at', 'slide_count']
         read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
 
     def get_slide_count(self, obj):
         return obj.slides.count()
+
+
+class ReusableSlideSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ReusableSlide
+        fields = ['id', 'slide_type', 'title', 'order', 'config']
+        read_only_fields = ['id']
+
+
+# Used only for RETRIEVE (ReusableLessonViewSet.get_serializer_class) — the
+# manage-lessons dialog's "Preview" button fetches one lesson this way to
+# get its real slides for CoursePreviewViewer, rather than the list
+# endpoint's deliberately slide-count-only shape above.
+class ReusableLessonDetailSerializer(ReusableLessonSerializer):
+    slides = ReusableSlideSerializer(many=True, read_only=True)
+
+    class Meta(ReusableLessonSerializer.Meta):
+        fields = ReusableLessonSerializer.Meta.fields + ['slides']
+
+
+class SlideTemplateSerializer(serializers.ModelSerializer):
+    # Included here (unlike ReusableLessonSerializer's slide_count-only
+    # list) because the manage-templates dialog renders an actual visual
+    # preview of each saved slide, the same true-miniature technique
+    # slide-thumbnail.tsx already uses — that needs the real config, not
+    # just a count. A SlideTemplate is always exactly one slide (unlike a
+    # ReusableLesson's potentially many), so there's no "bloats every list
+    # response" concern here the way there would be for nested slides on a
+    # whole lesson. `slide_type`/`config` are read-only: both are only ever
+    # set once, at creation, via services.save_slide_as_template; a
+    # SlideTemplate can be any slide_type (not just freeform `content`) —
+    # the frontend needs `slide_type` to know which Face component to
+    # render for the preview. Renaming/reordering a template (the only
+    # fields this serializer's own `update` is ever used for) must never
+    # let a request also smuggle in a slide_type/config change.
+    class Meta:
+        model = SlideTemplate
+        fields = ['id', 'name', 'slide_type', 'config', 'order', 'created_by', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'slide_type', 'config', 'created_by', 'created_at', 'updated_at']
 
 
 class CourseAssetSerializer(serializers.ModelSerializer):
@@ -346,8 +387,8 @@ class CourseVersionSerializer(serializers.ModelSerializer):
 
 class CourseSerializer(serializers.ModelSerializer):
     # The REQUESTING user's own effective deadline for this course (their
-    # own CourseDeadlineExtension if they have one, else the course's own
-    # default `deadline` — see Course.effective_deadline_for()). Computed
+    # own CourseDeadlineExtension if they have one, else `deadline_days`
+    # days after their own CourseAccessGrant — see Course.effective_deadline_for()). Computed
     # here, on every course fetch, specifically so the portal (member) side
     # can show "your deadline is X" / flag overdue courses WITHOUT needing
     # access to /course-deadline-extensions/, which is admin/manager-only —
@@ -402,6 +443,16 @@ class CourseSerializer(serializers.ModelSerializer):
     viewer_can_edit_members = serializers.SerializerMethodField()
     viewer_can_edit_groups = serializers.SerializerMethodField()
     viewer_can_edit_settings = serializers.SerializerMethodField()
+    # Whether the REQUESTING user can edit a per-user deadline override on
+    # this course (the Members table's Deadline column pencil) — its own,
+    # separate sub-permission from the three above, see
+    # CanManageCourseDeadlines' own docstring for why.
+    viewer_can_edit_deadlines = serializers.SerializerMethodField()
+    # Whether the REQUESTING user can even OPEN this course's Version
+    # History tab at all — a read gate, not an edit one, so it's its own
+    # flag rather than piggybacking on any of the can_edit_course_* ones
+    # above. See PermissionSet.can_view_version_history's own comment.
+    viewer_can_view_version_history = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
@@ -410,7 +461,8 @@ class CourseSerializer(serializers.ModelSerializer):
             'archived_by', 'archived_by_username', 'archived_at',
             'owner', 'owner_username', 'editors', 'editor_usernames', 'currently_editing_by', 'group_ids',
             'viewer_can_edit_members', 'viewer_can_edit_groups', 'viewer_can_edit_settings',
-            'is_assessment', 'passing_score', 'deadline', 'my_deadline', 'created_at', 'updated_at',
+            'viewer_can_edit_deadlines', 'viewer_can_view_version_history',
+            'is_assessment', 'passing_score', 'deadline_days', 'my_deadline', 'created_at', 'updated_at',
         ]
         # is_archived/archived_by/archived_at/owner/editors are all
         # read-only here — they only ever change together with their own
@@ -422,6 +474,7 @@ class CourseSerializer(serializers.ModelSerializer):
             'is_archived', 'archived_by', 'archived_by_username', 'archived_at',
             'owner', 'owner_username', 'editors', 'editor_usernames', 'currently_editing_by', 'group_ids',
             'viewer_can_edit_members', 'viewer_can_edit_groups', 'viewer_can_edit_settings',
+            'viewer_can_edit_deadlines', 'viewer_can_view_version_history',
         ]
 
     def get_editor_usernames(self, obj):
@@ -445,6 +498,12 @@ class CourseSerializer(serializers.ModelSerializer):
 
     def get_viewer_can_edit_settings(self, obj):
         return user_can_manage_course_admin(self._viewer(), obj, 'can_edit_course_settings')
+
+    def get_viewer_can_edit_deadlines(self, obj):
+        return user_can_manage_course_admin(self._viewer(), obj, 'can_edit_course_deadlines')
+
+    def get_viewer_can_view_version_history(self, obj):
+        return user_can_manage_course_admin(self._viewer(), obj, 'can_view_version_history')
 
     def get_my_deadline(self, obj):
         request = self.context.get('request')
@@ -539,11 +598,33 @@ class CourseAttemptSerializer(serializers.ModelSerializer):
     # each attempt.
     course_id = serializers.ReadOnlyField(source='course_version.course_id')
     course_name = serializers.ReadOnlyField(source='course_version.course.name')
+    # Denormalized onto the attempt itself, same *_username convenience-field
+    # precedent as owner_username/editor_usernames/assigned_by_username
+    # elsewhere in this app — lets a caller building a per-course analytics
+    # view (the one genuine use case: CourseAnalyticsTable needs every
+    # attempting user's username/role/permission-set to label and filter
+    # its rows) read them straight off attempts it ALREADY has legitimate
+    # access to, instead of a separate /users/{id}/ lookup per user. That
+    # separate lookup is Users-tab-gated (UserViewSet.get_queryset falls
+    # back to self-only without it) and 404'd for every OTHER user the
+    # moment a course editor without the Users tab opened their own
+    # course's Analytics tab — confirmed directly: an editor granted only
+    # Courses-tab access (no Users tab) saw analytics crash with a generic
+    # "something went wrong" the instant the course had more than one
+    # attempting user, since every id beyond their own 404'd mid-fetch.
+    user_username = serializers.ReadOnlyField(source='user.username')
+    user_role = serializers.ReadOnlyField(source='user.role')
+    user_permission_set_id = serializers.ReadOnlyField(source='user.permission_set_id')
+    user_permission_set_name = serializers.SerializerMethodField()
+
+    def get_user_permission_set_name(self, obj):
+        return obj.user.permission_set.name if obj.user.permission_set_id else None
 
     class Meta:
         model = CourseAttempt
         fields = [
-            'id', 'course_version', 'course_id', 'course_name', 'user', 'status', 'started_at',
+            'id', 'course_version', 'course_id', 'course_name', 'user', 'user_username', 'user_role',
+            'user_permission_set_id', 'user_permission_set_name', 'status', 'started_at',
             'completed_at', 'score', 'passed', 'slide_results',
         ]
         read_only_fields = ['id', 'user', 'status', 'started_at', 'completed_at', 'score', 'passed']

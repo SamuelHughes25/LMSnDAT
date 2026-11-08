@@ -496,17 +496,61 @@ export type Lesson = {
 // ReusableLesson model for the full "one-time clone, not a live link"
 // rationale). `name`/`description` are the library entry's own label,
 // independent of whatever the source lesson was titled at save time.
-// `slide_count` only (not the slides themselves) — the manage/import
-// dialog only needs to show a count per entry, keeping that list light;
-// the actual slides only ever move server-side on import.
+// `order` is a manual drag-to-reorder position (manage-lessons-dialog.tsx),
+// not derived from name/date. `slide_count` only (not the slides
+// themselves) — the manage/import dialog's own LIST view only needs a
+// count per entry, keeping that list light; the actual slides only move
+// server-side on import, or — for the dialog's own Preview button — via
+// the detail fetch below.
 export type ReusableLesson = {
   id: string;
   name: string;
   description: string;
+  order: number;
   created_by: number;
   created_at: string;
   updated_at: string;
   slide_count: number;
+};
+
+// Mirrors Slide exactly (minus `lesson`, which ReusableSlide has no
+// equivalent of — see backend's own docstring), returned only by the
+// detail fetch (getReusableLessonDetail) a Preview click triggers, never
+// the list endpoint.
+export type ReusableSlide = {
+  id: string;
+  slide_type: SlideType;
+  title: string;
+  order: number;
+  config: SlideConfig;
+};
+
+export type ReusableLessonDetail = ReusableLesson & { slides: ReusableSlide[] };
+
+// A saved, standalone copy of one slide — the "slide template" library
+// entry behind save-as-template/import (see backend's SlideTemplate model
+// for the full "one-time clone, not a live link" rationale, same shape as
+// ReusableLesson above just one level down). Can be ANY slide_type, not
+// just freeform `content` — an assessment slide (multiple_choice,
+// missing_word, match_pairs, sequencing) saves and imports just as well,
+// since its correct-answer data lives entirely inline in `config` (see
+// backend grading.py). `slide_type`/`config` ARE included here (unlike
+// ReusableLesson's slide_count-only list) — the manage-templates dialog
+// renders a real visual preview of each saved slide, same true-miniature
+// technique slide-thumbnail.tsx already uses, which needs to know which
+// Face component to render and with what config. Both are effectively
+// read-only from this app's own perspective: only ever set once,
+// server-side, via services.save_slide_as_template.
+export type SlideTemplate = {
+  id: string;
+  name: string;
+  slide_type: SlideType;
+  config: SlideConfig;
+  // Manual drag-to-reorder position (manage-slide-templates-dialog.tsx).
+  order: number;
+  created_by: number;
+  created_at: string;
+  updated_at: string;
 };
 
 export type CourseAsset = {
@@ -593,6 +637,15 @@ export type Course = {
   viewer_can_edit_members: boolean;
   viewer_can_edit_groups: boolean;
   viewer_can_edit_settings: boolean;
+  // Whether the REQUESTING user can edit a per-user deadline override on
+  // this course (the Members table's Deadline column pencil) — its own
+  // sub-permission, separate from viewer_can_edit_members (see
+  // CanManageCourseDeadlines on the backend for why).
+  viewer_can_edit_deadlines: boolean;
+  // Whether the REQUESTING user can even open this course's Version
+  // History tab at all — a read gate, not an edit one, so it's its own
+  // flag rather than piggybacking on any viewer_can_edit_* one above.
+  viewer_can_view_version_history: boolean;
   // Marks this course as a scored assessment rather than free-form
   // training content. passing_score (0-100) is only meaningful when this
   // is true — see backend/apps/courses/models.py's Course model and
@@ -601,15 +654,21 @@ export type Course = {
   // the operative's browser sends.
   is_assessment: boolean;
   passing_score: number | null;
-  // The default due date for this assessment — only meaningful when
-  // is_assessment is true, same convention as passing_score. Prefer
-  // my_deadline below for "what's MY actual deadline" — this is just the
-  // course-wide default, before any personal extension is applied.
-  deadline: string | null;
+  // How many days a learner gets to complete this course, counted from
+  // WHEN THEY became eligible for it (see CourseAccessGrant on the
+  // backend) — not a single shared calendar date any more. Deliberately
+  // independent of is_assessment, same as passing_score is dependent on
+  // it — a purely informative course can still need a "watch this within
+  // 2 weeks of being assigned" deadline. Prefer my_deadline below for
+  // "what's MY actual due date" — this is just the days-to-complete
+  // setting, before it's resolved against any one person's own access
+  // grant or personal extension.
+  deadline_days: number | null;
   // The REQUESTING user's own effective deadline (their own extension if
-  // they have one, else `deadline` above) — server-computed, this is the
-  // field the portal side should actually check/display, never `deadline`
-  // directly. Null if there's no deadline at all, or for an admin/manager
+  // they have one, else deadline_days days after their own access grant)
+  // — server-computed, this is the field the portal side should actually
+  // check/display, never deadline_days directly. Null if there's no
+  // deadline at all, no access grant on record, or for an admin/manager
   // request context where "my deadline" isn't meaningful.
   my_deadline: string | null;
   created_at: string;
@@ -633,6 +692,24 @@ export type CourseAssignment = {
   assigned_by: number;
   created_at: string;
 };
+
+// Mirrors backend/apps/courses/grading.py's SCORABLE_SLIDE_TYPES — the
+// subset of interactive slide types that are genuine questions with a
+// reachable wrong answer. accordion/flashcards/hotspot_image are
+// deliberately excluded: they're self-paced "view every section/flip every
+// card/find every hotspot" completion gates, structurally incapable of
+// ever grading as wrong (see grading.py's own comment), so treating them
+// as scoreable questions in the course score or in the Analytics tab's
+// per-question breakdown is always misleading — they'd read as a "question"
+// that's always marked correct. Used by analytics/page.tsx (per-question
+// stats) and course-analytics-table.tsx (the attempt breakdown) to leave
+// those three slide types out of both entirely.
+export const QUESTION_SLIDE_TYPES: ReadonlySet<SlideType> = new Set([
+  "multiple_choice",
+  "missing_word",
+  "sequencing",
+  "match_pairs",
+]);
 
 export const SLIDE_TYPE_LABELS: Record<SlideType, string> = {
   content: "Content",
@@ -666,14 +743,23 @@ function plainTextFromHtml(html: string): string {
 // this returns null for those rather than a misleading empty string; call
 // sites fall back to SLIDE_TYPE_LABELS instead.
 export function getSlideQuestionText(slide: Pick<Slide, "slide_type" | "config">): string | null {
+  // missing_word's own `paragraph` is the whole passage the blanks sit
+  // inside — often several sentences, which read as a wall of text in a
+  // one-line analytics label. The blanked-out words themselves are the
+  // actual "question" (what's being tested), so that's what's shown here
+  // instead — e.g. "Slide 2: Lorem, ipsum, dolor" rather than the full
+  // paragraph.
+  if (slide.slide_type === "missing_word") {
+    const blanks = slide.config.blanks ?? [];
+    const text = blanks.map((b) => b.text).filter((t) => t.length > 0).join(", ");
+    return text.length > 0 ? text : null;
+  }
   const field =
     slide.slide_type === "multiple_choice"
       ? "question"
-      : slide.slide_type === "missing_word"
-        ? "paragraph"
-        : slide.slide_type === "sequencing" || slide.slide_type === "match_pairs"
-          ? "instructions"
-          : null;
+      : slide.slide_type === "sequencing" || slide.slide_type === "match_pairs"
+        ? "instructions"
+        : null;
   if (!field) return null;
   const raw = slide.config[field];
   if (typeof raw !== "string") return null;
@@ -694,6 +780,11 @@ export type SlideAnalyticsInfo = {
   slideType: SlideType;
   questionText: string | null;
   versionNumber: number;
+  // The slide's own config, kept alongside the derived fields above so
+  // describeSlideAnswer can decode a SlideResult's raw `detail` into a
+  // human-readable "what did they answer" / "what was correct" pair
+  // without a second lookup back into the full CourseVersion tree.
+  config: SlideConfig;
 };
 
 // Different CourseVersions of the same course have entirely different Slide
@@ -714,8 +805,104 @@ export function buildSlideAnalyticsIndex(versions: CourseVersion[]): Record<stri
         slideType: slide.slide_type,
         questionText: getSlideQuestionText(slide),
         versionNumber: version.version_number,
+        config: slide.config,
       };
     });
   }
   return index;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+// What a learner actually submitted for one QUESTION_SLIDE_TYPES slide, and
+// what the right answer actually was — for the Analytics tab's attempt
+// breakdown (course-analytics-table.tsx), so a manager can see more than
+// just a Correct/Incorrect badge. Only ever called for the four real
+// question types (see QUESTION_SLIDE_TYPES); other slide types have no
+// right/wrong concept to describe, so callers skip them entirely rather
+// than reaching this. Both strings come back null when there's nothing
+// sensible to show (e.g. the learner never answered, or the slide's config
+// is empty) — callers render that as "No answer given," never a blank.
+export function describeSlideAnswer(
+  slideType: SlideType,
+  config: SlideConfig,
+  detail: unknown,
+): { answer: string | null; correctAnswer: string | null } {
+  const d = asRecord(detail);
+
+  if (slideType === "multiple_choice") {
+    // Option text is authored via the same TipTap widget as everything else
+    // in this app that isn't explicitly plain (see WidgetEditableText usage
+    // in multiple-choice-slide-face.tsx) — a sanitized HTML string like
+    // "<p>Blue</p>", not plain text, so it has to go through
+    // plainTextFromHtml before showing up as a manager-facing label or it
+    // reads as literal "<p>Blue</p>" markup.
+    const options = config.options ?? [];
+    const selected = options.find((o) => o.id === d.selectedOptionId);
+    const correct = options.find((o) => o.is_correct);
+    return {
+      answer: selected ? plainTextFromHtml(selected.text) || null : null,
+      correctAnswer: correct ? plainTextFromHtml(correct.text) || null : null,
+    };
+  }
+
+  if (slideType === "missing_word") {
+    const blanks = config.blanks ?? [];
+    if (blanks.length === 0) return { answer: null, correctAnswer: null };
+    const placements = asRecord(d.placements);
+    // Each word option shares its id with the blank it correctly belongs
+    // to (see MissingWordBlank's own comment) — so the word placed into a
+    // given blank is found by looking up whichever blank owns the id the
+    // learner dropped there.
+    const textByBlankId = new Map(blanks.map((b) => [b.id, b.text]));
+    const placedAny = blanks.some((b) => typeof placements[b.id] === "string");
+    const answer = placedAny
+      ? blanks.map((b) => textByBlankId.get(placements[b.id] as string) ?? "—").join(", ")
+      : null;
+    const correctAnswer = blanks.map((b) => b.text).join(", ");
+    return { answer, correctAnswer };
+  }
+
+  if (slideType === "sequencing") {
+    // sequence_items[].text is also TipTap-authored HTML (WidgetEditableText
+    // in sequencing-slide-face.tsx) — same stripping as multiple_choice above.
+    const items = config.sequence_items ?? [];
+    if (items.length === 0) return { answer: null, correctAnswer: null };
+    const textById = new Map(items.map((it) => [it.id, plainTextFromHtml(it.text)]));
+    const finalOrder = Array.isArray(d.finalOrder) ? (d.finalOrder as unknown[]) : [];
+    const answer =
+      finalOrder.length > 0
+        ? finalOrder.map((id) => (typeof id === "string" ? textById.get(id) || "?" : "?")).join(" → ")
+        : null;
+    const correctAnswer = items.map((it) => plainTextFromHtml(it.text) || "?").join(" → ");
+    return { answer, correctAnswer };
+  }
+
+  if (slideType === "match_pairs") {
+    // keyword/definition are also TipTap-authored HTML (WidgetEditableText
+    // in match-pairs-slide-face.tsx) — same stripping as multiple_choice above.
+    const pairs = config.pairs ?? [];
+    if (pairs.length === 0) return { answer: null, correctAnswer: null };
+    const byId = new Map(pairs.map((p) => [p.id, p]));
+    const pairings = asRecord(d.pairings);
+    const answeredAny = pairs.some((p) => typeof pairings[p.id] === "string");
+    const answer = answeredAny
+      ? pairs
+          .map((p) => {
+            const chosenId = pairings[p.id];
+            const chosen = typeof chosenId === "string" ? byId.get(chosenId) : undefined;
+            const chosenDefinition = chosen ? plainTextFromHtml(chosen.definition) : "";
+            return `${plainTextFromHtml(p.keyword)} → ${chosenDefinition || "—"}`;
+          })
+          .join("; ")
+      : null;
+    const correctAnswer = pairs
+      .map((p) => `${plainTextFromHtml(p.keyword)} → ${plainTextFromHtml(p.definition)}`)
+      .join("; ");
+    return { answer, correctAnswer };
+  }
+
+  return { answer: null, correctAnswer: null };
 }

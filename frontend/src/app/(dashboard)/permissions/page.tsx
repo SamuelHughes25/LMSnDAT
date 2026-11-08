@@ -1,6 +1,6 @@
-import { redirect } from "next/navigation";
 import { Check, X } from "lucide-react";
 
+import { AccessDenied } from "@/components/access-denied";
 import { DeletePermissionSetButton } from "@/components/delete-permission-set-button";
 import { PermissionSetFormDialog } from "@/components/permission-set-form-dialog";
 import {
@@ -30,7 +30,14 @@ import type { Paginated } from "@/lib/types";
 // permission set form so creating and editing look and work identically.
 export default async function PermissionsPage() {
   const user = await getCurrentUser();
-  if (!user.accessible_tabs.includes("permissions")) redirect("/dashboard");
+  // A silent bounce to /dashboard used to stand in for this — changed to
+  // the same explicit <AccessDenied /> every other tab gate now uses, so
+  // someone who reaches this by a stale link/bookmark sees an actual
+  // "you don't have permission" message instead of just landing back on
+  // the dashboard with no explanation.
+  if (!user.accessible_tabs.includes("permissions")) {
+    return <AccessDenied message="You don't have permission to view Permissions." />;
+  }
 
   const permissionSets = await djangoFetch<Paginated<PermissionSet>>("/permission-sets/");
 

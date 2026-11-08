@@ -1,8 +1,11 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
+import { Bookmark } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import type { Slide, SlideConfig } from "@/lib/course-types";
+import { SaveSlideTemplateDialog } from "./save-slide-template-dialog";
 import { SnapGuideLines } from "./snap-guide-lines";
 import { ExtraImagesLayer, SlideBackgroundLayer } from "./slide-faces/background-image-field";
 import { SLIDE_TYPE_FACES } from "./slide-faces";
@@ -18,12 +21,20 @@ export function SlideCanvas({
   courseVersionId,
   onTitleChange,
   onConfigChange,
+  onSaveAsTemplate,
 }: {
   slide: Slide | null;
   courseVersionId: string;
   onTitleChange: (title: string) => void;
   onConfigChange: (config: Partial<SlideConfig>) => void;
+  // Works for any slide_type — see the bookmark button below. A clone,
+  // not a live link, same as onSaveLessonAsReusable's own shape in
+  // course-builder.tsx.
+  onSaveAsTemplate: (name: string) => Promise<void>;
 }) {
+  // Opens SaveSlideTemplateDialog below — see the bookmark button's own
+  // comment for why this moved here from the side panel.
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
   // SLIDE_TYPE_FACES is a module-level constant, so this lookup always
   // yields the same component function reference for a given slide_type —
   // it must NOT be a locally-declared function component, which React would
@@ -55,9 +66,33 @@ export function SlideCanvas({
   const overlayRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div className="flex flex-1 items-center justify-center overflow-auto rounded-lg bg-muted p-8">
-      {slide && Face ? (
-        <div className="relative shrink-0" style={{ width: CANVAS_W, height: CANVAS_H }}>
+    // relative + overflow-hidden on this OUTER wrapper (not the scrolling
+    // one below) — the bookmark button is positioned against this element,
+    // pinned to its corner regardless of how far the canvas itself has
+    // scrolled, same "pin to the area, not the scroll content" reasoning
+    // as properties-panel.tsx's own pinnedBottom block.
+    <div className="relative flex-1 overflow-hidden rounded-lg bg-muted">
+      {/* Any slide_type can be saved as a template now — not just freeform
+          content. An assessment slide's correct-answer data lives entirely
+          inline in config (see SaveSlideTemplateDialog/SlideTemplate's own
+          comments), so there's no type this doesn't work for. */}
+      {slide && Face && (
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          onClick={() => setSaveTemplateOpen(true)}
+          aria-label="Save as template"
+          title="Save as template"
+          className="absolute top-4 right-4 z-40 bg-card"
+        >
+          <Bookmark className="h-4 w-4" />
+        </Button>
+      )}
+
+      <div className="flex h-full w-full items-center justify-center overflow-auto p-8">
+        {slide && Face ? (
+          <div className="relative shrink-0" style={{ width: CANVAS_W, height: CANVAS_H }}>
           {/* The clipped layer: everything that should actually be cropped
               to the slide's own (rounded) bounds — the background image's
               pixels (which SHOULD crop when the image is bigger than the
@@ -147,8 +182,18 @@ export function SlideCanvas({
             <SnapGuideLines />
           </div>
         </div>
-      ) : (
-        <div className="text-sm text-muted-foreground">Select a slide to edit it</div>
+        ) : (
+          <div className="text-sm text-muted-foreground">Select a slide to edit it</div>
+        )}
+      </div>
+
+      {slide && (
+        <SaveSlideTemplateDialog
+          slide={slide}
+          open={saveTemplateOpen}
+          onOpenChange={setSaveTemplateOpen}
+          onSave={onSaveAsTemplate}
+        />
       )}
     </div>
   );

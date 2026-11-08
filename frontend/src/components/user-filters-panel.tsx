@@ -1,17 +1,17 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ListFilter } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -23,7 +23,7 @@ import {
 // "Office user" is every non-member role bundled together (admin AND
 // manager — see toggleRoleGroup below), matching how the Type column
 // already collapses both into one label.
-const ACCOUNT_TYPES: { label: string; roles: string[] }[] = [
+export const ACCOUNT_TYPES: { label: string; roles: string[] }[] = [
   { label: "Operative", roles: ["member"] },
   { label: "Office user", roles: ["admin", "manager"] },
 ];
@@ -58,6 +58,35 @@ function toggleValue(params: URLSearchParams, key: string, value: string) {
   }
 }
 
+// One parent filter category, collapsed by default — its own little
+// dropdown-within-the-dropdown. Clicking the row spawns its sub-filter
+// checkboxes underneath it, rather than every category's options all
+// being visible flatly at once the way this panel used to render them.
+// A plain Collapsible, deliberately NOT a DropdownMenuItem — the rest of
+// this panel's items are Base UI Menu items with their own "selecting one
+// closes the whole Filters popup" behavior (fine for Clear filters, wrong
+// here), so this category header needs to live outside that system
+// entirely to just toggle open/closed in place instead.
+export function FilterCategory({ label, count, children }: { label: string; count: number; children: ReactNode }) {
+  return (
+    <Collapsible className="px-1.5 py-1">
+      <CollapsibleTrigger className="rounded-md py-0.5 hover:bg-accent hover:text-accent-foreground">
+        <span className="flex items-center gap-1.5">
+          {label}
+          {count > 0 && (
+            <Badge variant="secondary" className="px-1.5">
+              {count}
+            </Badge>
+          )}
+        </span>
+      </CollapsibleTrigger>
+      <CollapsiblePanel className="pt-1">
+        <div className="space-y-0.5">{children}</div>
+      </CollapsiblePanel>
+    </Collapsible>
+  );
+}
+
 export function UserFiltersPanel({
   groups,
   permissionSets,
@@ -72,7 +101,15 @@ export function UserFiltersPanel({
   const selectedGroups = new Set(searchParams.getAll("group"));
   const selectedPermissionSets = new Set(searchParams.getAll("permission_set"));
   const selectedRoles = new Set(searchParams.getAll("role"));
-  const activeCount = selectedGroups.size + selectedPermissionSets.size + selectedRoles.size;
+  // NOT selectedRoles.size — "Office user" alone stores TWO role values
+  // (admin + manager, see ACCOUNT_TYPES' own comment), so counting raw
+  // stored values here double-counted a single checked box: checking just
+  // "Office user" showed as 2 active filters, and checking it alongside
+  // "Operative" showed 3 for what was genuinely only 2 checkboxes ticked.
+  // Counting how many ACCOUNT_TYPES entries are actually fully satisfied
+  // instead counts checkboxes, not underlying param values.
+  const activeAccountTypeCount = ACCOUNT_TYPES.filter((type) => type.roles.every((r) => selectedRoles.has(r))).length;
+  const activeCount = selectedGroups.size + selectedPermissionSets.size + activeAccountTypeCount;
 
   function apply(mutate: (params: URLSearchParams) => void) {
     const params = new URLSearchParams(searchParams);
@@ -101,8 +138,12 @@ export function UserFiltersPanel({
         )}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>Account type</DropdownMenuLabel>
+        {/* "Account type" is entirely fixed (the Operative/Office-user
+            split, see ACCOUNT_TYPES' own comment) — Group and Permissions
+            below mix the same idea with values an admin actually creates
+            over time, so a brand new group/permission set shows up here
+            the moment it exists, with no code change. */}
+        <FilterCategory label="Account type" count={activeAccountTypeCount}>
           {ACCOUNT_TYPES.map((type) => (
             <DropdownMenuCheckboxItem
               key={type.label}
@@ -112,13 +153,12 @@ export function UserFiltersPanel({
               {type.label}
             </DropdownMenuCheckboxItem>
           ))}
-        </DropdownMenuGroup>
+        </FilterCategory>
 
         {groups.length > 0 && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>Group</DropdownMenuLabel>
+            <FilterCategory label="Group" count={selectedGroups.size}>
               {groups.map((group) => (
                 <DropdownMenuCheckboxItem
                   key={group.id}
@@ -128,15 +168,14 @@ export function UserFiltersPanel({
                   {group.name}
                 </DropdownMenuCheckboxItem>
               ))}
-            </DropdownMenuGroup>
+            </FilterCategory>
           </>
         )}
 
         {permissionSets.length > 0 && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>Permissions</DropdownMenuLabel>
+            <FilterCategory label="Permissions" count={selectedPermissionSets.size}>
               {permissionSets.map((permissionSet) => (
                 <DropdownMenuCheckboxItem
                   key={permissionSet.id}
@@ -146,7 +185,7 @@ export function UserFiltersPanel({
                   {permissionSet.name}
                 </DropdownMenuCheckboxItem>
               ))}
-            </DropdownMenuGroup>
+            </FilterCategory>
           </>
         )}
 

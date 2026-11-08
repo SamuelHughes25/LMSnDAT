@@ -162,12 +162,13 @@ function MatchPairsEditor({
   );
 }
 
-// selectedKeywordId: the keyword currently awaiting a definition click, or
-// null. pairings: EVERY keyword id that has been assigned a definition so
-// far, mapped to that definition's id (both ids are the pair's own id, so
-// `pairings[k] === k` means that keyword landed on its correct definition —
-// same "shared id = correct pair" convention missing_word's `placements`
-// already uses).
+// selected: the tile currently awaiting a match from the OPPOSITE column,
+// or null — either a keyword or a definition can be clicked first (see
+// handleTileClick below). pairings: EVERY keyword id that has been assigned
+// a definition so far, mapped to that definition's id (both ids are the
+// pair's own id, so `pairings[k] === k` means that keyword landed on its
+// correct definition — same "shared id = correct pair" convention
+// missing_word's `placements` already uses).
 //
 // Every click is permanent — right or wrong — and gets reported
 // immediately (not just at full completion), regardless of whether the
@@ -232,7 +233,6 @@ function MatchPairsPresent({
     return result?.detail as { pairings?: Record<string, string>; mismatchCount?: number } | undefined;
   }
 
-  const [selectedKeywordId, setSelectedKeywordId] = useState<string | null>(null);
   // Lazy-initialized FROM priorResult (not just synced on change below)
   // because course-preview-viewer.tsx remounts this whole component on
   // every slide navigation (`key={current.slide.id}` on Face) — a learner
@@ -289,15 +289,16 @@ function MatchPairsPresent({
     [pairings],
   );
 
-  function handleKeywordClick(keywordId: string) {
-    if (keywordId in pairings) return;
-    setSelectedKeywordId((current) => (current === keywordId ? null : keywordId));
-  }
+  // Bidirectional: the first tile clicked, in EITHER column, becomes the
+  // pending selection — reported directly as a real limitation that only
+  // keyword-first selection worked, forcing a left-to-right reading order
+  // the learner wasn't necessarily going to use. Replaces the old
+  // keyword-only selectedKeywordId with a column-tagged selection so
+  // handleTileClick below can complete a match from whichever side the
+  // SECOND click lands on.
+  const [selected, setSelected] = useState<{ column: "keyword" | "definition"; id: string } | null>(null);
 
-  function handleDefinitionClick(definitionId: string) {
-    if (definitionId in definitionToKeyword || !selectedKeywordId) return;
-    const keywordId = selectedKeywordId;
-
+  function finalizePair(keywordId: string, definitionId: string) {
     // Every click is permanent, right or wrong, and is reported
     // immediately (see the doc comment above MatchPairsPresent for why
     // reporting on every click — not just the final one — is what makes
@@ -312,7 +313,7 @@ function MatchPairsPresent({
     }
     const next = { ...pairings, [keywordId]: definitionId };
     setPairings(next);
-    setSelectedKeywordId(null);
+    setSelected(null);
 
     const correctCount = Object.entries(next).filter(([k, v]) => k === v).length;
     const score = pairs.length === 0 ? 0 : correctCount / pairs.length;
@@ -325,6 +326,28 @@ function MatchPairsPresent({
       answeredAt: new Date().toISOString(),
       detail: { pairings: next, mismatchCount: nextMismatchCount },
     });
+  }
+
+  function handleTileClick(column: "keyword" | "definition", id: string) {
+    const alreadyMatched = column === "keyword" ? id in pairings : id in definitionToKeyword;
+    if (alreadyMatched) return;
+
+    if (!selected) {
+      setSelected({ column, id });
+      return;
+    }
+    if (selected.column === column) {
+      // Clicking again within the same column: change which tile is
+      // pending (or deselect, clicking the same one twice), same as the
+      // old keyword-only toggle behavior.
+      setSelected(selected.id === id ? null : { column, id });
+      return;
+    }
+    // Opposite column from the pending selection -> completes the pair,
+    // regardless of which column the FIRST click started in.
+    const keywordId = column === "keyword" ? id : selected.id;
+    const definitionId = column === "definition" ? id : selected.id;
+    finalizePair(keywordId, definitionId);
   }
 
   if (pairs.length === 0) {
@@ -367,11 +390,11 @@ function MatchPairsPresent({
                   ? pairings[id] === id
                     ? "matched-correct"
                     : "matched-incorrect"
-                  : selectedKeywordId === id
+                  : selected?.column === "keyword" && selected.id === id
                     ? "selected"
                     : "neutral"
               }
-              onClick={() => handleKeywordClick(id)}
+              onClick={() => handleTileClick("keyword", id)}
             />
           ))}
         </div>
@@ -385,16 +408,14 @@ function MatchPairsPresent({
                   ? definitionToKeyword[id] === id
                     ? "matched-correct"
                     : "matched-incorrect"
-                  : "neutral"
+                  : selected?.column === "definition" && selected.id === id
+                    ? "selected"
+                    : "neutral"
               }
-              onClick={() => handleDefinitionClick(id)}
+              onClick={() => handleTileClick("definition", id)}
             />
           ))}
         </div>
-      </div>
-
-      <div className="text-sm font-medium text-muted-foreground">
-        {Object.keys(pairings).length} of {pairs.length} answered
       </div>
     </div>
   );

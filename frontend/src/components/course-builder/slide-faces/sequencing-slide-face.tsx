@@ -8,6 +8,7 @@ import { GripVertical, Plus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { SequencingItem, Slide } from "@/lib/course-types";
+import { restrictToParentElement, restrictToVerticalAxis } from "@/lib/dnd-modifiers";
 import type { SlideInteractionResult } from "@/lib/slide-interaction";
 import { useIsClient } from "@/lib/use-is-client";
 import { cn, stripHtml } from "@/lib/utils";
@@ -149,7 +150,12 @@ function SequencingEditor({
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+          modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+        >
           <SortableContext items={localItems.map((it) => it.id)} strategy={verticalListSortingStrategy}>
             <div className="flex flex-col gap-2">
               {localItems.map((item, index) => (
@@ -382,7 +388,12 @@ function SequencingPresent({
           left to distribute — same "doesn't center with few items"
           mechanism as match-pairs' grid columns. */}
       <div className="flex min-h-0 flex-1 flex-col justify-center overflow-y-auto">
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+          modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+        >
           <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
             <div className="flex flex-col gap-2">
               {orderedIds.map((id, index) => (
@@ -400,7 +411,7 @@ function SequencingPresent({
       </div>
 
       {!submitted ? (
-        <Button type="button" onClick={handleSubmit} className="self-start">
+        <Button type="button" onClick={handleSubmit} className="self-end">
           Submit
         </Button>
       ) : (

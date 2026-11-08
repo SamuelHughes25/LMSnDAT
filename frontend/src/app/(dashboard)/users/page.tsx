@@ -1,8 +1,10 @@
 import Link from "next/link";
 
+import { AccessDenied } from "@/components/access-denied";
 import { Badge } from "@/components/ui/badge";
 import { DeleteUserButton } from "@/components/delete-user-button";
 import { NewUserDialog } from "@/components/new-user-dialog";
+import { ScrollableTableContainer } from "@/components/scrollable-table-container";
 import {
   Table,
   TableBody,
@@ -45,18 +47,32 @@ export default async function UsersPage({
 }) {
   const { q, group: groupFilter, permission_set: permissionSetFilter, role: roleFilter } = await searchParams;
 
-  const query = new URLSearchParams();
+  // Previously unguarded — fetched and rendered the full user list
+  // (including permission-set/role badges) for anyone who could reach the
+  // dashboard at all, regardless of whether they'd actually been granted
+  // the Users tab.
+  const currentUser = await getCurrentUser();
+  if (!currentUser.accessible_tabs.includes("users")) {
+    return <AccessDenied message="You don't have permission to view Users." />;
+  }
+
+  // page_size=200 — same convention as the course Members and Group detail
+  // pages' own user-list fetches. Without this, DRF's default PAGE_SIZE
+  // (25, see config/settings/base.py) silently truncated the table to its
+  // first page with no pagination UI to reach the rest — invisible with a
+  // small test database, but reported directly as "users missing" the
+  // moment a real list grew past 25.
+  const query = new URLSearchParams({ page_size: "200" });
   if (q) query.set("search", q);
   for (const id of toArray(groupFilter)) query.append("group", id);
   for (const id of toArray(permissionSetFilter)) query.append("permission_set", id);
   for (const role of toArray(roleFilter)) query.append("role", role);
   const queryString = query.toString();
 
-  const [users, groups, permissionSets, currentUser] = await Promise.all([
+  const [users, groups, permissionSets] = await Promise.all([
     djangoFetch<Paginated<AccountUser>>(`/users/${queryString ? `?${queryString}` : ""}`),
     djangoFetch<Paginated<Group>>("/groups/"),
     djangoFetch<Paginated<PermissionSet>>("/permission-sets/"),
-    getCurrentUser(),
   ]);
 
   const groupById = new Map(groups.results.map((g) => [g.id, g]));
@@ -78,6 +94,7 @@ export default async function UsersPage({
       </div>
 
       <div className="mt-4 rounded-lg border-2 border-border bg-card shadow-sm">
+        <ScrollableTableContainer>
         <Table>
           <TableHeader>
             <TableRow>
@@ -167,6 +184,7 @@ export default async function UsersPage({
             )}
           </TableBody>
         </Table>
+        </ScrollableTableContainer>
       </div>
     </div>
   );

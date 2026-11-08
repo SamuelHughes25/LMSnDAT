@@ -44,6 +44,41 @@ class UserVisibilityScopingTests(APIAuthTestCase):
         usernames = {u['username'] for u in resp.data['results']}
         self.assertEqual(usernames, {'member_a'})
 
+    def test_course_editor_without_users_tab_sees_everyone_when_scoped_to_their_own_course(self):
+        """Confirmed real gap: a course's Members tab needs a full user
+        list to let its own editor add/remove people via direct
+        assignment — narrow_user here has can_edit_course_members on ONE
+        course but no blanket Users tab, and used to see only their own
+        row the moment they opened that course's Members page, with no
+        way to add or remove anyone at all. ?course=<id> widens visibility
+        for THIS request only, and only once user_can_manage_course_admin
+        independently confirms real permission on THAT course — see
+        UserViewSet.get_queryset's own comment."""
+        course_set = PermissionSet.objects.create(name='Course Editor Only', can_access_courses=True)
+        self.narrow_user.role = User.Role.ADMIN
+        self.narrow_user.permission_set = course_set
+        self.narrow_user.save()
+        course = Course.objects.create(name='Scoped Course', created_by=self.narrow_user)
+        course.editors.add(self.narrow_user)
+
+        client = self.auth('narrow_user', 'pw')
+        resp = client.get(f'/api/v1/users/?course={course.id}')
+        usernames = {u['username'] for u in resp.data['results']}
+        self.assertEqual(usernames, {'admin', 'narrow_user', 'member_a', 'member_b'})
+
+    def test_course_param_grants_nothing_without_real_permission_on_that_course(self):
+        """The widened visibility above is earned per-course, not a blanket
+        unlock just for passing ?course= — a course this user has no
+        owner/editor/permission-set relationship to at all must leave them
+        exactly as self-only as before."""
+        other_admin = User.objects.create_user(username='other_course_owner', password='pw', role=User.Role.ADMIN)
+        unrelated_course = Course.objects.create(name='Unrelated Course', created_by=other_admin)
+
+        client = self.auth('narrow_user', 'pw')
+        resp = client.get(f'/api/v1/users/?course={unrelated_course.id}')
+        usernames = {u['username'] for u in resp.data['results']}
+        self.assertEqual(usernames, {'narrow_user'})
+
     def test_creating_teams_requires_users_tab_access(self):
         narrow_client = self.auth('narrow_user', 'pw')
         resp = narrow_client.post('/api/v1/teams/', {'name': 'New Team'}, format='json')
@@ -83,11 +118,28 @@ class PermissionSetTests(APIAuthTestCase):
         self.assertTrue(resp.data['can_access_courses'])
         self.assertFalse(resp.data['can_access_users'])
 
-    def test_any_authenticated_user_can_read_permission_sets(self):
+    def test_any_office_user_can_read_permission_sets_even_without_the_tab(self):
+        # self.plain has no permission_set at all (and no explicit role,
+        # which defaults to member — see the office-user variant just
+        # below for why that matters) — reading the list for display
+        # purposes (e.g. a readable name on a user's profile) must not
+        # require the Permissions tab itself.
+        PermissionSet.objects.create(name='Course Manager', can_access_courses=True)
+        office_user = User.objects.create_user(username='perm_office', password='pw', role=User.Role.ADMIN)
+        office_client = self.auth('perm_office', 'pw')
+        resp = office_client.get('/api/v1/permission-sets/')
+        self.assertEqual(resp.status_code, 200, resp.content)
+
+    def test_a_portal_member_cannot_read_permission_sets(self):
+        # self.plain's role defaults to member (User.Role's own default) —
+        # a portal operative has no legitimate reason to see this list at
+        # all, unlike an office user without the Permissions tab (see the
+        # test just above). Previously allowed (plain IsAuthenticated) —
+        # this is the exact gap IsOfficeUser closes.
         PermissionSet.objects.create(name='Course Manager', can_access_courses=True)
         plain_client = self.auth('perm_plain', 'pw')
         resp = plain_client.get('/api/v1/permission-sets/')
-        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.status_code, 403, resp.content)
 
 
 class GroupTests(APIAuthTestCase):
@@ -107,12 +159,29 @@ class GroupTests(APIAuthTestCase):
         resp = admin_client.post('/api/v1/groups/', {'name': 'Gas Engineers'}, format='json')
         self.assertEqual(resp.status_code, 201, resp.content)
 
-    def test_any_authenticated_user_can_read_groups(self):
+    def test_any_office_user_can_read_groups_even_without_the_tab(self):
+        # No permission_set at all (so no Groups tab specifically) — e.g.
+        # a course editor with can_edit_course_groups still needs this
+        # list to pick which groups a course belongs to (see
+        # CourseGroupsPermissionTests below), without needing the Groups
+        # tab itself.
+        Group.objects.create(name='Gas Engineers')
+        office_user = User.objects.create_user(username='group_office', password='pw', role=User.Role.ADMIN)
+        office_client = self.auth('group_office', 'pw')
+        resp = office_client.get('/api/v1/groups/')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual([g['name'] for g in resp.data['results']], ['Gas Engineers'])
+
+    def test_a_portal_member_cannot_read_groups(self):
+        # Previously allowed (plain IsAuthenticated) — an operative has no
+        # legitimate reason to see the Groups list at all. This is the
+        # exact bug reported: a prompt in the product linked a
+        # Groups-tab-less user here, and the API itself didn't stop them
+        # either.
         Group.objects.create(name='Gas Engineers')
         member_client = self.auth('member', 'pw')
         resp = member_client.get('/api/v1/groups/')
-        self.assertEqual(resp.status_code, 200, resp.content)
-        self.assertEqual([g['name'] for g in resp.data['results']], ['Gas Engineers'])
+        self.assertEqual(resp.status_code, 403, resp.content)
 
     def test_a_group_bundles_both_courses_and_templates_together(self):
         """The whole point of a group, per an explicit correction: one

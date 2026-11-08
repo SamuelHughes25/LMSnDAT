@@ -20,10 +20,17 @@ function Table({ className, ...props }: React.ComponentProps<"table">) {
 }
 
 function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
+  // sticky top-0 — pins the header row to the top of whichever ancestor
+  // actually scrolls, whether that's a ScrollableTableContainer's own
+  // fixed-height box (the user tables) or, for a table with no such
+  // wrapper, the dashboard's own scrolling <main> once the page itself
+  // scrolls past it. bg-card (every table's own wrapping card uses this
+  // same background) keeps scrolled-under rows from showing through the
+  // header as they pass beneath it; z-10 keeps it above those rows.
   return (
     <thead
       data-slot="table-header"
-      className={cn("[&_tr]:border-b", className)}
+      className={cn("sticky top-0 z-10 bg-card [&_tr]:border-b", className)}
       {...props}
     />
   )

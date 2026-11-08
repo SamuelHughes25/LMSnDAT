@@ -11,8 +11,10 @@ import type {
   CourseVersion,
   Lesson,
   ReusableLesson,
+  ReusableLessonDetail,
   Slide,
   SlideConfig,
+  SlideTemplate,
   SlideType,
 } from "@/lib/course-types";
 import type { Paginated } from "@/lib/types";
@@ -69,12 +71,32 @@ export async function createDraft(courseId: string): Promise<CourseVersion> {
   return version;
 }
 
-export async function publishVersion(courseId: string, versionId: string): Promise<CourseVersion> {
-  const version = await djangoFetch<CourseVersion>(`/course-versions/${versionId}/publish/`, {
-    method: "POST",
-  });
-  revalidatePath(`/courses/${courseId}`);
-  return version;
+// {ok,error} shape, not a bare throw — the one real failure mode (no
+// slides yet, see CourseVersionViewSet.publish/services.publish_version
+// on the backend) is an expected, recoverable business-rule rejection,
+// not a crash, same convention as deleteCourseDraft/revertToVersion just
+// below. Both of this action's callers (the builder's own Publish button,
+// and the course overview page's separate PublishCourseButton for an
+// already-closed draft) show this inline instead of hitting the generic
+// error boundary — confirmed directly as what used to happen before this
+// changed: publishing a slide-less draft just crashed the page.
+export async function publishVersion(
+  courseId: string,
+  versionId: string,
+): Promise<{ ok: true; version: CourseVersion } | { ok: false; error: string }> {
+  try {
+    const version = await djangoFetch<CourseVersion>(`/course-versions/${versionId}/publish/`, {
+      method: "POST",
+    });
+    revalidatePath(`/courses/${courseId}`);
+    return { ok: true, version };
+  } catch (err) {
+    if (err instanceof DjangoApiError) {
+      const detail = extractErrorDetail(err, "This draft can't be published right now.");
+      return { ok: false, error: detail ?? "This draft can't be published right now." };
+    }
+    throw err;
+  }
 }
 
 // Hard-deletes a DRAFT version outright — not the same two-stage archive/
@@ -358,16 +380,17 @@ export async function updateCourseAssessmentSettings(
 // Deliberately separate from updateCourseAssessmentSettings above — a
 // deadline is its own, independent concept, not conditional on the course
 // being a scored assessment. A purely informative onboarding course with
-// no questions at all can still need a "watch this in your first week"
-// deadline; forcing that through the assessment toggle would make it
-// impossible to express. See Course.deadline's own comment in
-// backend/apps/courses/models.py.
-export async function updateCourseDeadline(courseId: string, deadline: string | null): Promise<Course> {
+// no questions at all can still need a "watch this within N days of being
+// assigned" deadline; forcing that through the assessment toggle would
+// make it impossible to express. See Course.deadline_days's own comment
+// in backend/apps/courses/models.py.
+export async function updateCourseDeadlineDays(courseId: string, deadlineDays: number | null): Promise<Course> {
   const course = await djangoFetch<Course>(`/courses/${courseId}/`, {
     method: "PATCH",
-    body: JSON.stringify({ deadline }),
+    body: JSON.stringify({ deadline_days: deadlineDays }),
   });
   revalidatePath(`/courses/${courseId}/settings`);
+  revalidatePath(`/courses/${courseId}/analytics`);
   return course;
 }
 
@@ -428,6 +451,29 @@ export async function saveLessonAsReusable(
 export async function listReusableLessons(): Promise<ReusableLesson[]> {
   const data = await djangoFetch<Paginated<ReusableLesson>>("/reusable-lessons/?page_size=200");
   return data.results;
+}
+
+// The manage-lessons dialog's "Preview" button only — the list above stays
+// slide_count-only (see ReusableLesson's own comment); this is the one
+// place the actual slides are fetched client-side, via the detail endpoint
+// (ReusableLessonViewSet.get_serializer_class switches shape for retrieve).
+export async function getReusableLessonDetail(reusableLessonId: string): Promise<ReusableLessonDetail> {
+  return djangoFetch<ReusableLessonDetail>(`/reusable-lessons/${reusableLessonId}/`);
+}
+
+export async function renameReusableLesson(reusableLessonId: string, name: string): Promise<ReusableLesson> {
+  return djangoFetch<ReusableLesson>(`/reusable-lessons/${reusableLessonId}/`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function reorderReusableLessons(lessons: { id: string; order: number }[]): Promise<void> {
+  await Promise.all(
+    lessons.map((l) =>
+      djangoFetch(`/reusable-lessons/${l.id}/`, { method: "PATCH", body: JSON.stringify({ order: l.order }) }),
+    ),
+  );
 }
 
 export async function importReusableLesson(
@@ -521,6 +567,54 @@ export async function reorderSlides(slides: { id: string; order: number }[]): Pr
       djangoFetch(`/slides/${s.id}/`, { method: "PATCH", body: JSON.stringify({ order: s.order }) }),
     ),
   );
+}
+
+// --- Slide templates ---
+// The saved-slide library: save one freeform slide's config as a standalone,
+// reusable entry, import a copy of one into a (different, or the same)
+// lesson. Both directions are a one-time CLONE, never a live link, same
+// reasoning as the reusable-lessons section above.
+
+export async function saveSlideAsTemplate(slideId: string, name: string): Promise<SlideTemplate> {
+  return djangoFetch<SlideTemplate>(`/slides/${slideId}/save-as-template/`, {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function listSlideTemplates(): Promise<SlideTemplate[]> {
+  const data = await djangoFetch<Paginated<SlideTemplate>>("/slide-templates/?page_size=200");
+  return data.results;
+}
+
+// Reorders the TEMPLATE LIBRARY entries themselves (manage-slide-templates-
+// dialog.tsx's own drag handles) — not to be confused with importSlideTemplate's
+// own `order` param just below, which positions the new SLIDE a template is
+// cloned into within its target lesson, a completely different ordering.
+export async function reorderSlideTemplates(templates: { id: string; order: number }[]): Promise<void> {
+  await Promise.all(
+    templates.map((t) =>
+      djangoFetch(`/slide-templates/${t.id}/`, { method: "PATCH", body: JSON.stringify({ order: t.order }) }),
+    ),
+  );
+}
+
+export async function importSlideTemplate(lessonId: string, slideTemplateId: string, order: number): Promise<Slide> {
+  return djangoFetch<Slide>(`/slide-templates/${slideTemplateId}/import/`, {
+    method: "POST",
+    body: JSON.stringify({ lesson: lessonId, order }),
+  });
+}
+
+export async function renameSlideTemplate(slideTemplateId: string, name: string): Promise<SlideTemplate> {
+  return djangoFetch<SlideTemplate>(`/slide-templates/${slideTemplateId}/`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function deleteSlideTemplate(slideTemplateId: string): Promise<void> {
+  await djangoFetch<void>(`/slide-templates/${slideTemplateId}/`, { method: "DELETE" });
 }
 
 // --- Course assets ---

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
+import { AccessDenied } from "@/components/access-denied";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AdminResetPasswordButton } from "@/components/admin-reset-password-button";
@@ -18,11 +19,19 @@ import { getCurrentUser } from "@/lib/dal";
 import { DjangoApiError, djangoFetch } from "@/lib/django";
 import type { Paginated } from "@/lib/types";
 
-// Admin/manager only — this whole route sits under (dashboard)/, whose own
-// layout already redirects members to /portal before this ever renders
-// (see (dashboard)/layout.tsx), so no separate gate is needed here.
+// Stale comment this replaces used to claim "admin/manager only, the
+// (dashboard) layout already handles it" — true back when dashboard access
+// was a fixed role enum, but not since the permission-sets rework: the
+// layout only ever redirected role==='member' to /portal, which says
+// nothing about whether THIS specific viewer has the Users tab. Previously
+// unguarded in practice.
 export default async function UserDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+
+  const viewer = await getCurrentUser();
+  if (!viewer.accessible_tabs.includes("users")) {
+    return <AccessDenied message="You don't have permission to view Users." />;
+  }
 
   let user: AccountUser;
   try {
@@ -32,11 +41,7 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
     throw err;
   }
 
-  const [viewer, team, groups, permissionSets, attempts, archivedCourses, activeCourses] = await Promise.all([
-    // Whoever's VIEWING this page — the Grant/Revoke super user control
-    // only renders for an is_superuser viewer (see below), independent of
-    // whose profile (`user`) is being looked at.
-    getCurrentUser(),
+  const [team, groups, permissionSets, attempts, archivedCourses, activeCourses] = await Promise.all([
     user.team ? djangoFetch<Team>(`/teams/${user.team}/`) : Promise.resolve(null),
     djangoFetch<Paginated<Group>>("/groups/"),
     djangoFetch<Paginated<PermissionSet>>("/permission-sets/"),
@@ -69,8 +74,15 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
   // list" approach the course analytics page already uses to group by
   // user) — the axis is just flipped, since this page already knows which
   // USER it's showing.
+  // Completed only — an in_progress attempt isn't a real result yet, just
+  // this user partway through (or having left mid-course without coming
+  // back to either resume or start over — see course-preview-viewer.tsx's
+  // resume prompt). Showing it here read as a stray, permanently-unscored
+  // row in their history; same reasoning and fix as the course analytics
+  // page's own attemptsByUser.
+  const completedAttempts = attempts.results.filter((a) => a.status === "completed");
   const attemptsByCourse: Record<string, CourseAttempt[]> = {};
-  for (const attempt of attempts.results) {
+  for (const attempt of completedAttempts) {
     (attemptsByCourse[attempt.course_id] ??= []).push(attempt);
   }
   const courseSummaries: CourseSummary[] = Object.entries(attemptsByCourse).map(([courseId, courseAttempts]) => {

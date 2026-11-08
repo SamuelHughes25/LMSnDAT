@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
+import { Toaster } from "@/components/ui/toast";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -48,7 +49,13 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           }}
         />
       </head>
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        {children}
+        {/* Mounted once, app-wide (both /portal and every (dashboard)
+            route) — any plain event handler can pop up a toast via
+            toastManager.add({...}) with no provider of its own in scope. */}
+        <Toaster />
+      </body>
     </html>
   );
 }

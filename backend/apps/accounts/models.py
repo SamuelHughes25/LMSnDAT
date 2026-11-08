@@ -123,6 +123,21 @@ class PermissionSet(BaseModel):
     can_edit_course_members = models.BooleanField(default=False)
     can_edit_course_groups = models.BooleanField(default=False)
     can_edit_course_settings = models.BooleanField(default=False)
+    # Separate from can_edit_course_members on purpose — being trusted to
+    # add/remove who's assigned to a course doesn't automatically mean
+    # being trusted to move an individual learner's due date around. Gates
+    # CourseDeadlineExtensionViewSet (see CanManageCourseDeadlines), the
+    # pencil-edit control on the course Members table's Deadline column.
+    can_edit_course_deadlines = models.BooleanField(default=False)
+    # Gates the Version History tab specifically (CourseSerializer's
+    # viewer_can_view_version_history, checked again by that page itself,
+    # not just hidden from the nav) — separate from every edit-flavored
+    # sub-permission above, this is about READING a course's past
+    # published snapshots at all, which the owner always can but a plain
+    # editor should NOT by default: old versions can carry content/
+    # wording a course owner specifically doesn't want every editor
+    # casually browsing.
+    can_view_version_history = models.BooleanField(default=False)
 
     class Meta:
         ordering = ['name']

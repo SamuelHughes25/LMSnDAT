@@ -8,6 +8,7 @@ import { useActiveEditorContext } from "../active-editor-context";
 import { CANVAS_H, CANVAS_W } from "../slide-canvas";
 import { useSlideSelection } from "../slide-selection-context";
 import { useSnapGuides } from "../snap-guide-context";
+import { useGroupDrag } from "./group-drag-context";
 import { HANDLES, type HandleDir, clampPositionPct } from "./image-shared";
 import type { SlideFaceProps } from "./index";
 import { snapBoxPosition, snapEdge } from "./snap-guides";
@@ -149,6 +150,12 @@ export function PositionableBox({
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [live, setLive] = useState<BoxTransform | null>(null);
+  // Populated only while THIS box is part of an active group drag (see
+  // group-drag-context.tsx) — takes priority over `live` when rendering
+  // (see `effective` below), and is always null outside a group drag, so
+  // a single-object drag's own `live` state keeps working completely
+  // unchanged.
+  const [groupOverride, setGroupOverride] = useState<BoxTransform | null>(null);
   // Only populated for an untransformed box in edit mode — see the
   // layout effect below. Static/present renders never need it: a
   // transform is resolved purely by CSS percentages, and an untransformed
@@ -174,10 +181,16 @@ export function PositionableBox({
   // isSelected goes false on the very next render, regardless of whether
   // its native focus/blur ever fired. See slide-selection-context.tsx.
   const selectionId = `${slideId}:${fieldKey}`;
-  const { selectedId, select, deselect } = useSlideSelection();
-  const isSelected = selectedId === selectionId;
+  const { selectedIds, select, deselect } = useSlideSelection();
+  const isSelected = selectedIds.has(selectionId);
+  // 2+ objects selected AND this one's among them — gates group-move
+  // (see handleMovePointerDown below) and hides the resize handles (an
+  // ambiguous "resize all of them" was never requested, just "move them
+  // together" — see group-drag-context.tsx's own comment).
+  const isMultiSelected = isSelected && selectedIds.size > 1;
   const { panelRef, panelInteractingRef, panelPointerDownRef, activeEditor, activeEditorId } = useActiveEditorContext();
   const { setGuides, clearGuides } = useSnapGuides();
+  const { startGroupDrag, registerDragTarget } = useGroupDrag();
 
   // Runs after the DOM commits, before paint — the one-time measurement
   // that lets an untouched box's grip/handles appear at its actual current
@@ -334,6 +347,32 @@ export function PositionableBox({
     };
   }
 
+  // Registers this box into the shared group-drag registry so a drag
+  // started from a DIFFERENT selected object can still move this one too
+  // — see group-drag-context.tsx's own comment on the shape. Declared
+  // here, before the mode !== "edit" early return just below, because
+  // every hook in this component has to run unconditionally on every
+  // render (same reasoning as the outside-pointerdown effect above) —
+  // `commit` itself is a hoisted function declaration (defined further
+  // down, after that early return), so referencing it from here is safe.
+  // `latestRef` is what actually keeps this registration pointing at THIS
+  // render's measureFreshBaseline/commit instead of a stale closure from
+  // whenever the effect last ran — same "ref holds the freshest closure,
+  // updated in its own effect every render" shape useDebouncedCallback's
+  // own callbackRef already uses (a ref can't be written during render
+  // itself, only in an effect or event handler).
+  const latestRef = useRef({ measureFreshBaseline, commit });
+  useEffect(() => {
+    latestRef.current = { measureFreshBaseline, commit };
+  });
+  useEffect(() => {
+    return registerDragTarget(selectionId, {
+      getBaseline: () => latestRef.current.measureFreshBaseline(),
+      setLiveOverride: setGroupOverride,
+      commit: (t) => latestRef.current.commit(t),
+    });
+  }, [selectionId, registerDragTarget]);
+
   if (mode !== "edit") {
     // An untouched (never dragged/resized) box has no transform to render
     // absolutely-positioned — it's supposed to fall back to plain flex
@@ -406,8 +445,35 @@ export function PositionableBox({
 
   function handleMovePointerDown(e: React.PointerEvent) {
     e.preventDefault();
-    select(selectionId);
+    const additive = e.shiftKey;
+    // Two cases are genuinely ambiguous between "a plain click" (a
+    // selection change only) and "a drag" (move everything that's
+    // selected, selection unchanged) — see group-drag-context.tsx's own
+    // `onClick` comment for the full reasoning. Both are deferred until
+    // `moved` is known, via `onClick` below, instead of applying
+    // immediately the way every OTHER case here still does.
+    const deferSelection = (additive && isSelected) || (!additive && isMultiSelected);
+    if (!deferSelection) select(selectionId, additive);
     blurStaleEditor();
+
+    // Group drag takes over whenever 2+ objects are (or are about to
+    // remain) selected and this one is among them — same condition as
+    // `deferSelection`'s multi-member case, since the only way this box
+    // can be part of a 2+ group right now is if it already was before
+    // this click (a brand-new shift-click addition is handled by the
+    // single-object path below instead, same as it always was — the
+    // newly-added box doesn't need group semantics for the SAME gesture
+    // that added it).
+    if (isMultiSelected) {
+      const slide = slideRef?.current;
+      if (slide) {
+        startGroupDrag(e, slide.getBoundingClientRect(), selectedIds, () => {
+          if (deferSelection) select(selectionId, additive);
+        });
+        return;
+      }
+    }
+
     const slide = slideRef?.current;
     const startMaybe = measureFreshBaseline();
     if (!slide || !startMaybe) return;
@@ -450,6 +516,7 @@ export function PositionableBox({
       document.removeEventListener("pointerup", onUp);
       clearGuides();
       if (moved) commit(current);
+      else if (deferSelection) select(selectionId, additive);
     }
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);
@@ -472,7 +539,10 @@ export function PositionableBox({
   function handleResizePointerDown(dir: HandleDir, e: React.PointerEvent) {
     e.preventDefault();
     e.stopPropagation();
-    select(selectionId);
+    // Never additive — the resize handles themselves only render when
+    // `!isMultiSelected` (see this component's own render, below), so
+    // reaching here already implies an exclusive single-object selection.
+    select(selectionId, false);
     blurStaleEditor();
     const slide = slideRef?.current;
     const startMaybe = measureFreshBaseline();
@@ -557,7 +627,11 @@ export function PositionableBox({
   }
 
   function handleFocus() {
-    select(selectionId);
+    // Never additive — clicking into a box's own text content to start
+    // typing always means "just this one," regardless of any held
+    // modifier key (a native focus event carries no shiftKey info to read
+    // anyway) — see slide-selection-context.tsx's own comment on this.
+    select(selectionId, false);
   }
 
   function handleBlur(e: React.FocusEvent<HTMLDivElement>) {
@@ -571,7 +645,57 @@ export function PositionableBox({
     deselect(selectionId);
   }
 
-  const effective = live ?? baseline;
+  // Shift+click anywhere in the box's own CONTENT (not just the thin
+  // perimeter move band — see MOVE_BAND_PX) needs to ADD this box to the
+  // multi-selection instead of focusing into its text. Without this,
+  // shift-clicking almost anywhere on a box (everywhere except that ~10px
+  // edge strip) still went through plain native focus -> handleFocus ->
+  // an EXCLUSIVE select(id, false), silently collapsing any existing
+  // multi-selection back down to just this one box the moment its content
+  // was clicked — reported directly as "shift click doesn't work for
+  // selecting multiple objects." The move band's own handler
+  // (handleMovePointerDown) already read e.shiftKey correctly; this is
+  // the much more commonly-hit content-area path, which never did.
+  // Capture phase + preventDefault so this runs and wins before the
+  // browser's own default pointerdown behavior would focus into the text
+  // underneath — a shift-click only ever toggles selection here, never
+  // also starts editing. stopPropagation was the fix for the first,
+  // confirmed-insufficient attempt at this (preventDefault alone):
+  // TipTap/ProseMirror attaches its OWN listener directly on the editable
+  // content, independent of the browser's native default-focus behavior
+  // that preventDefault alone suppresses, and that listener still ran,
+  // calling its own focus handling -> handleFocus -> an EXCLUSIVE
+  // select(id, false) right after this handler's additive one,
+  // immediately undoing it.
+  //
+  // Still not enough on its own, confirmed by a second real-browser round
+  // of this not working either: Pointer Events and Mouse Events are two
+  // SEPARATE, independently-dispatched event streams for the exact same
+  // physical click (a pointerdown fires, then — moments later, as its own
+  // distinct dispatch — a mousedown) — stopping propagation on one does
+  // absolutely nothing to the other. ProseMirror's own click-to-focus
+  // handling turns out to listen for mousedown specifically, not
+  // pointerdown, so it sailed straight through every time regardless of
+  // anything done here on the pointerdown capture listener alone.
+  // handleContentMouseDownCapture below is what actually blocks THAT one
+  // — deliberately NOT calling select() again itself (this pointerdown
+  // handler already made the one selection change this gesture needs;
+  // toggling it a second time would just cancel the first right back out).
+  function handleContentPointerDownCapture(e: React.PointerEvent) {
+    if (!e.shiftKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    blurStaleEditor();
+    select(selectionId, true);
+  }
+
+  function handleContentMouseDownCapture(e: React.MouseEvent) {
+    if (!e.shiftKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  const effective = groupOverride ?? live ?? baseline;
 
   // Whether this box renders absolutely-positioned (topLeftBoxStyle) at
   // all — deliberately NOT just `!!transform`. `transform` only reflects
@@ -587,7 +711,7 @@ export function PositionableBox({
   // instead means the very first drag also renders from `live` (itself
   // seeded from the same measured baseline `transform` would have used),
   // so it feels identical to every drag after it.
-  const isPositioned = !!(transform || live);
+  const isPositioned = !!(transform || live || groupOverride);
 
   return (
     <div
@@ -667,6 +791,8 @@ export function PositionableBox({
           runs in edit mode (mode !== "edit" returns early, well above), so
           no extra mode check is needed here. */}
       <div
+        onPointerDownCapture={handleContentPointerDownCapture}
+        onMouseDownCapture={handleContentMouseDownCapture}
         className={cn(
           "h-full w-full overflow-hidden border",
           isSelected ? "border-primary/70" : "border-transparent",
@@ -717,6 +843,7 @@ export function PositionableBox({
           />
 
           {isSelected &&
+            !isMultiSelected &&
             HANDLES.map(({ dir, style, cursor }) => (
               <div
                 key={dir}

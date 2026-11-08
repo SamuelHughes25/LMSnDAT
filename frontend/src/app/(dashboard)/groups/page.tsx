@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { AccessDenied } from "@/components/access-denied";
 import { DeleteGroupButton } from "@/components/delete-group-button";
 import { NewGroupDialog } from "@/components/new-group-dialog";
 import {
@@ -12,6 +13,7 @@ import {
 } from "@/components/ui/table";
 import type { Group } from "@/lib/accounts-types";
 import { djangoFetch } from "@/lib/django";
+import { hasTabAccess } from "@/lib/role-access";
 import type { Paginated } from "@/lib/types";
 
 // This top-level list stays CRUD-only (name/description) — assigning
@@ -24,6 +26,16 @@ import type { Paginated } from "@/lib/types";
 // its training courses and its audit templates), so there's nothing to
 // split by kind here.
 export default async function GroupsPage() {
+  // The full management page — unlike a course/template's own Roles tab
+  // (which an editor without this tab can still reach, see that page's
+  // own comment), this one needs the real Groups tab itself. Previously
+  // unguarded — any dashboard page reachable at all (and, before the
+  // backend's own GroupViewSet fix, even a bare portal member) could open
+  // this.
+  if (!(await hasTabAccess("groups"))) {
+    return <AccessDenied message="You don't have permission to view Groups." />;
+  }
+
   const groups = await djangoFetch<Paginated<Group>>("/groups/");
 
   return (

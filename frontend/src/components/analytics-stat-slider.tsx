@@ -126,6 +126,29 @@ function StatCard({ stat }: { stat: AnalyticsStat }) {
   );
 }
 
+// A non-interactive, non-sortable duplicate of a real StatCard — pure
+// scroll filler. AnalyticsStatSlider renders one full copy of these before
+// the real (sortable) cards and one full copy after them, so the track has
+// genuinely identical content to scroll into just past the real set's own
+// start/end — that's what makes the loop jump in useLoopingScroll below
+// imperceptible: whatever card sits at the viewport edge right before the
+// jump is bit-for-bit the same one that's there right after. aria-hidden
+// since a screen reader already encounters this exact stat via its real,
+// sortable copy.
+function StatCardStatic({ stat }: { stat: AnalyticsStat }) {
+  return (
+    <Card aria-hidden className="w-60 shrink-0 select-none">
+      <CardHeader>
+        <CardTitle className="text-sm text-muted-foreground">{stat.label}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="truncate text-2xl font-semibold">{stat.value}</div>
+        {stat.detail !== undefined && <div className="mt-0.5 truncate text-xs text-muted-foreground">{stat.detail}</div>}
+      </CardContent>
+    </Card>
+  );
+}
+
 // A horizontally-scrolling, user-reorderable strip of the course Analytics
 // tab's top-line stat cards. "Slider" here means a left/right-nudged strip
 // (native scroll-snap, pushed by the two arrow buttons) — not a single-
@@ -157,6 +180,11 @@ export function AnalyticsStatSlider({ stats }: { stats: AnalyticsStat[] }) {
   const [order, setOrder] = useState<string[]>(() => stats.map((s) => s.id));
   const [appliedStatIdsKey, setAppliedStatIdsKey] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Wraps only the real (sortable) cards — a separate ref from scrollRef
+  // specifically so its measured width (one full "lap" of the real set)
+  // is what the loop math below jumps by, independent of however many
+  // static clone copies happen to be rendered alongside it.
+  const middleRef = useRef<HTMLDivElement>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const statIdsKey = stats.map((s) => s.id).join(",");
 
@@ -185,50 +213,74 @@ export function AnalyticsStatSlider({ stats }: { stats: AnalyticsStat[] }) {
   const statsById = Object.fromEntries(stats.map((s) => [s.id, s]));
   const orderedStats = order.map((id) => statsById[id]).filter((s): s is AnalyticsStat => s !== undefined);
 
-  // Which edges actually HAVE more content scrolled past them right now —
-  // the fade below only applies where true, so the genuine first/last
-  // card (nothing left to reveal in that direction) never dims at rest.
-  // Initial values are the ones ALWAYS true before any real measurement
-  // happens: the track always starts at scrollLeft 0 (nothing to its
-  // left, so canScrollLeft starts false), and the common case is more
-  // cards than fit (so canScrollRight starts true — the effect below
-  // corrects this immediately if a course happens to have few enough
-  // stats to show them all at once).
-  const [canScrollLeft, setCanScrollLeft] = useState(false);
-  const [canScrollRight, setCanScrollRight] = useState(true);
+  // Whether the real cards alone are wider than the track's own viewport —
+  // i.e. whether there's actually anything to loop. A course with few
+  // enough stats to show them all at once needs no clones and no wrap: the
+  // track just behaves like a plain, non-scrolling row, same as before this
+  // change.
+  const [needsLoop, setNeedsLoop] = useState(false);
 
-  // Subscribes to the track's own scroll position (a real "synchronize
-  // with an external system" case — unlike the synchronous localStorage
-  // read above, there's no prop to compare against here, just the DOM's
-  // own current scrollLeft) — re-subscribes whenever the actual set of
-  // cards changes (statIdsKey), since a different course can have a
-  // genuinely different scrollWidth needing a fresh measurement.
+  // Measures the real (middle) set's width against the track's own visible
+  // width — re-measures whenever the actual set of cards changes
+  // (statIdsKey) or the track/middle section resizes (sidebar toggle,
+  // window resize, etc). Deliberately does NOT reset scrollLeft here on
+  // every resize — only the separate effect below does that, and only once
+  // per statIdsKey — so resizing the window later never yanks the viewer's
+  // current scroll position back to centre out from under them.
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el) return;
+    const middle = middleRef.current;
+    if (!el || !middle) return;
     function update() {
-      if (!el) return;
-      // >8, not >0 — the track's own px-1 padding (see its own comment
-      // below) means the true resting position for "scrolled all the way
-      // left" is already a few px of scrollLeft, not exactly 0 (a
-      // scroll-snap child's snap point is measured against the padding
-      // edge). A tight >0/>1 threshold treated that resting offset as
-      // "there's more to the left," fading an edge that had genuinely
-      // nothing left to reveal.
-      setCanScrollLeft(el.scrollLeft > 8);
-      setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 8);
+      if (!el || !middle) return;
+      setNeedsLoop(middle.getBoundingClientRect().width > el.clientWidth + 1);
     }
     update();
-    el.addEventListener("scroll", update, { passive: true });
     const observer = new ResizeObserver(update);
     observer.observe(el);
-    return () => {
-      el.removeEventListener("scroll", update);
-      observer.disconnect();
-    };
+    observer.observe(middle);
+    return () => observer.disconnect();
   }, [statIdsKey]);
 
-  const maskImage = `linear-gradient(to right, ${canScrollLeft ? "transparent" : "black"}, black ${FADE_WIDTH}px, black calc(100% - ${FADE_WIDTH}px), ${canScrollRight ? "transparent" : "black"})`;
+  // The actual infinite-loop illusion: once looping is active, AnalyticsStatSlider
+  // renders [clone copy][real copy][clone copy] back to back (see the render
+  // below). This effect parks the resting scroll position at the start of
+  // the real (middle) copy as soon as those clones exist in the DOM (i.e.
+  // once needsLoop just turned true — React only runs this AFTER the
+  // matching render has committed, so the clones are already there by the
+  // time `middle.getBoundingClientRect()` is read), then on every scroll
+  // event checks whether the viewer has scrolled far enough into either
+  // clone copy to be approaching its own edge, and silently teleports them
+  // back by exactly one real copy's width — imperceptible, since the
+  // content at that exact scroll position is identical before and after
+  // the jump.
+  useEffect(() => {
+    if (!needsLoop) return;
+    const el = scrollRef.current;
+    const middle = middleRef.current;
+    if (!el || !middle) return;
+    el.scrollLeft = middle.getBoundingClientRect().width;
+    function handleScroll() {
+      if (!el || !middle) return;
+      const middleWidth = middle.getBoundingClientRect().width;
+      if (middleWidth <= 0) return;
+      if (el.scrollLeft < middleWidth * 0.5) {
+        el.scrollLeft += middleWidth;
+      } else if (el.scrollLeft > middleWidth * 1.5) {
+        el.scrollLeft -= middleWidth;
+      }
+    }
+    el.addEventListener("scroll", handleScroll, { passive: true });
+    return () => el.removeEventListener("scroll", handleScroll);
+  }, [needsLoop, statIdsKey]);
+
+  // Infinite scroll means there's always more in both directions, so
+  // unlike the old "only fade an edge that genuinely has more past it"
+  // version, both edges fade permanently once looping — and neither does
+  // when it isn't (nothing to loop into, same plain-row look as before).
+  const maskImage = needsLoop
+    ? `linear-gradient(to right, transparent, black ${FADE_WIDTH}px, black calc(100% - ${FADE_WIDTH}px), transparent)`
+    : undefined;
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
@@ -257,33 +309,24 @@ export function AnalyticsStatSlider({ stats }: { stats: AnalyticsStat[] }) {
         direction="left"
         onClick={() => scrollRef.current?.scrollBy({ left: -SCROLL_STEP, behavior: "smooth" })}
       />
-      <DndContext
-        // A fixed, explicit id — without one, dnd-kit generates its
-        // screen-reader description element's id from a module-level
-        // counter that increments independently on the server and the
-        // client, so the two inevitably land on different numbers (e.g.
-        // server "DndDescribedBy-0" vs client "...-2") and React flags a
-        // hydration mismatch on every load. Passing a stable id here is
-        // dnd-kit's own documented fix for exactly this SSR case.
-        id="analytics-stat-slider"
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={handleDragEnd}
-        modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
-      >
-        <SortableContext items={order} strategy={horizontalListSortingStrategy}>
-          {/* min-w-0 is required here — a flex item defaults to
-              min-width:auto, which lets this div's own intrinsic content
-              width (all the fixed-width cards laid out in a row, un-
-              shrunk) win over its ancestors' own "fill remaining space"
-              sizing and push content off the page entirely instead of
-              actually scrolling internally. Same root cause, same fix, as
-              the permission-set dialog's tab-strip overflow earlier this
-              project (see ui/tabs.tsx's own comment), and as app-shell.tsx's
-              own main-column fix right above this component's own. */}
-          <div
-            ref={scrollRef}
-            style={{ maskImage, WebkitMaskImage: maskImage, overflowAnchor: "none" }}
+      {/* min-w-0 is required here — a flex item defaults to min-width:auto,
+          which lets this div's own intrinsic content width (all the
+          fixed-width cards laid out in a row, un-shrunk) win over its
+          ancestors' own "fill remaining space" sizing and push content off
+          the page entirely instead of actually scrolling internally. Same
+          root cause, same fix, as the permission-set dialog's tab-strip
+          overflow earlier this project (see ui/tabs.tsx's own comment), and
+          as app-shell.tsx's own main-column fix right above this
+          component's own.
+
+          This is the only actual scroll container — pulled OUTSIDE
+          DndContext/SortableContext (unlike before this change) because it
+          now also holds the two static clone copies (see StatCardStatic's
+          own comment) that make the infinite loop work, and those aren't
+          sortable items at all. */}
+      <div
+        ref={scrollRef}
+        style={{ maskImage, WebkitMaskImage: maskImage, overflowAnchor: "none" }}
             // overflowAnchor: "none" — defensive; doesn't by itself fix the
             // issue below, but there's no reason to leave scroll anchoring
             // on for a track whose content gets reordered programmatically
@@ -317,23 +360,11 @@ export function AnalyticsStatSlider({ stats }: { stats: AnalyticsStat[] }) {
             // room to render in full; it doesn't materially change where
             // the cards sit.
             //
-            // maskImage (inline style, computed above from
-            // canScrollLeft/canScrollRight — see that state's own
-            // comment): the track's own width is almost never an exact
-            // multiple of card+gap, so whichever card sits at the
-            // trailing scroll edge is very often only PARTIALLY visible —
-            // sliced off mid-card rather than ending cleanly, reported
-            // directly as looking cut off short. Hard-clipping that card
-            // can't be avoided without knowing the viewport's exact width
-            // up front (it changes with the sidebar/window), so instead
-            // this fades it to transparent — a sliced-off card reads as
-            // an intentional "there's more, keep scrolling" affordance
-            // once it fades out, rather than a jagged edge. Only applied
-            // on the edge(s) that actually HAVE more content scrolled
-            // past them — a genuine first/last card (nothing more in that
-            // direction) stays fully opaque rather than dimming for no
-            // reason, reported directly as looking like it was being cut
-            // off too even at the true start/end of the row.
+            // maskImage (inline style, computed above from needsLoop — see
+            // that state's own comment): fades both edges once the track is
+            // actually looping, signalling "there's always more, keep
+            // scrolling" in either direction, rather than a hard, jagged
+            // edge wherever a card happens to sit partway off-screen.
             //
             // scrollbar-width/-webkit-scrollbar: hides the native OS
             // scrollbar this track would otherwise grow on interaction —
@@ -343,12 +374,40 @@ export function AnalyticsStatSlider({ stats }: { stats: AnalyticsStat[] }) {
             // reported directly as looking tacky.
             className="flex min-w-0 flex-1 gap-4 overflow-x-auto scroll-smooth px-1 py-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
-            {orderedStats.map((stat) => (
-              <StatCard key={stat.id} stat={stat} />
-            ))}
+            {/* Leading clone copy — only rendered once looping is actually
+                needed (see needsLoop's own comment); plain, non-sortable
+                StatCardStatics, never part of `order`/SortableContext. */}
+            {needsLoop && orderedStats.map((stat) => <StatCardStatic key={`pre-${stat.id}`} stat={stat} />)}
+            <DndContext
+              // A fixed, explicit id — without one, dnd-kit generates its
+              // screen-reader description element's id from a module-level
+              // counter that increments independently on the server and the
+              // client, so the two inevitably land on different numbers
+              // (e.g. server "DndDescribedBy-0" vs client "...-2") and React
+              // flags a hydration mismatch on every load. Passing a stable
+              // id here is dnd-kit's own documented fix for exactly this SSR
+              // case.
+              id="analytics-stat-slider"
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+              modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
+            >
+              <SortableContext items={order} strategy={horizontalListSortingStrategy}>
+                {/* The real, draggable set — wrapped in its own flex row
+                    (not just a fragment) so middleRef can measure exactly
+                    one lap's width, independent of the clone copies sitting
+                    beside it as flex siblings within the outer track. */}
+                <div ref={middleRef} className="flex shrink-0 gap-4">
+                  {orderedStats.map((stat) => (
+                    <StatCard key={stat.id} stat={stat} />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+            {/* Trailing clone copy — same reasoning as the leading one above. */}
+            {needsLoop && orderedStats.map((stat) => <StatCardStatic key={`post-${stat.id}`} stat={stat} />)}
           </div>
-        </SortableContext>
-      </DndContext>
       <SliderArrowButton
         direction="right"
         onClick={() => scrollRef.current?.scrollBy({ left: SCROLL_STEP, behavior: "smooth" })}

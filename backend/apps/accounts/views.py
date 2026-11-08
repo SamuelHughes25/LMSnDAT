@@ -6,8 +6,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.core.permissions import (
-    CanManageUsersAdmin, HasArchiveTabAccessOrCanDeleteUsers, HasDashboardTabAccess, IsSuperuser,
-    user_can_access_tab,
+    CanManageUsersAdmin, HasArchiveTabAccessOrCanDeleteUsers, HasDashboardTabAccess, IsOfficeUser, IsSuperuser,
+    user_can_access_tab, user_can_manage_course_admin,
 )
 from apps.courses.models import Course
 from apps.templates_app.models import Template
@@ -101,8 +101,26 @@ class UserViewSet(viewsets.ModelViewSet):
         # Full visibility for anyone with Users tab access (or above) —
         # no team-scoping any more, see apps.core.permissions
         # .user_can_access_tab's own comment on this deliberate change.
-        # Anyone else only ever sees themselves.
-        if not user_can_access_tab(user, 'users'):
+        # Anyone else only ever sees themselves — UNLESS they're asking in
+        # the context of one specific course they can manage members on
+        # (?course=<id>, same "no django-filter, just get_queryset()"
+        # parent-scoping pattern every other ?course= param on this
+        # endpoint already uses — see the ones below). Without this, a
+        # course's own editor (with can_edit_course_members but no blanket
+        # Users tab — the exact, deliberate point of a per-course sub-
+        # permission instead of requiring the whole tab) opened their
+        # course's Members page and saw only THEIR OWN row in the user
+        # table: confirmed directly as a real gap, since there is no way
+        # to add or remove anyone via direct assignment from a table that
+        # only ever shows yourself. This only ever widens visibility for
+        # THIS request, scoped to THIS one course, and only once
+        # user_can_manage_course_admin has independently confirmed real
+        # permission on it — never a blanket bypass.
+        course_id = self.request.query_params.get('course')
+        course = Course.objects.filter(pk=course_id).first() if course_id else None
+        if not user_can_access_tab(user, 'users') and not (
+            course and user_can_manage_course_admin(user, course, 'can_edit_course_members')
+        ):
             qs = qs.filter(pk=user.pk)
 
         # The super-super-user account is permanently protected (can't be
@@ -331,7 +349,14 @@ class GroupViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ('create', 'update', 'partial_update', 'destroy'):
             return [HasDashboardTabAccess()]
-        return [IsAuthenticated()]
+        # list/retrieve: any OFFICE user, not just one with the Groups tab
+        # itself — a course/template editor with can_edit_course_groups
+        # needs this list to pick which groups a course belongs to, even
+        # without Groups tab access (see course-detail-nav.tsx's own
+        # Groups sub-tab). Previously plain IsAuthenticated, which an
+        # operative/member also satisfies — closed: see IsOfficeUser's own
+        # docstring for why that's a real gap, not just a UX one.
+        return [IsOfficeUser()]
 
 
 class PermissionSetViewSet(viewsets.ModelViewSet):
@@ -341,8 +366,11 @@ class PermissionSetViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.request.method in ('GET', 'HEAD', 'OPTIONS'):
-            # Any dashboard user can read the list of permission sets
-            # (e.g. to show a readable name on a user's profile) — only
-            # managing them requires the Permissions tab itself.
-            return [IsAuthenticated()]
+            # Any OFFICE user (not just one with the Permissions tab
+            # itself) can read the list — e.g. to show a readable name on
+            # a user's profile — but a portal member/operative has no
+            # legitimate reason to see this at all. Previously
+            # IsAuthenticated, which an operative also satisfied — see
+            # IsOfficeUser's own docstring.
+            return [IsOfficeUser()]
         return [HasDashboardTabAccess()]

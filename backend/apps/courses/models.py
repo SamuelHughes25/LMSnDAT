@@ -1,3 +1,5 @@
+import datetime
+
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
@@ -74,18 +76,28 @@ class Course(BaseModel):
     # matter what score was achieved (see CourseAttemptViewSet.complete).
     is_assessment = models.BooleanField(default=False)
     passing_score = models.PositiveSmallIntegerField(null=True, blank=True)
-    # The default due date for this course — deliberately INDEPENDENT of
+    # How many days a learner gets to complete this course, counted from
+    # WHEN THEY PERSONALLY became eligible for it — not a single fixed
+    # calendar date shared by everyone, which is what this field used to be
+    # (a plain DateField) before this changed: a course assigned to one
+    # person today and another six months from now gave the second person
+    # a much shorter real window despite the same "deadline," which was
+    # reported directly as not actually what a deadline should mean here.
+    # "Eligible" covers every path a learner can gain access (direct
+    # CourseAssignment, being in a Group that already has the course, or a
+    # course getting added to a Group they're already in) — see
+    # CourseAccessGrant's own docstring for how that moment gets captured,
+    # and effective_deadline_for() below for how this field actually turns
+    # into a real per-user due date. Deliberately INDEPENDENT of
     # is_assessment (unlike passing_score, which is meaningless without a
     # score to check against a threshold): a purely informative course with
-    # no questions at all can still need a "watch this in your first week"
-    # deadline, e.g. an onboarding video. Applies to everyone who can see
-    # the course unless a CourseDeadlineExtension below gives a specific
-    # user a later date (e.g. a genuine extension request) — see
-    # effective_deadline_for(). "Done" for deadline-overdue purposes means
-    # a passed attempt when is_assessment, else just any completed attempt
-    # — see the frontend's Dashboard overdue widget and portal reminders,
-    # both of which branch on is_assessment for exactly this reason.
-    deadline = models.DateField(null=True, blank=True)
+    # no questions at all can still need a "watch this within 2 weeks of
+    # being assigned" deadline, e.g. an onboarding video. "Done" for
+    # deadline-overdue purposes means a passed attempt when is_assessment,
+    # else just any completed attempt — see the frontend's Dashboard
+    # overdue widget and portal reminders, both of which branch on
+    # is_assessment for exactly this reason.
+    deadline_days = models.PositiveIntegerField(null=True, blank=True)
     # A course-level picture, independent of any CourseVersion (unlike
     # CourseAsset below, which belongs to one draft/published version) —
     # this needs to be settable at course-CREATE time, before any version
@@ -160,14 +172,121 @@ class Course(BaseModel):
 
     def effective_deadline_for(self, user):
         """This course's real due date for a specific user — their own
-        CourseDeadlineExtension if one exists (an admin/manager granting
-        more time), else the course's own default `deadline`. Never
-        queries anything if the course has no deadline at all (the common
-        case for non-assessment courses)."""
-        if self.deadline is None:
-            return None
+        CourseDeadlineExtension if one exists (an admin/manager explicitly
+        giving/taking away time for this one person, which always wins,
+        regardless of whether `deadline_days` is even set — a manager
+        setting a one-off due date for someone is a deliberate override,
+        not something that should silently depend on the course also
+        having its own default window), else `deadline_days` days after
+        this user's own CourseAccessGrant for this course (see that
+        model's own docstring) — i.e. days-to-complete counted from when
+        THEY became eligible, not one shared date for everyone. None if
+        there's no extension, no deadline_days, or (shouldn't normally
+        happen — every real access path creates one) no access grant on
+        record for this user."""
         extension = self.deadline_extensions.filter(user=user).first()
-        return extension.extended_deadline if extension else self.deadline
+        if extension:
+            return extension.extended_deadline
+        if self.deadline_days is None:
+            return None
+        grant = self.access_grants.filter(user=user).order_by('created_at').first()
+        if grant is None:
+            return None
+        return (grant.created_at + datetime.timedelta(days=self.deadline_days)).date()
+
+    def is_accessible_by(self, user):
+        """Whether `user` is actually meant to see/take THIS course as a
+        learner — direct CourseAssignment, membership in a Group that has
+        this course, or being its owner/editor. Deliberately NOT based on
+        the Courses tab / can_access_courses at all: that permission is
+        about MANAGING the catalog (creating courses, editing settings),
+        not about being personally assigned one to take, and treating it
+        as equivalent let anyone with that tab quietly see and complete
+        every course that existed — confirmed directly: an office user
+        granted only the Courses tab (no ownership/editor status, no
+        Group/direct assignment) could still open and finish a course
+        nobody had ever assigned them. is_superuser/is_platform_admin
+        still bypass this, same blanket tier as everywhere else in the
+        app — they're not learners being assigned training, they're the
+        accounts that already see/do everything else regardless."""
+        if user.is_superuser or user.is_platform_admin:
+            return True
+        if self.owner_id == user.id:
+            return True
+        if self.editors.filter(pk=user.id).exists():
+            return True
+        if self.direct_assignments.filter(user=user).exists():
+            return True
+        if self.groups.filter(members=user).exists():
+            return True
+        return False
+
+    def existing_access_reason(self, user):
+        """Human-readable reason `user` already has access to this course
+        through some path OTHER than a direct assignment — surfaced by
+        CourseAssignmentViewSet.perform_create when someone tries to
+        directly assign them anyway, which would otherwise silently
+        create a redundant row instead of the confusing-looking no-op it
+        actually is (the learner's access doesn't change at all — they
+        already had it). None if there's no such existing access, i.e.
+        the ordinary case a direct assignment is actually for. Deliberately
+        does NOT check direct_assignments itself — a genuine duplicate
+        there is a different, already-handled case (the DB's own
+        UniqueConstraint), not something this reason-giving path needs to
+        cover too."""
+        if user.is_superuser or user.is_platform_admin:
+            return 'they already have full access as a super user.'
+        if self.owner_id == user.id:
+            return "they're this course's owner."
+        if self.editors.filter(pk=user.id).exists():
+            return "they're already an editor on this course."
+        group = self.groups.filter(members=user).first()
+        if group:
+            return f'they\'re already in the "{group.name}" group, which has this course.'
+        return None
+
+
+class CourseContentRole(BaseModel):
+    """Append-only historical record of every user who has ever been this
+    course's owner or an editor on it — unlike `Course.owner` (transferable,
+    only ever holds the CURRENT one) and `Course.editors` (a live M2M,
+    members can be removed from it), a row here is never deleted once
+    created. Exists purely to answer one question at purge time
+    (CourseViewSet.purge): was the user behind a given CourseAttempt ever a
+    content creator on this course, even if they've since been removed as
+    editor or had ownership transferred away? A course whose only attempts
+    are from its own past/present owner(s)/editor(s) — people testing their
+    own work — can be purged outright; one with any attempt from anyone
+    else can only be archived, never permanently deleted.
+
+    Rows are written going forward by transfer_ownership/set_editors (see
+    those actions' own comments) — never by hand, and never removed by
+    anything — plus backfilled once, for every course that already existed
+    when this model was introduced, by this model's own migration. The
+    purge check itself doesn't rely on this table alone, though: it also
+    checks the CURRENT `owner`/`editors` live, so even a gap in this
+    history (a hook that was somehow missed) still can't wrongly treat the
+    present-day content team's own attempts as blocking.
+    """
+
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='content_role_history')
+    # CASCADE, not PROTECT: this table only ever matters for resolving an
+    # EXISTING CourseAttempt's user, and CourseAttempt.user is itself
+    # PROTECT (see CourseAttempt below) — so a user who ever made an
+    # attempt on this course can never actually be deleted while that
+    # attempt row still exists, independent of this one. A former
+    # editor/owner who never attempted the course has no attempt for this
+    # row to ever be consulted against, so losing it on their deletion is
+    # harmless.
+    user = models.ForeignKey('accounts.User', on_delete=models.CASCADE, related_name='course_content_roles')
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['course', 'user'], name='unique_course_content_role'),
+        ]
+
+    def __str__(self):
+        return f'{self.user} on {self.course}'
 
 
 class CourseVersion(BaseModel):
@@ -281,6 +400,38 @@ class CourseAssignment(BaseModel):
 
     def __str__(self):
         return f'{self.user_id} directly assigned to {self.course_id}'
+
+
+class CourseAccessGrant(BaseModel):
+    """Stamps the FIRST moment a user became eligible to take a course,
+    via ANY of its three access paths: a direct CourseAssignment, being in
+    a Group that already has this course in its `courses` bundle, or
+    being in a Group that this course later gets added to. Permanent and
+    immutable once created (get_or_create everywhere it's ever written —
+    see apps.courses.signals) — a user already granted access through one
+    path who then also gains it through a second path (e.g. direct
+    assignment on top of an existing Group membership) keeps their
+    ORIGINAL grant time, never a later one, since the whole point is
+    anchoring Course.deadline_days to whenever they genuinely first could
+    have started the course, not whichever assignment happened to be
+    created last.
+
+    created_at (from BaseModel) IS the "assigned at" timestamp
+    effective_deadline_for() counts deadline_days from — there's no
+    separate field for it. At most one row per (user, course); see
+    apps.courses.signals for the three places this actually gets created."""
+
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='access_grants')
+    user = models.ForeignKey('accounts.User', on_delete=models.CASCADE, related_name='course_access_grants')
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(fields=['course', 'user'], name='one_access_grant_per_user_per_course'),
+        ]
+
+    def __str__(self):
+        return f'{self.user_id} granted access to {self.course_id} at {self.created_at}'
 
 
 class CourseAttempt(BaseModel):
@@ -403,12 +554,19 @@ class ReusableLesson(BaseModel):
 
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
+    # Manual drag-to-reorder position in the manage-lessons dialog — not a
+    # timestamp/name-derived order, since the author may want "the ones I
+    # use most" up top regardless of when each was saved or what it's
+    # called. Set to the current count at creation (append-to-end, see
+    # services.save_lesson_as_reusable), then freely rewritten by
+    # reorderReusableLessons as the author drags rows around.
+    order = models.PositiveIntegerField(default=0)
     created_by = models.ForeignKey(
         'accounts.User', on_delete=models.PROTECT, related_name='reusable_lessons_created'
     )
 
     class Meta:
-        ordering = ['name']
+        ordering = ['order', 'name']
 
     def __str__(self):
         return self.name
@@ -431,6 +589,48 @@ class ReusableSlide(BaseModel):
 
     def __str__(self):
         return self.title or f'{self.get_slide_type_display()} slide'
+
+
+class SlideTemplate(BaseModel):
+    """A saved, standalone copy of one slide — the library entry behind
+    "save this slide as a template, reuse it from the Add slide menu"
+    (e.g. a title screen or a logo-stamped divider authored once and
+    reproduced identically across many courses, or a multiple_choice
+    question with its options and correct answer already set up, ready to
+    drop into any assessment). Mirrors ReusableLesson's own "clone, not a
+    live link" shape one level down: a SlideTemplate is a fully
+    independent library item, and importing it (see
+    services.import_slide_template) clones ITS OWN slide_type and config
+    into a brand new Slide — editing or deleting either side afterward
+    never touches the other. Can be ANY slide_type (not just freeform
+    `content`) — `config` is cloned verbatim regardless of type, which is
+    exactly why a cloned assessment slide (multiple_choice, missing_word,
+    match_pairs, sequencing) still grades identically to the original:
+    grading.py's own graders read nothing but a slide's own `config`, so a
+    new Slide row with an identical config, new id, new parent lesson, is
+    indistinguishable to the grader. Importing never touches the target
+    Course/CourseVersion itself (see import_slide_template) — a course's
+    own `is_assessment`/`passing_score` settings are never read from or
+    written by this at all, so an assessment-slide template imported into
+    an ordinary course can never flip that course into an assessment; it
+    stays whatever the course's own settings already say.
+    """
+
+    name = models.CharField(max_length=255)
+    slide_type = models.CharField(max_length=30, choices=SlideType.choices, default=SlideType.CONTENT)
+    config = models.JSONField(default=dict, blank=True)
+    # Same manual drag-to-reorder position as ReusableLesson.order above —
+    # see its own comment for why this isn't timestamp/name-derived.
+    order = models.PositiveIntegerField(default=0)
+    created_by = models.ForeignKey(
+        'accounts.User', on_delete=models.PROTECT, related_name='slide_templates_created'
+    )
+
+    class Meta:
+        ordering = ['order', 'name']
+
+    def __str__(self):
+        return self.name
 
 
 class CourseAsset(BaseModel):

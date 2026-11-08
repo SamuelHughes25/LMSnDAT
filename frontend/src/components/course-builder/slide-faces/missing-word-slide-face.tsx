@@ -427,7 +427,7 @@ function MissingWordPresent({
       {promptMessage && <div className="text-sm text-red-600">{promptMessage}</div>}
 
       {!submitted ? (
-        <Button type="button" onClick={handleSubmit} className="self-start">
+        <Button type="button" onClick={handleSubmit} className="self-end">
           Submit
         </Button>
       ) : (

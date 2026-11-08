@@ -16,12 +16,19 @@ export function QuestionRow({
   isSelected,
   onSelect,
   onLabelChange,
+  onLabelFocus,
+  onLabelBlur,
   onDelete,
 }: {
   question: Question;
   isSelected: boolean;
   onSelect: () => void;
   onLabelChange: (label: string) => void;
+  // See template-builder.tsx's questionLabelBaselineRef comment — this
+  // plain per-keystroke Input needs an explicit focus/blur pair to
+  // coalesce undo history into one step per edit session.
+  onLabelFocus: () => void;
+  onLabelBlur: () => void;
   onDelete: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: question.id });
@@ -71,6 +78,8 @@ export function QuestionRow({
       <Input
         value={question.label}
         onChange={(e) => onLabelChange(e.target.value)}
+        onFocus={onLabelFocus}
+        onBlur={onLabelBlur}
         onClick={(e) => e.stopPropagation()}
         className="h-7 flex-1 border-transparent bg-transparent shadow-none focus-visible:border-input focus-visible:bg-background"
       />

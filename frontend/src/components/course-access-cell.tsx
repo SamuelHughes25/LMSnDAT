@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
 
 import { addCourseAssignment, removeCourseAssignment } from "@/app/actions/courses";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { toastManager } from "@/components/ui/toast";
 
 // One cell in the course Members tab's "Direct assignment" column — add/
 // remove a direct User<->Course link, independent of Group membership (see
@@ -37,21 +38,24 @@ export function CourseAccessCell({
   canEdit?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
   function handleAdd() {
-    setError(null);
     startTransition(async () => {
       const result = await addCourseAssignment(courseId, userId);
       if (!result.ok) {
-        // Still refresh on failure, not just success: the most likely way
-        // this ever actually fails is a duplicate-assignment race (two
-        // admins, or one double-click outrunning the pending-disabled
-        // state) — the row IS assigned by now, just not by this click, so
-        // refreshing self-heals this button from stale "Add" to "Assigned"
-        // instead of leaving it clickable into the same error forever.
-        setError(result.error);
+        // A toast, not inline text in this cell — an error here (e.g.
+        // "they're already in the X group") could be a full sentence, and
+        // showing it inline stretched/misaligned this column's own row
+        // height against every other column, reported directly as
+        // looking messy. Still refresh on failure, not just success: the
+        // most likely way this ever actually fails is a duplicate-
+        // assignment race (two admins, or one double-click outrunning the
+        // pending-disabled state) — the row IS assigned by now, just not
+        // by this click, so refreshing self-heals this button from stale
+        // "Add" to "Assigned" instead of leaving it clickable into the
+        // same error forever.
+        toastManager.add({ title: "Couldn't assign this course", description: result.error, type: "error" });
         router.refresh();
         return;
       }
@@ -61,12 +65,11 @@ export function CourseAccessCell({
 
   function handleRemove() {
     if (!assignmentId) return;
-    setError(null);
     const id = assignmentId;
     startTransition(async () => {
       const result = await removeCourseAssignment(id, courseId);
       if (!result.ok) {
-        setError(result.error);
+        toastManager.add({ title: "Couldn't remove this assignment", description: result.error, type: "error" });
         return;
       }
       router.refresh();
@@ -81,27 +84,22 @@ export function CourseAccessCell({
     );
   }
 
-  return (
-    <div className="flex flex-col items-start gap-1">
-      {assignmentId ? (
-        <Badge variant="secondary" className="gap-1 py-1 pr-1">
-          Assigned
-          <button
-            type="button"
-            onClick={handleRemove}
-            disabled={pending}
-            aria-label="Remove direct assignment"
-            className="rounded-full p-0.5 hover:bg-muted-foreground/20"
-          >
-            <X className="h-3 w-3" />
-          </button>
-        </Badge>
-      ) : (
-        <Button type="button" size="xs" variant="outline" onClick={handleAdd} disabled={pending}>
-          {pending ? "Adding…" : "Add"}
-        </Button>
-      )}
-      {error && <span className="text-xs text-destructive">{error}</span>}
-    </div>
+  return assignmentId ? (
+    <Badge variant="secondary" className="gap-1 py-1 pr-1">
+      Assigned
+      <button
+        type="button"
+        onClick={handleRemove}
+        disabled={pending}
+        aria-label="Remove direct assignment"
+        className="rounded-full p-0.5 hover:bg-muted-foreground/20"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </Badge>
+  ) : (
+    <Button type="button" size="xs" variant="outline" onClick={handleAdd} disabled={pending}>
+      {pending ? "Adding…" : "Add"}
+    </Button>
   );
 }

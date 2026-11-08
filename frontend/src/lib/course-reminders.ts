@@ -14,10 +14,10 @@ export type CourseReminder = { course: Course; kind: "assessment" | "deadline-on
 // that could drift apart.
 //
 // Covers two independent reasons a course needs one (deadline is
-// independent of is_assessment — see Course.deadline's own comment in
+// independent of is_assessment — see Course.deadline_days's own comment in
 // backend/apps/courses/models.py, e.g. a purely informative onboarding
-// course can still need a "watch this in your first week" deadline with no
-// questions at all):
+// course can still need a "watch this within N days of being assigned"
+// deadline with no questions at all):
 //  - "assessment": is_assessment + a passing_score set, and the member
 //    hasn't yet passed it (ANY of their own attempts has passed=true).
 //  - "deadline-only": not an assessment, but has a deadline, and the
@@ -40,7 +40,7 @@ export async function getCourseReminders(
 ): Promise<CourseReminder[]> {
   if (user.role !== "member") return [];
   const relevant = courses.filter(
-    (c) => (visibleIds === null || visibleIds.has(c.id)) && (c.is_assessment || c.deadline !== null),
+    (c) => (visibleIds === null || visibleIds.has(c.id)) && (c.is_assessment || c.deadline_days !== null),
   );
   if (relevant.length === 0) return [];
   const results = await Promise.all(

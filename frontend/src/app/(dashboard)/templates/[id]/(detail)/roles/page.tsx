@@ -2,9 +2,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { toggleTemplateInGroup } from "@/app/actions/groups";
+import { AccessDenied } from "@/components/access-denied";
 import { RoleAssignmentToggle } from "@/components/role-assignment-toggle";
 import type { Group } from "@/lib/accounts-types";
 import { DjangoApiError, djangoFetch } from "@/lib/django";
+import { canEditOwnedContent, hasTabAccess } from "@/lib/role-access";
 import type { Paginated, Template } from "@/lib/types";
 
 // Mirrors courses/[id]/(detail)/roles/page.tsx exactly, toggling a group's
@@ -21,6 +23,23 @@ export default async function TemplateRolesPage({ params }: { params: Promise<{ 
     if (err instanceof DjangoApiError && err.status === 404) notFound();
     throw err;
   }
+
+  // Templates have no Courses-style granular per-tab sub-permission split
+  // (can_edit_course_groups etc.) — just "can edit this template at all",
+  // same tab-or-owner-or-editor check canEditOwnedContent mirrors from the
+  // backend. Previously this page rendered regardless, for anyone who
+  // could merely view the template.
+  const canEdit = await canEditOwnedContent(template, "templates");
+  if (!canEdit) {
+    return <AccessDenied message="You don't have permission to manage this template's groups." />;
+  }
+
+  // Needs its own, SEPARATE permission check — being able to edit THIS
+  // template doesn't grant the ability to create new groups (that's the
+  // global Groups tab). See courses/[id]/(detail)/roles/page.tsx's
+  // identical comment for the full reasoning (this was the exact bug
+  // reported).
+  const canManageGroupsGlobally = await hasTabAccess("groups");
 
   const groups = await djangoFetch<Paginated<Group>>("/groups/");
 
@@ -46,11 +65,17 @@ export default async function TemplateRolesPage({ params }: { params: Promise<{ 
           ))}
           {groups.results.length === 0 && (
             <p className="rounded-lg border-2 border-border bg-card p-4 text-center text-sm text-muted-foreground shadow-sm">
-              No groups yet —{" "}
-              <Link href="/groups" className="text-primary hover:underline">
-                create one
-              </Link>{" "}
-              first.
+              {canManageGroupsGlobally ? (
+                <>
+                  No groups yet —{" "}
+                  <Link href="/groups" className="text-primary hover:underline">
+                    create one
+                  </Link>{" "}
+                  first.
+                </>
+              ) : (
+                "No groups yet — ask someone with Groups access to create one."
+              )}
             </p>
           )}
         </div>

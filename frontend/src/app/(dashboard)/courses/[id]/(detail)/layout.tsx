@@ -2,9 +2,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
+import { AccessDenied } from "@/components/access-denied";
 import { CourseDetailNav } from "@/components/course-detail-nav";
 import type { Course } from "@/lib/course-types";
 import { DjangoApiError, djangoFetch } from "@/lib/django";
+import { canEditOwnedContent } from "@/lib/role-access";
 
 // Scoped to courses/[id]/(detail)/* via the route group — (detail) never
 // appears in the URL, and courses/[id]/builder/ sits outside this group so
@@ -25,6 +27,17 @@ export default async function CourseDetailLayout({
   } catch (err) {
     if (err instanceof DjangoApiError && err.status === 404) notFound();
     throw err;
+  }
+
+  // The one gate shared by every sub-page under here (Overview/Preview/
+  // Analytics had none of their own — the fork's audit flagged exactly
+  // this gap). Members/Groups/Settings/Version-history each additionally
+  // check their own finer-grained viewer_can_edit_* flag on top of this,
+  // but every one of those already implies passing this coarser check too
+  // (see canEditOwnedContent's own comment), so there's no case where this
+  // blocks someone who'd pass one of those stricter gates further in.
+  if (!(await canEditOwnedContent(course, "courses"))) {
+    return <AccessDenied message="You don't have permission to manage this course." />;
   }
 
   return (
@@ -52,7 +65,13 @@ export default async function CourseDetailLayout({
       </div>
 
       <div className="flex min-h-0 flex-1 items-start gap-6">
-        <CourseDetailNav courseId={id} />
+        <CourseDetailNav
+          courseId={id}
+          canEditMembers={course.viewer_can_edit_members}
+          canEditGroups={course.viewer_can_edit_groups}
+          canEditSettings={course.viewer_can_edit_settings}
+          canViewVersionHistory={course.viewer_can_view_version_history}
+        />
         {/* self-stretch (not items-start's default for this one child):
             gives {children} the row's full available height so a
             height-fitting tab (preview) has something real to measure,

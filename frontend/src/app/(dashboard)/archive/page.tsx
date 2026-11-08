@@ -1,6 +1,6 @@
-import { redirect } from "next/navigation";
-
+import { AccessDenied } from "@/components/access-denied";
 import { ArchiveItemActions } from "@/components/archive-item-actions";
+import { ScrollableTableContainer } from "@/components/scrollable-table-container";
 import {
   Table,
   TableBody,
@@ -30,9 +30,12 @@ export default async function ArchivePage() {
   // Archiving/restoring/purging all require the 'archive' tab on the
   // backend (see CourseViewSet/TemplateViewSet/UserViewSet's
   // HasArchiveTabAccess usage) — anyone without it would just get 403s
-  // from every fetch below, so they're bounced before that rather than
-  // shown a broken page.
-  if (!user.accessible_tabs.includes("archive")) redirect("/dashboard");
+  // from every fetch below, so they're stopped before that rather than
+  // shown a broken page. Used to silently bounce to /dashboard — changed
+  // to the same explicit <AccessDenied /> every other tab gate now uses.
+  if (!user.accessible_tabs.includes("archive")) {
+    return <AccessDenied message="You don't have permission to view the Archive." />;
+  }
 
   const [courses, templates, users] = await Promise.all([
     djangoFetch<Paginated<Course>>("/courses/?archived=true"),
@@ -73,7 +76,7 @@ export default async function ArchivePage() {
                       kind="course"
                       id={course.id}
                       itemName={course.name}
-                      purgeWarning="All attempt history for every user who took this course will be removed too."
+                      purgeWarning="All attempt history for every user who took this course will be removed too. Only possible if every attempt belongs to this course's own owner or an editor — if anyone else has attempted it, this will fail and the course can only stay archived."
                     />
                   </TableCell>
                 </TableRow>
@@ -133,6 +136,7 @@ export default async function ArchivePage() {
       <section>
         <h2 className="mb-2 text-lg font-medium">Users</h2>
         <div className="rounded-lg border-2 border-border bg-card shadow-sm">
+          <ScrollableTableContainer>
           <Table>
             <TableHeader>
               <TableRow>
@@ -167,6 +171,7 @@ export default async function ArchivePage() {
               )}
             </TableBody>
           </Table>
+          </ScrollableTableContainer>
         </div>
       </section>
     </div>

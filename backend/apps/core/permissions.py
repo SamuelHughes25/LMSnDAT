@@ -164,6 +164,40 @@ class HasArchiveTabAccessOrIsOwner(BasePermission):
         return False
 
 
+def is_office_user(user):
+    """True if `user` is any kind of office/dashboard-eligible account —
+    NOT necessarily with access to any SPECIFIC tab (unlike
+    user_can_access_tab), just excluded from the portal-only
+    `role == 'member'` tier. Exists for the handful of cross-cutting
+    reads a dashboard user legitimately needs regardless of which
+    specific tabs they personally have — e.g. the list of existing
+    Groups, needed by a course/template editor with can_edit_course_groups
+    to pick which ones a course belongs to, even without the Groups tab
+    itself — where an operative/member has no legitimate reason to reach
+    the data at all. Narrower than plain IsAuthenticated (which an
+    operative also satisfies), broader than user_can_access_tab (which a
+    dashboard user without that SPECIFIC tab would fail). is_superuser/
+    is_platform_admin bypass regardless of `role` — same blanket bypass
+    every other check in this module gives them, and needed in practice:
+    a platform admin's `role` defaults to 'member' unless set otherwise,
+    same as any other account."""
+    if user and user.is_authenticated and (user.is_superuser or user.is_platform_admin):
+        return True
+    return bool(user and user.is_authenticated and user.role != 'member')
+
+
+class IsOfficeUser(BasePermission):
+    """See is_office_user's own docstring for exactly what this does and
+    doesn't gate. Used for the read side of GroupViewSet/
+    PermissionSetViewSet — list/retrieve needs to stay reachable by any
+    office user (not just one with that specific tab), but a portal
+    member must never reach it at all, which plain IsAuthenticated
+    (what both of these used before) doesn't rule out."""
+
+    def has_permission(self, request, view):
+        return is_office_user(request.user)
+
+
 class IsSuperuser(BasePermission):
     """Reserved for the one super-super-user tier — not tab-based at all.
     Used by UserViewSet.grant_platform_admin/revoke_platform_admin and
@@ -299,6 +333,33 @@ class CanManageCourseMembers(BasePermission):
             return True
         course = view.get_owning_content(obj) if hasattr(view, 'get_owning_content') else obj.course
         return user_can_manage_course_admin(request.user, course, 'can_edit_course_members')
+
+
+class CanManageCourseDeadlines(BasePermission):
+    """Gates CourseDeadlineExtensionViewSet — see user_can_manage_course_admin's
+    docstring. Deliberately its own sub_permission_attr, separate from
+    can_edit_course_members: being trusted to assign/unassign a course to
+    people is a different, less personal trust level than being trusted to
+    move an individual learner's own due date around. Reading stays plain
+    Courses-tab-gated (not owner/editor-gated) — unchanged from this
+    endpoint's previous HasDashboardTabAccess behavior, since the only
+    reader is the course Analytics page, already tab-gated to get there."""
+
+    def has_permission(self, request, view):
+        if request.method in SAFE_METHODS:
+            return user_can_access_tab(request.user, 'courses')
+        if view.action == 'create':
+            # No object yet — CourseDeadlineExtensionViewSet.perform_create
+            # re-checks this against the resolved course, same
+            # "class-level permission is just a safety net" pattern
+            # CanManageCourseMembers' own docstring describes.
+            return bool(request.user and request.user.is_authenticated)
+        return bool(request.user and request.user.is_authenticated)
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        return user_can_manage_course_admin(request.user, obj.course, 'can_edit_course_deadlines')
 
 
 class CanManageCourseGroups(BasePermission):

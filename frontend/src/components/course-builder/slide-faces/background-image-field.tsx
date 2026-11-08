@@ -10,6 +10,7 @@ import { useActiveEditorContext } from "../active-editor-context";
 import { CANVAS_H, CANVAS_W } from "../slide-canvas";
 import { useSlideSelection } from "../slide-selection-context";
 import { useSnapGuides } from "../snap-guide-context";
+import { useGroupDrag } from "./group-drag-context";
 import {
   DEFAULT_POSITION_PCT,
   DEFAULT_SIZE_PCT,
@@ -18,6 +19,14 @@ import {
   imageBoxStyle,
 } from "./image-shared";
 import { snapEdge } from "./snap-guides";
+
+// Minimum pointer travel (px) before a move counts as an actual drag — see
+// positionable-box.tsx's own identical constant. Images didn't need this
+// distinction before group-select existed (a plain click always safely
+// re-committed the exact same, unchanged position), but now determines
+// whether a deferred multi-select click/toggle (see handleMovePointerDown
+// below) actually fires.
+const DRAG_THRESHOLD_PX = 3;
 
 // This slide's own background image never shares its selection id with any
 // text box (those are namespaced `${slideId}:title` etc. — see
@@ -304,8 +313,12 @@ export function BackgroundImageEditLayer({
   // its own. Sharing one slot means selecting the image here automatically
   // clears any other box's own isSelected, and vice versa, without either
   // side needing to know the other exists.
-  const { selectedId, select, deselect } = useSlideSelection();
-  const isSelected = selectedId === selectionId;
+  const { selectedIds, select, deselect } = useSlideSelection();
+  const isSelected = selectedIds.has(selectionId);
+  // See positionable-box.tsx's identical isMultiSelected — gates group-move
+  // here too (group-drag-context.tsx), same condition, same reasoning.
+  const isMultiSelected = isSelected && selectedIds.size > 1;
+  const { startGroupDrag, registerDragTarget } = useGroupDrag();
   const frameRef = useRef<HTMLDivElement>(null);
   // So clicking into the properties panel's own X/Y/Width/Height inputs for
   // THIS image (image-object-properties.tsx) doesn't immediately deselect it
@@ -341,13 +354,43 @@ export function BackgroundImageEditLayer({
     onTransform({ xPct: next.x, yPct: next.y, widthPct: next.w, heightPct: next.h });
   }
 
+  // Registers this image into the shared group-drag registry — see
+  // positionable-box.tsx's identical registration for the full reasoning
+  // (`latestRef` keeps it pointing at this render's current props/
+  // commitTransform instead of a stale closure). `live` doubles as the
+  // group-drag override target here (unlike positionable-box.tsx's
+  // separate groupOverride state) — this component already treats `live`
+  // as its one single source of "what to render instead of the committed
+  // props," with no baseline/measured-position distinction to keep
+  // separate from it.
+  const latestRef = useRef({ xPct, yPct, widthPct, heightPct, commitTransform });
+  useEffect(() => {
+    latestRef.current = { xPct, yPct, widthPct, heightPct, commitTransform };
+  });
+  useEffect(() => {
+    return registerDragTarget(selectionId, {
+      getBaseline: () => ({
+        xPct: latestRef.current.xPct,
+        yPct: latestRef.current.yPct,
+        widthPct: latestRef.current.widthPct,
+        heightPct: latestRef.current.heightPct,
+      }),
+      setLiveOverride: (t) => setLive(t ? { x: t.xPct, y: t.yPct, w: t.widthPct, h: t.heightPct } : null),
+      commit: (t) => latestRef.current.commitTransform({ x: t.xPct, y: t.yPct, w: t.widthPct, h: t.heightPct }),
+    });
+  }, [selectionId, registerDragTarget]);
+
   // Dragging the move grip, or the perimeter band, repositions the image's
   // center. Measured against `containerRef` — the full slide root, passed
   // down from slide-canvas.tsx — so percentages stay consistent with
   // imageBoxStyle's own frame of reference.
   function handleMovePointerDown(e: React.PointerEvent) {
     e.preventDefault();
-    select(selectionId);
+    const additive = e.shiftKey;
+    // See positionable-box.tsx's identical deferSelection — the same two
+    // genuinely ambiguous "click or drag?" cases apply here too.
+    const deferSelection = (additive && isSelected) || (!additive && isMultiSelected);
+    if (!deferSelection) select(selectionId, additive);
     // See positionable-box.tsx's identical blurStaleEditor for the bug this
     // fixes — preventDefault() above suppresses the native blur a text
     // box's editor would otherwise get when this image's band is clicked,
@@ -359,6 +402,17 @@ export function BackgroundImageEditLayer({
     if (activeEditor && activeEditorId) {
       activeEditor.commands.blur();
     }
+
+    if (isMultiSelected) {
+      const container = containerRef.current;
+      if (container) {
+        startGroupDrag(e, container.getBoundingClientRect(), selectedIds, () => {
+          if (deferSelection) select(selectionId, additive);
+        });
+        return;
+      }
+    }
+
     const container = containerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
@@ -367,8 +421,20 @@ export function BackgroundImageEditLayer({
     const startXPct = xPct;
     const startYPct = yPct;
     let current = { x: startXPct, y: startYPct, w: effective.w, h: effective.h };
+    // See positionable-box.tsx's own DRAG_THRESHOLD_PX comment — needed
+    // here now so a plain click (no real movement) can still defer to
+    // `deferSelection` below instead of always re-committing the same,
+    // unchanged position (which it did unconditionally before multi-select
+    // existed — harmless on its own, since the "new" value was always
+    // identical to the old one, but it can no longer also assume a click
+    // is never ambiguous with a selection change).
+    let moved = false;
 
     function onMove(moveEvent: PointerEvent) {
+      if (!moved && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < DRAG_THRESHOLD_PX) {
+        return;
+      }
+      moved = true;
       const rawX = clampPositionPct(startXPct + ((moveEvent.clientX - startX) / rect.width) * 100);
       const rawY = clampPositionPct(startYPct + ((moveEvent.clientY - startY) / rect.height) * 100);
       // A center-anchored image's own anchor point IS the thing to snap
@@ -394,7 +460,8 @@ export function BackgroundImageEditLayer({
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
       clearGuides();
-      commitTransform(current);
+      if (moved) commitTransform(current);
+      else if (deferSelection) select(selectionId, additive);
     }
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);

@@ -4,6 +4,13 @@
 
 export type UserRole = "admin" | "manager" | "member";
 
+// The six dashboard tabs a PermissionSet can grant — one shared type, not
+// re-literaled at every call site, so AccountUser.accessible_tabs,
+// PermissionSet's own can_access_* fields, and lib/role-access.ts's
+// hasTabAccess all agree on the exact same set. Mirrors backend
+// apps.core.permissions.DASHBOARD_TABS.
+export type DashboardTab = "templates" | "courses" | "users" | "groups" | "permissions" | "archive";
+
 // A named bundle of dashboard tab access — replaces the old hardcoded
 // admin/manager distinction for WHAT a dashboard user can actually do.
 // One flat on/off switch per tab, full capability when on — no separate
@@ -31,11 +38,16 @@ export type PermissionSet = {
   can_reset_user_passwords: boolean;
   can_edit_users: boolean;
   // Courses sub-permissions — each only matters for a course the user
-  // already owns or is an editor on; the owner always has all three
+  // already owns or is an editor on; the owner always has all five
   // regardless (apps.core.permissions.user_can_manage_course_admin).
   can_edit_course_members: boolean;
   can_edit_course_groups: boolean;
   can_edit_course_settings: boolean;
+  can_edit_course_deadlines: boolean;
+  // A read gate, not an edit one — whether a plain editor can even open
+  // this course's Version History tab at all (see Course
+  // .viewer_can_view_version_history on the backend).
+  can_view_version_history: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -118,10 +130,9 @@ export type AccountUser = {
   // of the six dashboard tabs this user can currently reach, already
   // folding in the is_superuser/is_platform_admin bypass. Check with
   // `.includes("courses")` etc. rather than re-deriving this from
-  // permission_set client-side.
-  accessible_tabs: (
-    "templates" | "courses" | "users" | "groups" | "permissions" | "archive"
-  )[];
+  // permission_set client-side — or, in a Server Component, via
+  // lib/role-access.ts's hasTabAccess, which does exactly that.
+  accessible_tabs: DashboardTab[];
   // Which specific courses/templates this user owns or edits, computed
   // server-side (UserSerializer.get_manageable_course_ids/
   // get_manageable_template_ids) ONLY for the viewer's own row — always []

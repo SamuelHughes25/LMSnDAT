@@ -36,6 +36,16 @@ export const PERMISSION_SET_SECTIONS: {
         label: "Edit settings",
         description: "Change a course's own name, thumbnail, assessment, and deadline settings.",
       },
+      {
+        field: "can_edit_course_deadlines",
+        label: "Edit user deadlines",
+        description: "Move an individual learner's own due date on a course they own or edit.",
+      },
+      {
+        field: "can_view_version_history",
+        label: "View version history",
+        description: "Open the Version history tab on a course they own or edit.",
+      },
     ],
   },
   {

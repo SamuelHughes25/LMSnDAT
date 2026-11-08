@@ -1,5 +1,5 @@
 import { VersionHistoryTable } from "@/components/version-history-table";
-import type { CourseVersion } from "@/lib/course-types";
+import type { Course, CourseVersion } from "@/lib/course-types";
 import { djangoFetch } from "@/lib/django";
 import type { Paginated } from "@/lib/types";
 
@@ -10,6 +10,22 @@ import type { Paginated } from "@/lib/types";
 // same reasoning applied to its own, narrower need.
 export default async function CourseVersionHistoryPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+
+  // Re-checked here, not just hidden from CourseDetailNav's own link — a
+  // typed/bookmarked URL must refuse this page's content just as firmly
+  // as the nav refuses to advertise it. The (detail) layout already
+  // fetched this course once for the nav's own sake, but Server
+  // Components can't share that fetch across sibling route segments, so
+  // this is a second, cheap GET for the same row.
+  const course = await djangoFetch<Course>(`/courses/${id}/`);
+  if (!course.viewer_can_view_version_history) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-semibold">Version history</h1>
+        <p className="text-muted-foreground">You don&apos;t have permission to view this course&apos;s version history.</p>
+      </div>
+    );
+  }
 
   const versions = await djangoFetch<Paginated<CourseVersion>>(`/course-versions/?course=${id}&page_size=200`);
 

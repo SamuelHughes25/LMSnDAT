@@ -1,7 +1,7 @@
 from django.db import transaction
 from django.utils import timezone
 
-from .models import CourseVersion, Lesson, ReusableLesson, ReusableSlide, Slide
+from .models import CourseVersion, Lesson, ReusableLesson, ReusableSlide, Slide, SlideTemplate
 
 
 @transaction.atomic
@@ -58,7 +58,9 @@ def save_lesson_as_reusable(lesson, name, description, user):
     _clone_lessons above, just landing in ReusableSlide instead of Slide.
     The source `lesson` is left completely untouched; nothing here links
     back to it (see ReusableLesson's own docstring for why)."""
-    reusable_lesson = ReusableLesson.objects.create(name=name, description=description, created_by=user)
+    reusable_lesson = ReusableLesson.objects.create(
+        name=name, description=description, order=ReusableLesson.objects.count(), created_by=user
+    )
     ReusableSlide.objects.bulk_create(
         ReusableSlide(
             reusable_lesson=reusable_lesson,
@@ -99,6 +101,41 @@ def import_reusable_lesson(reusable_lesson, target_version, order):
     return new_lesson
 
 
+def save_slide_as_template(slide, name, user):
+    """Clones `slide`'s own slide_type and config into a brand new,
+    standalone SlideTemplate library entry — the one-slide analogue of
+    save_lesson_as_reusable above. Works for any slide_type, not just
+    freeform `content` — an assessment slide's config carries its own
+    correct answer inline (see SlideTemplate's own docstring), so cloning
+    it here is exactly as sufficient as cloning a ReusableSlide's config
+    already is. The source `slide` is left completely untouched; nothing
+    here links back to it."""
+    return SlideTemplate.objects.create(
+        name=name, slide_type=slide.slide_type, config=slide.config,
+        order=SlideTemplate.objects.count(), created_by=user,
+    )
+
+
+def import_slide_template(slide_template, lesson, order):
+    """The inverse of save_slide_as_template above: clones a SlideTemplate's
+    slide_type and config into a brand new real Slide on `lesson`. A
+    one-time copy, not a live link, same reasoning as
+    import_reusable_lesson's own identical note. Deliberately touches only
+    `lesson`'s own Slide — never the target Course/CourseVersion itself —
+    so importing a template built from an assessment-course's slide can
+    never make the TARGET course's own `is_assessment`/`passing_score`
+    change; those stay exactly whatever the target course's own settings
+    already say, regardless of what kind of slide just got imported into
+    it."""
+    return Slide.objects.create(
+        lesson=lesson,
+        slide_type=slide_template.slide_type,
+        title=slide_template.name,
+        order=order,
+        config=slide_template.config,
+    )
+
+
 @transaction.atomic
 def revert_to_version(source_version, user):
     """Starts a new, unpublished draft cloned from `source_version`'s own
@@ -137,6 +174,17 @@ def revert_to_version(source_version, user):
 def publish_version(version, user):
     if version.status != CourseVersion.Status.DRAFT:
         raise ValueError('Only draft versions can be published.')
+
+    # A published course with zero slides is a dead end for whoever it
+    # gets assigned to — the portal player would show "This course
+    # doesn't have any content yet" (see course-preview-viewer.tsx) with
+    # nothing to do and no way to ever complete it, a stuck/confusing
+    # state for a non-use-case nobody should be able to reach in the
+    # first place. Checked here (not just the frontend's own Publish
+    # button) so this can't be bypassed by posting straight to this
+    # action either.
+    if not Slide.objects.filter(lesson__course_version=version).exists():
+        raise ValueError('Add at least one slide before publishing this course.')
 
     CourseVersion.objects.filter(
         course=version.course,

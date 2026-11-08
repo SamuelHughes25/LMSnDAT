@@ -152,13 +152,32 @@ export function VersionHistoryTable({
                 </TableRow>
                 {isOpen && (
                   <TableRow className="bg-muted hover:bg-muted">
-                    <TableCell colSpan={6} className="py-3">
+                    {/* whitespace-normal overrides TableCell's own default
+                        whitespace-nowrap (see table.tsx) — without it, every
+                        slide text box nested inside this <td> inherits
+                        nowrap and collapses onto one line that runs straight
+                        off the canvas edge, since CoursePreviewViewer's own
+                        text fields (widget-text-field.tsx) have no
+                        whitespace rule of their own to fight it with. The
+                        admin's own Preview tab never hits this: it renders
+                        CoursePreviewViewer directly inside a plain flex
+                        column, never inside a table cell at all. */}
+                    <TableCell colSpan={6} className="py-3 whitespace-normal">
                       <div className="space-y-3">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-semibold text-muted-foreground">
                             Version {version.version_number} preview
                           </span>
-                          <RevertButton courseId={courseId} version={version} disabled={hasDraft} />
+                          {/* Reverting TO the currently published version makes
+                              no sense — it's already what's live, and "start a
+                              new draft from the current content" is exactly
+                              what opening the builder on this course already
+                              does. Only ever one row has status === "published"
+                              (see page.tsx's own comment), so this never hides
+                              the button for every row at once. */}
+                          {version.status !== "published" && (
+                            <RevertButton courseId={courseId} version={version} disabled={hasDraft} />
+                          )}
                         </div>
                         {slides.length === 0 ? (
                           <p className="text-sm text-muted-foreground">This version has no slides.</p>
@@ -168,9 +187,14 @@ export function VersionHistoryTable({
                           // (see useStageScale in that component), so it
                           // needs a real pixel height to measure, not just
                           // percentage heights all the way up through a
-                          // table cell that has none of its own.
-                          <div className="h-[380px] rounded-lg border border-border bg-background p-2">
-                            <CoursePreviewViewer slides={slides} maxWidthClassName="max-w-2xl" />
+                          // table cell that has none of its own. Larger than
+                          // this table's row would get by default (reported
+                          // as too small to make out slide content) —
+                          // max-w-5xl/700px roughly matches the admin's own
+                          // dedicated Preview tab's effective size instead of
+                          // a cramped inline thumbnail.
+                          <div className="h-[700px] rounded-lg border border-border bg-background p-2">
+                            <CoursePreviewViewer slides={slides} maxWidthClassName="max-w-5xl" />
                           </div>
                         )}
                       </div>

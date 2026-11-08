@@ -18,6 +18,17 @@ export type CourseAttempt = {
   course_id: string;
   course_name: string;
   user: number;
+  // Denormalized straight onto the attempt — same *_username convenience
+  // precedent as course_id/course_name above — so a caller building a
+  // per-course analytics view can label/filter by the attempting user's
+  // own username/role/permission set without a separate per-user fetch,
+  // which is gated behind the Users tab and 404s for anyone else once the
+  // viewer lacks it (see CourseAttemptSerializer's own comment on the
+  // backend for the exact bug this was closing).
+  user_username: string;
+  user_role: string;
+  user_permission_set_id: string | null;
+  user_permission_set_name: string | null;
   status: CourseAttemptStatus;
   started_at: string;
   completed_at: string | null;

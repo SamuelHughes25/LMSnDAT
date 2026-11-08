@@ -10,9 +10,10 @@ from apps.accounts.models import Group, PermissionSet, Team, User
 from apps.core.test_utils import APIAuthTestCase
 from apps.courses.grading import grade_slide
 from apps.courses.models import (
-    Course, CourseAssignment, CourseAttempt, CourseDeadlineExtension, CourseVersion, Lesson, ReusableLesson,
-    ReusableSlide, Slide, SlideResult,
+    Course, CourseAccessGrant, CourseAssignment, CourseAttempt, CourseDeadlineExtension, CourseVersion, Lesson,
+    ReusableLesson, ReusableSlide, Slide, SlideResult, SlideTemplate,
 )
+from apps.courses.services import import_slide_template
 
 MEDIA_ROOT = tempfile.mkdtemp()
 
@@ -57,6 +58,14 @@ class CourseBuilderFlowTests(APIAuthTestCase):
         resp = admin_client.post(f'/api/v1/courses/{course_id}/create-draft/', format='json')
         self.assertEqual(resp.status_code, 201, resp.content)
         self.assertEqual(resp.data['id'], version_id)
+
+        # A fresh draft has zero slides — publishing it right now must be
+        # refused with a clean 400, not silently succeed into a published
+        # course nobody can ever actually complete (see
+        # services.publish_version's own comment).
+        resp = admin_client.post(f'/api/v1/course-versions/{version_id}/publish/', format='json')
+        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertIn('slide', resp.data['detail'].lower())
 
         # --- Lesson CRUD ---
         resp = admin_client.post('/api/v1/lessons/', {
@@ -559,6 +568,18 @@ class CourseAttemptTests(APIAuthTestCase):
             name='Assessment Course', created_by=self.admin, is_assessment=True, passing_score=70,
         )
         self.plain_course = Course.objects.create(name='Plain Course', created_by=self.admin)
+        # Course.is_accessible_by() now gates attempt creation for real
+        # (CourseAttemptViewSet.perform_create) — `self.member` is this
+        # whole test class's stand-in "a learner taking this course," so it
+        # needs an explicit, real access path like any genuine learner
+        # would, rather than implicitly being allowed through just because
+        # nothing checked before.
+        CourseAssignment.objects.create(
+            course=self.assessment_course, user=self.member, assigned_by=self.admin,
+        )
+        CourseAssignment.objects.create(
+            course=self.plain_course, user=self.member, assigned_by=self.admin,
+        )
 
         self.assessment_version = CourseVersion.objects.create(
             course=self.assessment_course, version_number=1, status=CourseVersion.Status.PUBLISHED,
@@ -572,6 +593,7 @@ class CourseAttemptTests(APIAuthTestCase):
         self.mc_slide = Slide.objects.create(
             lesson=lesson, slide_type='multiple_choice', order=0,
             config={
+                'question': 'Pick A',
                 'options': [
                     {'id': 'a', 'text': 'A', 'is_correct': True}, {'id': 'b', 'text': 'B', 'is_correct': False},
                 ],
@@ -783,6 +805,41 @@ class CourseAttemptTests(APIAuthTestCase):
         self.assertEqual(resp.data['score'], 0)
         self.assertFalse(resp.data['passed'])
 
+    def test_complete_scores_each_slide_as_a_whole_point_not_partial_credit(self):
+        """grade_slide() returns a fractional `score` (e.g. 0.5 for a
+        match_pairs slide with 1 of 2 pairs right) alongside the binary
+        is_correct it's actually derived from. Averaging that float used to
+        let a partially-right multi-part slide contribute a fraction of a
+        point instead of zero, producing results like "56%" that don't
+        correspond to any whole number of right/wrong questions — reported
+        directly as confusing, unexplainable arithmetic. complete() must
+        count is_correct, not sum(score): one slide right (mc) and one
+        wrong-but-half-credit (match_pairs, 1 of 2 pairs matched) is 1 of 2
+        questions right -> 50%, not (1.0 + 0.5) / 2 -> 75%."""
+        member_client = self.auth('attempt_member', 'pw')
+        resp = member_client.post(
+            '/api/v1/course-attempts/', {'course_version': str(self.assessment_version.id)}, format='json'
+        )
+        attempt_id = resp.data['id']
+        resp = member_client.post(
+            f'/api/v1/course-attempts/{attempt_id}/results/',
+            {'results': [
+                {'slide': str(self.mc_slide.id), 'detail': {'selectedOptionId': 'a'}},  # correct
+                # Half the pairs right -> grade_slide returns (False, 0.5):
+                # is_correct is False, but the old sum(score) path would have
+                # still credited half a point for it.
+                {'slide': str(self.match_pairs_slide.id), 'detail': {'pairings': {'p1': 'p1', 'p2': 'p1'}}},
+            ]},
+            format='json',
+        )
+        match_result = SlideResult.objects.get(attempt_id=attempt_id, slide=self.match_pairs_slide)
+        self.assertFalse(match_result.is_correct)
+        self.assertEqual(match_result.score, 0.5)
+
+        resp = member_client.post(f'/api/v1/course-attempts/{attempt_id}/complete/', format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.data['score'], 50)
+
     def test_complete_with_no_gradable_slides_leaves_score_and_passed_null(self):
         # The one case score/passed should still be None: a course with no
         # gradable/interactive slides at all, regardless of is_assessment.
@@ -800,11 +857,94 @@ class CourseAttemptTests(APIAuthTestCase):
         self.assertIsNone(resp.data['score'])
         self.assertIsNone(resp.data['passed'])
 
+    def test_complete_excludes_completion_gate_slides_from_score(self):
+        """accordion/flashcards/hotspot_image are self-paced completion
+        gates with no reachable wrong answer (see grading.py's
+        SCORABLE_SLIDE_TYPES comment) — they must never be counted as a
+        "question" in the score/pass-fail calculation, even though
+        grade_slide() happily marks them is_correct=True once completed.
+        Before SCORABLE_SLIDE_TYPES existed, completing nothing but one of
+        these guaranteed-free slides, with the real questions all answered
+        WRONG, still inflated the score with free points instead of
+        reflecting the real wrong answers."""
+        flashcards_slide = Slide.objects.create(
+            lesson=self.mc_slide.lesson, slide_type='flashcards', order=2,
+            config={'cards': [{'id': 'c1', 'front': 'f', 'back': 'b'}]},
+        )
+        member_client = self.auth('attempt_member', 'pw')
+        resp = member_client.post(
+            '/api/v1/course-attempts/', {'course_version': str(self.assessment_version.id)}, format='json'
+        )
+        attempt_id = resp.data['id']
+        resp = member_client.post(
+            f'/api/v1/course-attempts/{attempt_id}/results/',
+            {'results': [
+                {'slide': str(self.mc_slide.id), 'detail': {'selectedOptionId': 'b'}},  # wrong
+                {'slide': str(self.match_pairs_slide.id), 'detail': {'pairings': {'p1': 'p2', 'p2': 'p1'}}},  # wrong
+                {'slide': str(flashcards_slide.id), 'detail': {'cardsViewed': 1}},  # "completed" -> is_correct True
+            ]},
+            format='json',
+        )
+        self.assertTrue(SlideResult.objects.get(attempt_id=attempt_id, slide=flashcards_slide).is_correct)
+
+        resp = member_client.post(f'/api/v1/course-attempts/{attempt_id}/complete/', format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        # Both real questions wrong -> 0%, not inflated by the always-correct
+        # flashcards completion (which, before this fix, would have averaged
+        # in as a free 100% and produced a 33% score instead of 0%).
+        self.assertEqual(resp.data['score'], 0)
+        self.assertFalse(resp.data['passed'])
+
+    def test_complete_excludes_unconfigured_placeholder_slides_from_score(self):
+        """Reported directly: a course the author was still building had two
+        leftover placeholder slides never actually finished (a
+        multiple_choice with no question typed in yet, a missing_word with
+        no blanks defined) alongside one real, finished multiple_choice
+        question. The learner answered the one real question correctly but
+        scored 33%, not 100% — SCORABLE_SLIDE_TYPES membership alone
+        counted the two unfinished slides toward the denominator even
+        though they were never actually capable of being answered right or
+        wrong. slide_is_configured() (grading.py) is what excludes them."""
+        blank_mc_slide = Slide.objects.create(
+            lesson=self.mc_slide.lesson, slide_type='multiple_choice', order=2,
+            config={'question': '', 'options': [
+                {'id': 'x', 'text': '', 'is_correct': True}, {'id': 'y', 'text': '', 'is_correct': False},
+            ]},
+        )
+        blank_missing_word_slide = Slide.objects.create(
+            lesson=self.mc_slide.lesson, slide_type='missing_word', order=3,
+            config={'blanks': [], 'paragraph': 'Some unfinished passage.'},
+        )
+        member_client = self.auth('attempt_member', 'pw')
+        resp = member_client.post(
+            '/api/v1/course-attempts/', {'course_version': str(self.assessment_version.id)}, format='json'
+        )
+        attempt_id = resp.data['id']
+        # Only the one real, finished question is ever answered — the two
+        # placeholder slides are never submitted at all, same as a learner
+        # who never saw them render as a real question worth answering.
+        member_client.post(
+            f'/api/v1/course-attempts/{attempt_id}/results/',
+            {'results': [
+                {'slide': str(self.mc_slide.id), 'detail': {'selectedOptionId': 'a'}},  # correct
+                {'slide': str(self.match_pairs_slide.id), 'detail': {'pairings': {'p1': 'p1', 'p2': 'p2'}}},  # correct
+            ]},
+            format='json',
+        )
+        resp = member_client.post(f'/api/v1/course-attempts/{attempt_id}/complete/', format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        # Both real questions right, two unfinished placeholders excluded
+        # entirely -> 100%, not 50% (counting one placeholder) or 33%
+        # (counting both, as actually reported).
+        self.assertEqual(resp.data['score'], 100)
+        self.assertTrue(resp.data['passed'])
+
     def test_non_assessment_course_never_sets_passed(self):
         lesson2 = Lesson.objects.create(course_version=self.plain_version, title='L2', order=0)
         slide2 = Slide.objects.create(
             lesson=lesson2, slide_type='multiple_choice', order=0,
             config={
+                'question': 'Pick A',
                 'options': [
                     {'id': 'a', 'text': 'A', 'is_correct': True}, {'id': 'b', 'text': 'B', 'is_correct': False},
                 ],
@@ -851,6 +991,139 @@ class CourseAttemptTests(APIAuthTestCase):
         self.assertEqual(course_names, {'Assessment Course', 'Plain Course'})
 
 
+class CourseAccessEnforcementTests(APIAuthTestCase):
+    """Course.is_accessible_by() and its real enforcement point
+    (CourseAttemptViewSet.perform_create) — closes a confirmed gap where
+    ANY authenticated user (an office user with the Courses tab but no
+    real relationship to a given course, or even a plain member) could
+    POST straight to /course-attempts/ with any course_version id and
+    start — and finish — a course nobody had ever assigned them, group,
+    direct assignment, ownership or editor status alike. The frontend's
+    own role-access.ts hid the course from the portal's course LIST for
+    this same case, but hiding it from a list was always cosmetic only —
+    this is the actual boundary."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username='access_owner', password='pw', role=User.Role.ADMIN)
+        self.editor = User.objects.create_user(username='access_editor', password='pw', role=User.Role.ADMIN)
+        self.assigned_user = User.objects.create_user(
+            username='access_assigned', password='pw', role=User.Role.MEMBER,
+        )
+        self.group_member = User.objects.create_user(
+            username='access_group_member', password='pw', role=User.Role.MEMBER,
+        )
+        # The exact confirmed-real case: an office user with the Courses
+        # tab (so able to manage/see the CATALOG) but no personal
+        # relationship to THIS course at all — not its owner/editor, never
+        # assigned it directly, not in a group that has it.
+        permission_set = PermissionSet.objects.create(name='Course Manager Only', can_access_courses=True)
+        self.unrelated_office_user = User.objects.create_user(
+            username='access_unrelated_office', password='pw', role=User.Role.ADMIN, permission_set=permission_set,
+        )
+        self.unrelated_member = User.objects.create_user(
+            username='access_unrelated_member', password='pw', role=User.Role.MEMBER,
+        )
+        self.platform_admin = User.objects.create_user(
+            username='access_platform_admin', password='pw', is_platform_admin=True,
+        )
+
+        self.course = Course.objects.create(name='Access Course', created_by=self.owner)
+        self.course.editors.add(self.editor)
+        CourseAssignment.objects.create(course=self.course, user=self.assigned_user, assigned_by=self.owner)
+        group = Group.objects.create(name='Access Group')
+        group.courses.add(self.course)
+        group.members.add(self.group_member)
+
+        self.version = CourseVersion.objects.create(
+            course=self.course, version_number=1, status=CourseVersion.Status.PUBLISHED, created_by=self.owner,
+        )
+        lesson = Lesson.objects.create(course_version=self.version, title='L1', order=0)
+        Slide.objects.create(lesson=lesson, slide_type='content', order=0, config={'body': 'hi'})
+
+    def test_is_accessible_by_every_qualifying_path(self):
+        self.assertTrue(self.course.is_accessible_by(self.owner))
+        self.assertTrue(self.course.is_accessible_by(self.editor))
+        self.assertTrue(self.course.is_accessible_by(self.assigned_user))
+        self.assertTrue(self.course.is_accessible_by(self.group_member))
+        self.assertTrue(self.course.is_accessible_by(self.platform_admin))
+
+    def test_is_accessible_by_false_for_unrelated_users_regardless_of_tab_access(self):
+        # The Courses tab is about MANAGING the catalog, not about being
+        # personally assigned something to take — having it is NOT one of
+        # the qualifying paths.
+        self.assertFalse(self.course.is_accessible_by(self.unrelated_office_user))
+        self.assertFalse(self.course.is_accessible_by(self.unrelated_member))
+
+    def test_unrelated_user_cannot_start_an_attempt(self):
+        for username in ('access_unrelated_office', 'access_unrelated_member'):
+            client = self.auth(username, 'pw')
+            resp = client.post('/api/v1/course-attempts/', {'course_version': str(self.version.id)}, format='json')
+            self.assertEqual(resp.status_code, 403, resp.content)
+            self.assertFalse(CourseAttempt.objects.filter(course_version=self.version).exists())
+
+    def test_every_qualifying_path_can_start_an_attempt(self):
+        for username in ('access_owner', 'access_editor', 'access_assigned', 'access_group_member'):
+            CourseAttempt.objects.filter(course_version=self.version).delete()
+            client = self.auth(username, 'pw')
+            resp = client.post('/api/v1/course-attempts/', {'course_version': str(self.version.id)}, format='json')
+            self.assertEqual(resp.status_code, 201, resp.content)
+
+
+class CourseVersionHistoryPermissionTests(APIAuthTestCase):
+    """Course.viewer_can_view_version_history — a READ gate, not an edit
+    one, so it's checked purely via the course's own serialized field
+    rather than any dedicated action. The owner always has it; a plain
+    editor needs the matching, separate can_view_version_history
+    sub-permission, same owner/editor-plus-flag shape as every other
+    course sub-permission (see user_can_manage_course_admin)."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username='vh_owner', password='pw', role=User.Role.ADMIN)
+        self.course = Course.objects.create(name='VH Course', created_by=self.owner)
+
+    def get_field(self, username):
+        client = self.auth(username, 'pw')
+        resp = client.get(f'/api/v1/courses/{self.course.id}/')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        return resp.data['viewer_can_view_version_history']
+
+    def test_owner_always_has_it(self):
+        self.assertTrue(self.get_field('vh_owner'))
+
+    def test_editor_without_the_sub_permission_does_not(self):
+        other_set = PermissionSet.objects.create(name='Members Only VH', can_access_courses=True)
+        editor = User.objects.create_user(
+            username='vh_editor_no_flag', password='pw', role=User.Role.ADMIN, permission_set=other_set,
+        )
+        self.course.editors.add(editor)
+        self.assertFalse(self.get_field('vh_editor_no_flag'))
+
+    def test_editor_with_the_sub_permission_does(self):
+        vh_set = PermissionSet.objects.create(
+            name='VH Only', can_access_courses=True, can_view_version_history=True,
+        )
+        editor = User.objects.create_user(
+            username='vh_editor_with_flag', password='pw', role=User.Role.ADMIN, permission_set=vh_set,
+        )
+        self.course.editors.add(editor)
+        self.assertTrue(self.get_field('vh_editor_with_flag'))
+
+    def test_unrelated_user_with_courses_tab_does_not(self):
+        """Having the blanket Courses tab is NOT one of the qualifying
+        paths on its own — same "owner/editor status required" rule as
+        every can_edit_course_* sub-permission, not the looser
+        user_can_edit_content bypass."""
+        courses_set = PermissionSet.objects.create(name='Courses Tab Only VH', can_access_courses=True)
+        unrelated = User.objects.create_user(
+            username='vh_unrelated', password='pw', role=User.Role.ADMIN, permission_set=courses_set,
+        )
+        self.assertFalse(self.get_field('vh_unrelated'))
+
+    def test_platform_admin_always_has_it(self):
+        User.objects.create_user(username='vh_platform_admin', password='pw', is_platform_admin=True)
+        self.assertTrue(self.get_field('vh_platform_admin'))
+
+
 class CourseDeadlineTests(APIAuthTestCase):
     def setUp(self):
         # Courses tab access is what controls deadline-extension management
@@ -881,22 +1154,44 @@ class CourseDeadlineTests(APIAuthTestCase):
         )
         self.course = Course.objects.create(
             name='Deadline Course', created_by=self.admin, owner=self.admin, is_assessment=True, passing_score=70,
-            deadline=datetime.date(2026, 1, 31),
+            deadline_days=30,
         )
 
-    def test_effective_deadline_falls_back_to_course_default(self):
-        self.assertEqual(self.course.effective_deadline_for(self.member), datetime.date(2026, 1, 31))
+    def test_effective_deadline_is_days_after_the_users_own_access_grant(self):
+        grant = CourseAccessGrant.objects.create(course=self.course, user=self.member)
+        expected = (grant.created_at + datetime.timedelta(days=30)).date()
+        self.assertEqual(self.course.effective_deadline_for(self.member), expected)
+
+    def test_effective_deadline_is_none_with_no_access_grant_on_record(self):
+        # deadline_days is set on the course, but this user has never
+        # actually been granted access to it via any path — there's
+        # nothing real to count 30 days from.
+        self.assertIsNone(self.course.effective_deadline_for(self.member))
 
     def test_effective_deadline_uses_extension_when_present(self):
+        grant = CourseAccessGrant.objects.create(course=self.course, user=self.other_team_member)
         CourseDeadlineExtension.objects.create(
             course=self.course, user=self.member, extended_deadline=datetime.date(2026, 3, 15)
         )
         self.assertEqual(self.course.effective_deadline_for(self.member), datetime.date(2026, 3, 15))
-        # Someone else with no extension still gets the course's own default.
-        self.assertEqual(self.course.effective_deadline_for(self.other_team_member), datetime.date(2026, 1, 31))
+        # Someone else with no extension still gets the grant-based default.
+        expected = (grant.created_at + datetime.timedelta(days=30)).date()
+        self.assertEqual(self.course.effective_deadline_for(self.other_team_member), expected)
 
-    def test_course_with_no_deadline_has_no_effective_deadline(self):
+    def test_extension_wins_even_with_no_access_grant_at_all(self):
+        """A manager explicitly setting a one-off due date for someone is a
+        deliberate override — it must work even if that person has no
+        CourseAccessGrant on record at all (e.g. it predates this feature,
+        or their access came through a path that was somehow missed),
+        not silently depend on one also existing."""
+        CourseDeadlineExtension.objects.create(
+            course=self.course, user=self.member, extended_deadline=datetime.date(2026, 3, 15)
+        )
+        self.assertEqual(self.course.effective_deadline_for(self.member), datetime.date(2026, 3, 15))
+
+    def test_course_with_no_deadline_days_has_no_effective_deadline(self):
         plain = Course.objects.create(name='No Deadline Course', created_by=self.admin)
+        CourseAccessGrant.objects.create(course=plain, user=self.member)
         self.assertIsNone(plain.effective_deadline_for(self.member))
 
     def test_member_cannot_create_deadline_extensions(self):
@@ -951,24 +1246,26 @@ class CourseDeadlineTests(APIAuthTestCase):
         )
         self.assertEqual(resp.status_code, 400, resp.content)
 
-    def test_admin_can_set_course_deadline(self):
+    def test_admin_can_set_course_deadline_days(self):
         admin_client = self.auth('deadline_admin', 'pw')
         resp = admin_client.patch(
-            f'/api/v1/courses/{self.course.id}/', {'deadline': '2026-06-30'}, format='json',
+            f'/api/v1/courses/{self.course.id}/', {'deadline_days': 45}, format='json',
         )
         self.assertEqual(resp.status_code, 200, resp.content)
         self.course.refresh_from_db()
-        self.assertEqual(self.course.deadline, datetime.date(2026, 6, 30))
+        self.assertEqual(self.course.deadline_days, 45)
 
     def test_my_deadline_reflects_the_requesting_users_own_extension(self):
         """Covers the mechanism the portal side actually uses — a member
         can read their own effective deadline straight off /courses/{id}/
         without ever touching /course-deadline-extensions/, which is
         admin/manager-only."""
+        grant = CourseAccessGrant.objects.create(course=self.course, user=self.member)
+        other_grant = CourseAccessGrant.objects.create(course=self.course, user=self.other_team_member)
         member_client = self.auth('deadline_member', 'pw')
         resp = member_client.get(f'/api/v1/courses/{self.course.id}/')
         self.assertEqual(resp.status_code, 200, resp.content)
-        self.assertEqual(resp.data['my_deadline'], datetime.date(2026, 1, 31))
+        self.assertEqual(resp.data['my_deadline'], (grant.created_at + datetime.timedelta(days=30)).date())
 
         CourseDeadlineExtension.objects.create(
             course=self.course, user=self.member, extended_deadline=datetime.date(2026, 3, 15)
@@ -976,10 +1273,47 @@ class CourseDeadlineTests(APIAuthTestCase):
         resp = member_client.get(f'/api/v1/courses/{self.course.id}/')
         self.assertEqual(resp.data['my_deadline'], datetime.date(2026, 3, 15))
 
-        # A different member with no extension still just gets the course default.
+        # A different member with no extension still just gets their own
+        # grant-based default.
         other_client = self.auth('deadline_other_member', 'pw')
         resp = other_client.get(f'/api/v1/courses/{self.course.id}/')
-        self.assertEqual(resp.data['my_deadline'], datetime.date(2026, 1, 31))
+        self.assertEqual(resp.data['my_deadline'], (other_grant.created_at + datetime.timedelta(days=30)).date())
+
+    def test_editor_with_members_permission_but_not_deadlines_cannot_edit_deadlines(self):
+        """can_edit_course_deadlines is deliberately its own sub-permission,
+        separate from can_edit_course_members — an editor trusted to
+        assign/unassign this course to people isn't automatically trusted
+        to move an individual learner's due date around too."""
+        members_only = PermissionSet.objects.create(
+            name='Members Only', can_access_courses=True, can_edit_course_members=True,
+        )
+        editor = User.objects.create_user(
+            username='deadline_editor_members', password='pw', role=User.Role.ADMIN, permission_set=members_only,
+        )
+        self.course.editors.add(editor)
+        client = self.auth('deadline_editor_members', 'pw')
+        resp = client.post(
+            '/api/v1/course-deadline-extensions/',
+            {'course': str(self.course.id), 'user': self.member.id, 'extended_deadline': '2026-03-15'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_editor_with_deadlines_permission_can_edit_deadlines(self):
+        deadlines_only = PermissionSet.objects.create(
+            name='Deadlines Only', can_access_courses=True, can_edit_course_deadlines=True,
+        )
+        editor = User.objects.create_user(
+            username='deadline_editor_deadlines', password='pw', role=User.Role.ADMIN, permission_set=deadlines_only,
+        )
+        self.course.editors.add(editor)
+        client = self.auth('deadline_editor_deadlines', 'pw')
+        resp = client.post(
+            '/api/v1/course-deadline-extensions/',
+            {'course': str(self.course.id), 'user': self.member.id, 'extended_deadline': '2026-03-15'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
 
     def test_courses_tab_access_can_update_any_extensions_date(self):
         extension = CourseDeadlineExtension.objects.create(
@@ -1024,6 +1358,57 @@ class CourseDeadlineTests(APIAuthTestCase):
         resp = manager_client.delete(f'/api/v1/course-deadline-extensions/{extension.id}/')
         self.assertEqual(resp.status_code, 403)
         self.assertTrue(CourseDeadlineExtension.objects.filter(id=extension.id).exists())
+
+
+class CourseAccessGrantSignalTests(APIAuthTestCase):
+    """Covers apps.courses.signals — CourseAccessGrant has to get stamped
+    automatically the moment ANY of the three access paths first applies,
+    since Course.deadline_days (see that field's own comment) counts from
+    it. No API calls here on purpose — every path below is a plain model
+    mutation (the same ones CourseAssignmentViewSet.perform_create/
+    UserSerializer.update/GroupSerializer's default M2M handling actually
+    make), confirming the signals themselves do the right thing
+    independent of which endpoint triggers them."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(username='grant_admin', password='pw', role=User.Role.ADMIN)
+        self.member = User.objects.create_user(username='grant_member', password='pw', role=User.Role.MEMBER)
+        self.course = Course.objects.create(name='Grant Course', created_by=self.admin, owner=self.admin)
+
+    def test_direct_assignment_grants_access(self):
+        CourseAssignment.objects.create(course=self.course, user=self.member, assigned_by=self.admin)
+        self.assertTrue(CourseAccessGrant.objects.filter(course=self.course, user=self.member).exists())
+
+    def test_joining_a_group_that_already_has_the_course_grants_access(self):
+        group = Group.objects.create(name='Already Has Course')
+        group.courses.add(self.course)
+        self.assertFalse(CourseAccessGrant.objects.filter(course=self.course, user=self.member).exists())
+        self.member.content_groups.set([group])
+        self.assertTrue(CourseAccessGrant.objects.filter(course=self.course, user=self.member).exists())
+
+    def test_adding_the_course_to_a_group_the_user_is_already_in_grants_access(self):
+        group = Group.objects.create(name='Already Has Member')
+        self.member.content_groups.set([group])
+        self.assertFalse(CourseAccessGrant.objects.filter(course=self.course, user=self.member).exists())
+        group.courses.add(self.course)
+        self.assertTrue(CourseAccessGrant.objects.filter(course=self.course, user=self.member).exists())
+
+    def test_a_second_access_path_never_moves_the_original_grant_time(self):
+        """The whole point of this model: a user's due date is always
+        anchored to the FIRST time they could have started the course, no
+        matter how many other paths later also happen to grant them the
+        same access."""
+        CourseAssignment.objects.create(course=self.course, user=self.member, assigned_by=self.admin)
+        original_grant = CourseAccessGrant.objects.get(course=self.course, user=self.member)
+        original_created_at = original_grant.created_at
+
+        group = Group.objects.create(name='Also Has Course')
+        group.courses.add(self.course)
+        self.member.content_groups.add(group)
+
+        self.assertEqual(CourseAccessGrant.objects.filter(course=self.course, user=self.member).count(), 1)
+        original_grant.refresh_from_db()
+        self.assertEqual(original_grant.created_at, original_created_at)
 
 
 class ReusableLessonTests(APIAuthTestCase):
@@ -1152,13 +1537,176 @@ class ReusableLessonTests(APIAuthTestCase):
         self.assertEqual(resp.status_code, 204)
         self.assertFalse(ReusableLesson.objects.filter(id=reusable.id).exists())
 
+    # --- Assessment-slide isolation (shared with SlideTemplateTests below) ---
+    # A ReusableLesson/SlideTemplate import only ever creates Lesson/Slide
+    # rows — see import_reusable_lesson's/import_slide_template's own
+    # comments — so there's no code path that could flip the TARGET
+    # course's own is_assessment/passing_score just because an imported
+    # slide happens to be a scored type. These two tests prove that
+    # end-to-end through the real API, not just by reading the service
+    # function's source.
+
+    def test_importing_an_assessment_slide_lesson_never_changes_target_course_is_assessment(self):
+        admin_client = self.auth('rl_admin', 'pw')
+        reusable = ReusableLesson.objects.create(name='Quiz Lesson', description='', created_by=self.admin)
+        ReusableSlide.objects.create(
+            reusable_lesson=reusable, slide_type='multiple_choice', title='Q1', order=0,
+            config={'options': [
+                {'id': 'a', 'text': 'A', 'is_correct': True},
+                {'id': 'b', 'text': 'B', 'is_correct': False},
+            ]},
+        )
+        self.assertFalse(self.target_course.is_assessment)
+        self.assertIsNone(self.target_course.passing_score)
+
+        resp = admin_client.post(
+            f'/api/v1/reusable-lessons/{reusable.id}/import/',
+            {'course_version': str(self.target_version.id), 'order': 0},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+
+        self.target_course.refresh_from_db()
+        self.assertFalse(self.target_course.is_assessment)
+        self.assertIsNone(self.target_course.passing_score)
+
+
+class SlideTemplateTests(APIAuthTestCase):
+    """Covers the "save a single slide, import it elsewhere" library
+    feature — same one-time-clone contract as ReusableLessonTests above,
+    one level down. Specifically exercises non-`content` slide types
+    (multiple_choice here), since SlideTemplate originally only supported
+    freeform content slides and now supports every slide_type."""
+
+    def setUp(self):
+        courses_set = PermissionSet.objects.create(name='Course Manager', can_access_courses=True)
+        self.admin = User.objects.create_user(username='st_admin', password='pw', permission_set=courses_set)
+        self.member = User.objects.create_user(username='st_member', password='pw', role=User.Role.MEMBER)
+
+        self.source_course = Course.objects.create(name='Source Course', created_by=self.admin)
+        self.source_version = CourseVersion.objects.create(
+            course=self.source_course, version_number=1, status=CourseVersion.Status.DRAFT, created_by=self.admin,
+        )
+        self.source_lesson = Lesson.objects.create(course_version=self.source_version, title='Quiz', order=0)
+        self.mc_config = {
+            'question': 'What is the capital of France?',
+            'options': [
+                {'id': 'a', 'text': 'Paris', 'is_correct': True},
+                {'id': 'b', 'text': 'Berlin', 'is_correct': False},
+            ],
+            'feedback_incorrect': 'Not quite.',
+        }
+        self.mc_slide = Slide.objects.create(
+            lesson=self.source_lesson, slide_type='multiple_choice', title='Capitals', order=0, config=self.mc_config,
+        )
+
+        self.target_course = Course.objects.create(name='Target Course', created_by=self.admin)
+        self.target_version = CourseVersion.objects.create(
+            course=self.target_course, version_number=1, status=CourseVersion.Status.DRAFT, created_by=self.admin,
+        )
+        self.target_lesson = Lesson.objects.create(course_version=self.target_version, title='L1', order=0)
+
+    def test_save_as_template_clones_slide_type_and_config_verbatim(self):
+        admin_client = self.auth('st_admin', 'pw')
+        resp = admin_client.post(
+            f'/api/v1/slides/{self.mc_slide.id}/save-as-template/', {'name': 'Capitals MC'}, format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertEqual(resp.data['name'], 'Capitals MC')
+        self.assertEqual(resp.data['slide_type'], 'multiple_choice')
+
+        template = SlideTemplate.objects.get(id=resp.data['id'])
+        self.assertEqual(template.slide_type, 'multiple_choice')
+        self.assertEqual(template.config, self.mc_config)
+
+        # The source slide is untouched — this is a clone, not a move.
+        self.mc_slide.refresh_from_db()
+        self.assertEqual(self.mc_slide.config, self.mc_config)
+
+    def test_member_cannot_save_as_template(self):
+        member_client = self.auth('st_member', 'pw')
+        resp = member_client.post(
+            f'/api/v1/slides/{self.mc_slide.id}/save-as-template/', {'name': 'nope'}, format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_import_creates_an_independent_slide_with_the_same_slide_type(self):
+        admin_client = self.auth('st_admin', 'pw')
+        template = SlideTemplate.objects.create(
+            name='Capitals MC', slide_type='multiple_choice', config=self.mc_config, created_by=self.admin,
+        )
+
+        resp = admin_client.post(
+            f'/api/v1/slide-templates/{template.id}/import/',
+            {'lesson': str(self.target_lesson.id), 'order': 0},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertEqual(resp.data['slide_type'], 'multiple_choice')
+        self.assertEqual(resp.data['config'], self.mc_config)
+
+        new_slide = Slide.objects.get(id=resp.data['id'])
+        self.assertEqual(new_slide.lesson_id, self.target_lesson.id)
+        self.assertEqual(new_slide.slide_type, 'multiple_choice')
+        self.assertEqual(new_slide.config, self.mc_config)
+
+        # Editing the imported copy must never touch the template source —
+        # confirms this is a one-time clone, not a live link.
+        new_slide.config = {**self.mc_config, 'question': 'Edited in target course.'}
+        new_slide.save(update_fields=['config'])
+        template.refresh_from_db()
+        self.assertEqual(template.config, self.mc_config)
+
+    def test_imported_assessment_slide_still_grades_correctly(self):
+        """The whole point of preserving slide_type on import: an imported
+        multiple_choice slide must score exactly like an authored one —
+        grade_slide reads nothing but the slide's own config (see
+        SlideTemplate's own docstring), so this is really confirming
+        slide_type/config both survived the round-trip intact."""
+        template = SlideTemplate.objects.create(
+            name='Capitals MC', slide_type='multiple_choice', config=self.mc_config, created_by=self.admin,
+        )
+        new_slide = import_slide_template(template, self.target_lesson, 0)
+        self.assertEqual(grade_slide(new_slide, {'selectedOptionId': 'a'}), (True, 1.0))
+        self.assertEqual(grade_slide(new_slide, {'selectedOptionId': 'b'}), (False, 0.0))
+
+    def test_importing_an_assessment_template_never_changes_target_course_is_assessment(self):
+        admin_client = self.auth('st_admin', 'pw')
+        template = SlideTemplate.objects.create(
+            name='Capitals MC', slide_type='multiple_choice', config=self.mc_config, created_by=self.admin,
+        )
+        self.assertFalse(self.target_course.is_assessment)
+        self.assertIsNone(self.target_course.passing_score)
+
+        resp = admin_client.post(
+            f'/api/v1/slide-templates/{template.id}/import/',
+            {'lesson': str(self.target_lesson.id), 'order': 0},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+
+        self.target_course.refresh_from_db()
+        self.assertFalse(self.target_course.is_assessment)
+        self.assertIsNone(self.target_course.passing_score)
+
+    def test_delete_slide_template(self):
+        admin_client = self.auth('st_admin', 'pw')
+        template = SlideTemplate.objects.create(
+            name='Disposable', slide_type='content', config={}, created_by=self.admin,
+        )
+        resp = admin_client.delete(f'/api/v1/slide-templates/{template.id}/')
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(SlideTemplate.objects.filter(id=template.id).exists())
+
 
 class CourseAssignmentTests(APIAuthTestCase):
-    """Direct per-user course assignment — coexists with (and never
-    conflicts with) Group-based access. See CourseAssignment's own
-    docstring: a user already covered by a Group that contains this course
-    must still be assignable directly with no error — Groups routinely
-    overlap on the same course."""
+    """Direct per-user course assignment. Refused with a clear, specific
+    reason — NOT silently created as a redundant no-op row — when the
+    target already reaches this course some other way: owner, editor, or
+    a Group that has it (see Course.existing_access_reason's own
+    docstring). Reported directly: the Members tab offered "direct
+    assignment" to a user who could already see/take the course as its
+    owner, which did nothing but leave a confusing extra row behind."""
 
     def setUp(self):
         # Courses tab access, flat/global — no team dimension any more
@@ -1205,15 +1753,10 @@ class CourseAssignmentTests(APIAuthTestCase):
         self.assertEqual(resp.data['course_name'], 'CA Course')
         self.assertEqual(resp.data['assigned_by'], self.admin.id)
 
-    def test_direct_assignment_succeeds_even_when_user_already_has_course_via_a_group(self):
-        """The core behavior this feature is built around: NO conflict
-        error when a user already has the course through one or more
-        Groups — direct assignment and group-based access coexist freely."""
-        group_a = Group.objects.create(name='CA Group A')
-        group_b = Group.objects.create(name='CA Group B')
-        group_a.courses.add(self.course)
-        group_b.courses.add(self.course)
-        self.member.content_groups.add(group_a, group_b)
+    def test_direct_assignment_refused_when_user_already_has_course_via_a_group(self):
+        group = Group.objects.create(name='CA Group A')
+        group.courses.add(self.course)
+        self.member.content_groups.add(group)
 
         admin_client = self.auth('ca_admin', 'pw')
         resp = admin_client.post(
@@ -1221,9 +1764,32 @@ class CourseAssignmentTests(APIAuthTestCase):
             {'course': str(self.course.id), 'user': self.member.id},
             format='json',
         )
-        self.assertEqual(resp.status_code, 201, resp.content)
-        self.assertTrue(
-            CourseAssignment.objects.filter(course=self.course, user=self.member).exists()
+        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertIn('CA Group A', resp.data['detail'])
+        self.assertFalse(CourseAssignment.objects.filter(course=self.course, user=self.member).exists())
+
+    def test_direct_assignment_refused_when_user_is_already_the_owner(self):
+        admin_client = self.auth('ca_admin', 'pw')
+        resp = admin_client.post(
+            '/api/v1/course-assignments/',
+            {'course': str(self.course.id), 'user': self.admin.id},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertIn('owner', resp.data['detail'])
+
+    def test_direct_assignment_refused_when_user_is_already_an_editor(self):
+        self.course.editors.add(self.other_team_member)
+        admin_client = self.auth('ca_admin', 'pw')
+        resp = admin_client.post(
+            '/api/v1/course-assignments/',
+            {'course': str(self.course.id), 'user': self.other_team_member.id},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertIn('editor', resp.data['detail'])
+        self.assertFalse(
+            CourseAssignment.objects.filter(course=self.course, user=self.other_team_member).exists()
         )
 
     def test_member_sees_only_their_own_assignments(self):
@@ -1407,8 +1973,15 @@ class CourseArchiveTests(APIAuthTestCase):
         self.assertTrue(Course.objects.filter(id=self.course.id).exists())
 
     def test_purge_deletes_the_course_and_purges_attempt_history(self):
+        # The attempt here is the OWNER's own (self.admin, who Course.save()
+        # defaults `owner` to from `created_by` since self.course never sets
+        # it explicitly) — a content creator testing their own course, the
+        # one case purge is still allowed to wipe. See
+        # CoursePurgeContentRoleTests below for the new "someone else
+        # attempted it" blocking behavior this test used to (incorrectly,
+        # pre-feature) exercise instead.
         version = CourseVersion.objects.create(course=self.course, version_number=1, created_by=self.admin)
-        CourseAttempt.objects.create(course_version=version, user=self.member)
+        CourseAttempt.objects.create(course_version=version, user=self.admin)
         admin_client = self.auth('ar_admin', 'pw')
         admin_client.delete(f'/api/v1/courses/{self.course.id}/')
         resp = admin_client.post(f'/api/v1/courses/{self.course.id}/purge/')
@@ -1421,6 +1994,94 @@ class CourseArchiveTests(APIAuthTestCase):
         self.assertEqual(member_client.delete(f'/api/v1/courses/{self.course.id}/').status_code, 403)
         self.assertEqual(member_client.post(f'/api/v1/courses/{self.course.id}/restore/').status_code, 403)
         self.assertEqual(member_client.post(f'/api/v1/courses/{self.course.id}/purge/').status_code, 403)
+
+
+class CoursePurgeContentRoleTests(APIAuthTestCase):
+    """A course can only be purged outright if every CourseAttempt on it
+    belongs to someone who is — or ever was — its owner or an editor
+    (CourseContentRole); content creators testing their own work can
+    delete and start fresh, but a course a real, unrelated learner has
+    actually attempted can only ever be archived from here on."""
+
+    def setUp(self):
+        # is_superuser (not just is_platform_admin): this suite also calls
+        # transfer-ownership, which IsSuperuser gates to that one tier
+        # specifically — see its own comment on the backend.
+        self.admin = User.objects.create_user(username='cr_admin', password='pw', is_superuser=True)
+        self.owner = User.objects.create_user(username='cr_owner', password='pw', role=User.Role.ADMIN)
+        self.editor = User.objects.create_user(username='cr_editor', password='pw', role=User.Role.ADMIN)
+        self.learner = User.objects.create_user(username='cr_learner', password='pw', role=User.Role.MEMBER)
+        self.course = Course.objects.create(name='Content Role Course', created_by=self.owner, owner=self.owner)
+        self.version = CourseVersion.objects.create(course=self.course, version_number=1, created_by=self.owner)
+
+    def archive_and_purge(self, client):
+        archive_resp = client.delete(f'/api/v1/courses/{self.course.id}/')
+        self.assertEqual(archive_resp.status_code, 204, archive_resp.content)
+        return client.post(f'/api/v1/courses/{self.course.id}/purge/')
+
+    def test_blocked_when_a_non_owner_non_editor_has_attempted_it(self):
+        CourseAttempt.objects.create(course_version=self.version, user=self.learner)
+        resp = self.archive_and_purge(self.auth('cr_admin', 'pw'))
+        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertIn('owner', resp.data['detail'].lower())
+        self.assertTrue(Course.objects.filter(id=self.course.id).exists())
+
+    def test_allowed_when_only_the_owner_has_attempted_it(self):
+        CourseAttempt.objects.create(course_version=self.version, user=self.owner)
+        resp = self.archive_and_purge(self.auth('cr_admin', 'pw'))
+        self.assertEqual(resp.status_code, 204, resp.content)
+        self.assertFalse(Course.objects.filter(id=self.course.id).exists())
+
+    def test_allowed_when_only_a_current_editor_has_attempted_it(self):
+        self.course.editors.set([self.editor])
+        CourseAttempt.objects.create(course_version=self.version, user=self.editor)
+        resp = self.archive_and_purge(self.auth('cr_admin', 'pw'))
+        self.assertEqual(resp.status_code, 204, resp.content)
+        self.assertFalse(Course.objects.filter(id=self.course.id).exists())
+
+    def test_allowed_when_only_a_former_editor_has_attempted_it(self):
+        admin_client = self.auth('cr_admin', 'pw')
+        # Added as an editor (recorded in CourseContentRole by set_editors),
+        # attempts the course, then removed again — the whole point of this
+        # test: a FORMER editor's attempt must still count as friendly.
+        admin_client.post(
+            f'/api/v1/courses/{self.course.id}/set-editors/', {'editors': [self.editor.id]}, format='json',
+        )
+        CourseAttempt.objects.create(course_version=self.version, user=self.editor)
+        admin_client.post(f'/api/v1/courses/{self.course.id}/set-editors/', {'editors': []}, format='json')
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.editors.count(), 0)
+
+        resp = self.archive_and_purge(admin_client)
+        self.assertEqual(resp.status_code, 204, resp.content)
+        self.assertFalse(Course.objects.filter(id=self.course.id).exists())
+
+    def test_allowed_when_only_a_former_owner_has_attempted_it(self):
+        admin_client = self.auth('cr_admin', 'pw')
+        CourseAttempt.objects.create(course_version=self.version, user=self.owner)
+        # Ownership moves on — the ORIGINAL owner's already-recorded
+        # attempt must still count as friendly afterward.
+        admin_client.post(
+            f'/api/v1/courses/{self.course.id}/transfer-ownership/', {'owner': self.editor.id}, format='json',
+        )
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.owner_id, self.editor.id)
+
+        resp = self.archive_and_purge(admin_client)
+        self.assertEqual(resp.status_code, 204, resp.content)
+        self.assertFalse(Course.objects.filter(id=self.course.id).exists())
+
+    def test_still_blocked_when_mixed_with_a_friendly_attempt(self):
+        CourseAttempt.objects.create(course_version=self.version, user=self.owner)
+        CourseAttempt.objects.create(course_version=self.version, user=self.learner)
+        resp = self.archive_and_purge(self.auth('cr_admin', 'pw'))
+        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertTrue(Course.objects.filter(id=self.course.id).exists())
+
+    def test_allowed_when_there_are_no_attempts_at_all(self):
+        resp = self.archive_and_purge(self.auth('cr_admin', 'pw'))
+        self.assertEqual(resp.status_code, 204, resp.content)
+        self.assertFalse(Course.objects.filter(id=self.course.id).exists())
 
 
 class CourseOwnerArchivePermissionTests(APIAuthTestCase):

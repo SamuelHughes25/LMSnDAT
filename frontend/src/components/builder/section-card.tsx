@@ -26,9 +26,13 @@ export function SectionCard({
   onSelect,
   onSelectQuestion,
   onTitleChange,
+  onTitleFocus,
+  onTitleBlur,
   onDelete,
   onDeleteQuestion,
   onQuestionLabelChange,
+  onQuestionLabelFocus,
+  onQuestionLabelBlur,
   onQuestionDragEnd,
   onAddQuestion,
 }: {
@@ -38,9 +42,16 @@ export function SectionCard({
   onSelect: () => void;
   onSelectQuestion: (questionId: string) => void;
   onTitleChange: (title: string) => void;
+  // See template-builder.tsx's sectionTitleBaselineRef comment — this
+  // plain per-keystroke Input needs an explicit focus/blur pair to
+  // coalesce undo history into one step per edit session.
+  onTitleFocus: () => void;
+  onTitleBlur: () => void;
   onDelete: () => void;
   onDeleteQuestion: (questionId: string) => void;
   onQuestionLabelChange: (questionId: string, label: string) => void;
+  onQuestionLabelFocus: (questionId: string) => void;
+  onQuestionLabelBlur: (questionId: string) => void;
   onQuestionDragEnd: (event: DragEndEvent) => void;
   onAddQuestion: (type: QuestionType) => void;
 }) {
@@ -88,6 +99,8 @@ export function SectionCard({
         <Input
           value={section.title}
           onChange={(e) => onTitleChange(e.target.value)}
+          onFocus={onTitleFocus}
+          onBlur={onTitleBlur}
           onClick={(e) => e.stopPropagation()}
           className="h-8 flex-1 border-transparent bg-transparent text-base font-medium shadow-none focus-visible:border-input focus-visible:bg-background"
         />
@@ -115,6 +128,8 @@ export function SectionCard({
                   isSelected={selectedQuestionId === question.id}
                   onSelect={() => onSelectQuestion(question.id)}
                   onLabelChange={(label) => onQuestionLabelChange(question.id, label)}
+                  onLabelFocus={() => onQuestionLabelFocus(question.id)}
+                  onLabelBlur={() => onQuestionLabelBlur(question.id)}
                   onDelete={() => onDeleteQuestion(question.id)}
                 />
               ))}

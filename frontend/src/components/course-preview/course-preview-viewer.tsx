@@ -28,7 +28,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { CourseAttempt } from "@/lib/attempt-types";
-import type { Slide } from "@/lib/course-types";
+import { QUESTION_SLIDE_TYPES, type Slide } from "@/lib/course-types";
 import type { SlideInteractionResult } from "@/lib/slide-interaction";
 import { cn } from "@/lib/utils";
 
@@ -84,7 +84,14 @@ export type AttemptTracking = {
 // it correctly, so dnd-kit needs no special handling at all. Trade-off:
 // `zoom` is Chromium/Safari/Firefox 126+ (mid-2024) — no concern for this
 // internal tool's browser support target.
-function useStageScale() {
+//
+// Exported for manage-slide-templates-dialog.tsx's own expanded preview —
+// a SlideTemplate is always exactly one slide, so it renders its own
+// single, non-interactive stage directly with this same scale-to-fit math
+// rather than going through the rest of this component (whose
+// Previous/Next row and "Slide X of Y" caption only make sense for an
+// actual multi-slide deck).
+export function useStageScale() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
 
@@ -104,6 +111,42 @@ function useStageScale() {
   }, []);
 
   return { containerRef, scale };
+}
+
+// This browser's own record of the exact slide last viewed on one specific
+// attempt — a per-browser convenience, not real graded data (unlike
+// SlideResult, which is what `results` restores from server-side), so
+// localStorage rather than a server round-trip, same reasoning
+// use-view-mode.ts's own identical storage choice already documents for
+// its own per-browser preference. Scoped by attempt id (not course/version
+// id) specifically so a brand-new attempt (Retake, or Start again after
+// discarding the old one) never inherits a stale position from the
+// attempt it replaced — a new attempt id simply has nothing stored yet.
+// Not a cheat vector either way: which slide the deck opens on doesn't
+// unlock anything an already-answered question's own permanence doesn't
+// already enforce (see handleInteraction's own comment on that), so
+// there's no reason this needs to be server-authoritative the way answers
+// and scores do.
+function lastViewedSlideStorageKey(attemptId: string) {
+  return `course-attempt-last-slide:${attemptId}`;
+}
+
+function readLastViewedSlideId(attemptId: string): string | null {
+  try {
+    return window.localStorage.getItem(lastViewedSlideStorageKey(attemptId));
+  } catch {
+    return null;
+  }
+}
+
+function writeLastViewedSlideId(attemptId: string, slideId: string) {
+  try {
+    window.localStorage.setItem(lastViewedSlideStorageKey(attemptId), slideId);
+  } catch {
+    // Best-effort — private browsing / storage disabled just means resuming
+    // this attempt later falls back to the last-answered-question
+    // heuristic in startAttempt below instead of the real position.
+  }
 }
 
 // Read-only "slide through the deck" viewer — reuses the exact slide faces
@@ -156,7 +199,13 @@ export function CoursePreviewViewer({
   // resume behavior unconditionally (no prompt here at all): retaking an
   // assessment mid-attempt isn't a "pick up where you left off" convenience
   // the same way a plain informational course is, and nothing about
-  // scored/pass-fail content should ever invite "start again" by default.
+  // scored/pass-fail content should ever invite "start again" by default —
+  // offering it would hand a learner unlimited free retries on a scored
+  // assessment for the cost of a page refresh (reopen the course, see
+  // "start again," discard the attempt they're about to get wrong, try
+  // again). The mount effect below (`if (attemptTracking &&
+  // !attemptTracking.isAssessment)`) is the actual gate; this state is
+  // just where its result lands.
   const [resumePrompt, setResumePrompt] = useState<CourseAttempt | null>(null);
   const [resumeDecisionPending, setResumeDecisionPending] = useState(false);
 
@@ -198,27 +247,58 @@ export function CoursePreviewViewer({
     startCourseAttempt(attemptTracking.courseVersionId)
       .then((attempt) => {
         setAttemptId(attempt.id);
-        if (attempt.slide_results.length === 0) return;
-        const slideTypeById = new Map(slides.map((s) => [s.slide.id, s.slide.slide_type]));
-        const restored: Record<string, SlideInteractionResult> = {};
-        for (const slideResult of attempt.slide_results) {
-          const slideType = slideTypeById.get(slideResult.slide);
-          // Slide no longer exists on this version (shouldn't happen — a
-          // published version's slides never change — but a resumed
-          // attempt reaching across a version boundary isn't otherwise
-          // ruled out, so skip rather than restore a result for a slide
-          // that isn't actually in the deck being played).
-          if (!slideType) continue;
-          restored[slideResult.slide] = {
-            slideId: slideResult.slide,
-            slideType,
-            isCorrect: slideResult.is_correct,
-            score: slideResult.score,
-            answeredAt: attempt.started_at,
-            detail: slideResult.detail,
-          };
+
+        // Fallback resume position, used only when this browser has no
+        // stored "last viewed slide" for this attempt (see
+        // readLastViewedSlideId below) — e.g. a different browser/device,
+        // or storage was cleared. Landing right after the LAST slide (in
+        // deck order) this attempt already has a result for is a
+        // reasonable approximation when that's all there is to go on, but
+        // a strictly worse one: it only ever considers ANSWERED (gradable)
+        // slides, so a course with one early question followed by several
+        // plain content slides always resumed to the same spot regardless
+        // of how much further the learner had actually read — reported
+        // directly as "it always takes me to slide 3."
+        let lastAnsweredIndex = -1;
+        if (attempt.slide_results.length > 0) {
+          const slideTypeById = new Map(slides.map((s) => [s.slide.id, s.slide.slide_type]));
+          const answeredSlideIds = new Set(attempt.slide_results.map((r) => r.slide));
+          const restored: Record<string, SlideInteractionResult> = {};
+          for (const slideResult of attempt.slide_results) {
+            const slideType = slideTypeById.get(slideResult.slide);
+            // Slide no longer exists on this version (shouldn't happen — a
+            // published version's slides never change — but a resumed
+            // attempt reaching across a version boundary isn't otherwise
+            // ruled out, so skip rather than restore a result for a slide
+            // that isn't actually in the deck being played).
+            if (!slideType) continue;
+            restored[slideResult.slide] = {
+              slideId: slideResult.slide,
+              slideType,
+              isCorrect: slideResult.is_correct,
+              score: slideResult.score,
+              answeredAt: attempt.started_at,
+              detail: slideResult.detail,
+            };
+          }
+          setResults(restored);
+          slides.forEach((s, index) => {
+            if (answeredSlideIds.has(s.slide.id)) lastAnsweredIndex = index;
+          });
         }
-        setResults(restored);
+
+        // The real resume position — this browser's own record of exactly
+        // which slide the learner was on, covering every slide type
+        // (including plain content slides, which never produce a
+        // SlideResult at all) — wins whenever it's available; the
+        // last-answered-question fallback above only applies without it.
+        const savedSlideId = readLastViewedSlideId(attempt.id);
+        const savedIndex = savedSlideId ? slides.findIndex((s) => s.slide.id === savedSlideId) : -1;
+        if (savedIndex >= 0) {
+          setCurrentIndex(savedIndex);
+        } else if (lastAnsweredIndex >= 0) {
+          setCurrentIndex(Math.min(lastAnsweredIndex + 1, slides.length - 1));
+        }
       })
       .catch(() => {
         // Best-effort: if starting/resuming the attempt fails (network
@@ -321,6 +401,24 @@ export function CoursePreviewViewer({
     }
   }
 
+  // On an assessment course, every real question slide (see
+  // QUESTION_SLIDE_TYPES' own comment — accordion/flashcards/hotspot_image
+  // aren't real questions, so they're excluded here too) must have a
+  // reported result before Finish is allowed. Without this, a learner
+  // could click straight through to the last slide — Finish only ever
+  // required REACHING the end, not actually answering anything along the
+  // way — and complete an assessment with some, or even all, of its real
+  // questions silently unanswered (which still counts as wrong once
+  // scored, just confusingly so — reported directly after exactly that
+  // happened). Non-assessment courses keep the old, unconstrained
+  // behavior — nothing here is pass/fail, so there's nothing to protect.
+  const unansweredRequiredSlideIds = useMemo(() => {
+    if (!attemptTracking?.isAssessment) return [];
+    return slides
+      .filter((s) => QUESTION_SLIDE_TYPES.has(s.slide.slide_type) && !(s.slide.id in results))
+      .map((s) => s.slide.id);
+  }, [slides, results, attemptTracking?.isAssessment]);
+
   const answeredCount = Object.keys(results).length;
   const correctCount = useMemo(
     () => Object.values(results).filter((r) => r.isCorrect).length,
@@ -332,6 +430,19 @@ export function CoursePreviewViewer({
   // component itself crash-safe (no slides[0] on an empty/shrunk array)
   // rather than relying solely on the caller never passing [].
   const clampedIndex = slides.length === 0 ? 0 : Math.min(currentIndex, slides.length - 1);
+
+  // Records the real resume position on every navigation — see
+  // readLastViewedSlideId/writeLastViewedSlideId's own shared comment for
+  // why this is a plain per-browser localStorage write rather than
+  // anything server-side. Only while actually tracking a real attempt
+  // (attemptId set) — the admin's own Preview tab never creates one, so
+  // there's nothing meaningful to key this by there.
+  useEffect(() => {
+    if (!attemptId) return;
+    const slide = slides[clampedIndex];
+    if (!slide) return;
+    writeLastViewedSlideId(attemptId, slide.slide.id);
+  }, [attemptId, clampedIndex, slides]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -579,7 +690,16 @@ export function CoursePreviewViewer({
                   Slide {clampedIndex + 1} of {slides.length}
                 </span>
                 {isTrackingAttempt && clampedIndex === slides.length - 1 ? (
-                  <Button size="xs" onClick={handleFinish} disabled={finishing || !attemptId}>
+                  <Button
+                    size="xs"
+                    onClick={handleFinish}
+                    disabled={finishing || !attemptId || unansweredRequiredSlideIds.length > 0}
+                    title={
+                      unansweredRequiredSlideIds.length > 0
+                        ? `Answer every question before finishing — ${unansweredRequiredSlideIds.length} still unanswered.`
+                        : undefined
+                    }
+                  >
                     {finishing ? "Finishing…" : "Finish"}
                   </Button>
                 ) : (

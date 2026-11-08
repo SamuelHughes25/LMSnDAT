@@ -13,7 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { AccountUser, Group } from "@/lib/accounts-types";
-import type { CourseAttempt, CourseDeadlineExtension } from "@/lib/attempt-types";
+import type { CourseAttempt } from "@/lib/attempt-types";
 import type { Course, CourseAssignment } from "@/lib/course-types";
 import { getCourseReminders, reminderReason } from "@/lib/course-reminders";
 import { getCurrentUser } from "@/lib/dal";
@@ -41,12 +41,14 @@ type AttentionRow = {
 // filtering is needed here), who needs attention on a course for one of
 // two reasons:
 //
-//  - "overdue": past their effective deadline (their own
-//    CourseDeadlineExtension if one exists, else the course's own
-//    `deadline`) and hasn't "finished" it — for an assessment, a PASSED
-//    attempt; for a non-assessment course (no score to check), simply any
-//    COMPLETED attempt (see Course.deadline's own comment in
-//    backend/apps/courses/models.py for why deadline is independent of
+//  - "overdue": past their own effective deadline (their own
+//    CourseDeadlineExtension if one exists, else deadline_days days after
+//    their own CourseAccessGrant — see /courses/{id}/deadlines/, computed
+//    server-side since only the backend has the access-grant data this
+//    now depends on) and hasn't "finished" it — for an assessment, a
+//    PASSED attempt; for a non-assessment course (no score to check),
+//    simply any COMPLETED attempt (see Course.deadline_days's own comment
+//    in backend/apps/courses/models.py for why deadline is independent of
 //    is_assessment). Applies to any course with a deadline, scored or not.
 //  - "failed": an assessment course they've attempted and NOT passed at
 //    least once (a real, non-passing attempt on record), and still haven't
@@ -68,7 +70,7 @@ async function getAttentionRows(): Promise<AttentionRow[]> {
     djangoFetch<Paginated<AccountUser>>("/users/?page_size=200"),
   ]);
 
-  const relevantCourses = courses.results.filter((c) => c.deadline !== null || c.is_assessment);
+  const relevantCourses = courses.results.filter((c) => c.deadline_days !== null || c.is_assessment);
   if (relevantCourses.length === 0) return [];
 
   const today = new Date().toISOString().slice(0, 10);
@@ -77,12 +79,16 @@ async function getAttentionRows(): Promise<AttentionRow[]> {
   await Promise.all(
     relevantCourses.map(async (course) => {
       const groupIdsForCourse = new Set(groups.results.filter((g) => g.courses.includes(course.id)).map((g) => g.id));
-      const [extensions, attempts, assignments] = await Promise.all([
-        course.deadline !== null
-          ? djangoFetch<Paginated<CourseDeadlineExtension>>(
-              `/course-deadline-extensions/?course=${course.id}&page_size=200`,
-            )
-          : Promise.resolve<Paginated<CourseDeadlineExtension>>({ count: 0, next: null, previous: null, results: [] }),
+      // Keyed by user id (as a string — see CourseViewSet.deadlines on the
+      // backend) — each value is that user's own resolved due date
+      // (extension if they have one, else deadline_days after their own
+      // access grant), already server-computed since this page has no way
+      // to derive it itself any more (the base deadline is per-user now,
+      // anchored to each learner's own CourseAccessGrant).
+      const [deadlinesByUser, attempts, assignments] = await Promise.all([
+        course.deadline_days !== null
+          ? djangoFetch<Record<string, string | null>>(`/courses/${course.id}/deadlines/`)
+          : Promise.resolve<Record<string, string | null>>({}),
         djangoFetch<Paginated<CourseAttempt>>(`/course-attempts/?course=${course.id}&page_size=200`),
         djangoFetch<Paginated<CourseAssignment>>(`/course-assignments/?course=${course.id}&page_size=200`),
       ]);
@@ -97,7 +103,6 @@ async function getAttentionRows(): Promise<AttentionRow[]> {
         (u) => u.content_groups.some((gid) => groupIdsForCourse.has(gid)) || directlyAssignedUserIds.has(u.id),
       );
       if (usersForCourse.length === 0) return;
-      const extensionByUser = new Map(extensions.results.map((e) => [e.user, e.extended_deadline]));
 
       for (const user of usersForCourse) {
         const attemptsForUser = attempts.results.filter((a) => a.user === user.id);
@@ -107,10 +112,10 @@ async function getAttentionRows(): Promise<AttentionRow[]> {
         let daysOverdue: number | null = null;
         let effectiveDeadline: string | null = null;
         let isOverdue = false;
-        if (course.deadline !== null) {
-          effectiveDeadline = extensionByUser.get(user.id) ?? course.deadline;
+        if (course.deadline_days !== null) {
+          effectiveDeadline = deadlinesByUser[String(user.id)] ?? null;
           const isFinished = course.is_assessment ? hasPassed : attemptsForUser.some((a) => a.status === "completed");
-          if (effectiveDeadline < today && !isFinished) {
+          if (effectiveDeadline !== null && effectiveDeadline < today && !isFinished) {
             isOverdue = true;
             daysOverdue = Math.floor(
               (new Date(today).getTime() - new Date(effectiveDeadline).getTime()) / (1000 * 60 * 60 * 24),
