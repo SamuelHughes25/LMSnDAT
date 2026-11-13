@@ -228,6 +228,66 @@ export type FreeTextBox = BoxTransform & {
   name?: string;
 };
 
+// A basic drawn shape or a small fixed icon glyph — a freeform slide's
+// third stackable object kind alongside FreeTextBox/ExtraImage, same
+// center-anchored BoxTransform convention as ExtraImage (drag-to-move,
+// drag-corner-to-resize — see slide-faces/shape-field.tsx and the shared
+// slide-faces/draggable-resizable-frame.tsx it's built on). One type
+// covers both "shapes" and "icons" rather than two separate object kinds —
+// an icon is really just a shape whose rendered content is a fixed glyph
+// instead of a filled/stroked geometric path, and keeping them as one
+// SlideObjectRef variant ("shape") avoids a 4th branch everywhere
+// object_order/the layers panel/selection already branch on type.
+export type ShapeKind =
+  | "rectangle"
+  | "ellipse"
+  | "triangle"
+  | "line"
+  | "arrow"
+  | "icon-check"
+  | "icon-star"
+  | "icon-arrow-right"
+  | "icon-warning-triangle";
+
+export type ShapeObject = BoxTransform & {
+  id: string;
+  shapeKind: ShapeKind;
+  // Layers-panel label — same auto-derived "Shape 1"/"Icon 1" convention
+  // as FreeTextBox.name/ExtraImage.name when unset.
+  name?: string;
+  // Interior fill for rectangle/ellipse/triangle, or the icon glyph's
+  // color for the icon-* kinds (lucide icons are stroke-based SVGs, not
+  // literally filled — the properties panel labels this "Icon color" for
+  // those kinds, but it's the same field). Meaningless for line/arrow,
+  // which have no interior — their own color lives in borderColor below.
+  fillColor?: string | null;
+  // Rectangle/ellipse/triangle's border; DOUBLES as line/arrow's stroke
+  // color (there's nothing else for a line to be colored by) — one field
+  // pair, two labels depending on shapeKind, same as borderWidth below.
+  borderColor?: string | null;
+  // px. Border thickness for rect/ellipse/triangle, stroke thickness for
+  // line/arrow. Unused by icon-* kinds (a fixed glyph has no border).
+  borderWidth?: number;
+  // 0-50, rectangle only — ellipse/triangle/line/arrow/icon-* ignore this.
+  cornerRadiusPct?: number;
+  // A single fixed CSS drop-shadow preset, on or off — not a configurable
+  // blur/offset/opacity editor. Matches the scope of what was actually
+  // asked for ("drop shadow styling"), not a full shadow design tool.
+  shadow?: boolean;
+};
+
+// A slide's background fill — color or a simple 2-color linear gradient.
+// Deliberately ONE field holding either variant (not separate
+// background_color/background_gradient_* flat fields): the "sticky
+// default" feature (course-builder.tsx's handleAddSlide, via
+// getLastBackgroundFill below) needs to copy "whatever the lesson's last
+// slide used" wholesale into a new slide's starting config, and a single
+// field is one assignment either way instead of needing to know which
+// flat fields go together. Paints behind background_image_url (see that
+// field's own comment) at the slide's own root — cross-cutting across
+// every slide_type, not freeform-canvas-specific the way shapes/text are.
+export type BackgroundFill = { kind: "color"; color: string } | { kind: "gradient"; from: string; to: string; angle: number };
+
 // A reference into one of a freeform slide's object arrays (text_boxes or
 // extra_images), used ONLY for `SlideConfig.object_order` — see that
 // field's own comment for why stacking order needs to exist as an explicit,
@@ -239,8 +299,10 @@ export type FreeTextBox = BoxTransform & {
 // why it stays a separate, non-reorderable backdrop layer rather than a
 // stackable object for this pass. Written to extend cleanly to a future
 // `{type: "widget"; id: string}` variant without reworking the ordering/
-// panel mechanism, once widgets exist.
-export type SlideObjectRef = { type: "text"; id: string } | { type: "image"; id: string };
+// panel mechanism, once widgets exist. "shape" covers both drawn shapes
+// and icon glyphs (see ShapeObject's own comment on why those share one
+// SlideObjectRef variant rather than two).
+export type SlideObjectRef = { type: "text"; id: string } | { type: "image"; id: string } | { type: "shape"; id: string };
 
 // The four text boxes a content slide can have — the keys of box_transforms
 // below, and the field names positionable-box.tsx/text-object-properties.tsx
@@ -335,6 +397,19 @@ export type SlideConfig = {
   background_image_y_pct?: number;
   background_image_width_pct?: number;
   background_image_height_pct?: number;
+  // A solid color or 2-color gradient painted behind background_image_url
+  // (the image, when set, still renders on top) — see BackgroundFill's own
+  // comment. null once explicitly cleared back to plain white via the
+  // picker's "Default" option, undefined if the background-color button
+  // was never touched at all on this slide. Both render identically, but
+  // the distinction matters to the "sticky default" feature
+  // (getLastBackgroundFill below / course-builder.tsx's handleAddSlide):
+  // explicitly picking "Default" is itself a rememberable choice that
+  // should carry forward to the next new slide, same as picking an actual
+  // color — a slide that never had the button touched at all should NOT
+  // carry forward (it has nothing to carry), which is exactly what
+  // null-vs-undefined already distinguishes.
+  background_fill?: BackgroundFill | null;
   // Additional free-floating images beyond the one above — same shape,
   // same drag/resize behavior, just N of them instead of exactly one.
   // Kept as a SEPARATE array rather than folding background_image_url
@@ -375,6 +450,11 @@ export type SlideConfig = {
   // rendering meaning), stable-id'd so object_order/selection/edits can
   // all reference one unambiguously regardless of edits to any other box.
   text_boxes?: FreeTextBox[];
+  // Author-placed shapes/icons (see ShapeObject's own comment) — same
+  // append-only, order-is-meaningless-here, stable-id'd convention as
+  // text_boxes above; object_order is still the one source of truth for
+  // display/stacking order.
+  shapes?: ShapeObject[];
   // Explicit stacking/layers-panel order: index 0 = back-most, last =
   // front-most (array position IS the z-order — no separate numeric
   // z-index field needed, since this array is itself the single source of
@@ -443,9 +523,16 @@ export type SlideConfig = {
 // exists is dropped — so a slide can never end up with content that's
 // silently unreachable from either the canvas or the layers panel.
 export function normalizeObjectOrder(config: SlideConfig): SlideObjectRef[] {
-  const textIds = new Set((config.text_boxes ?? []).map((b) => b.id));
-  const imageIds = new Set((config.extra_images ?? []).map((i) => i.id));
-  const stillExists = (r: SlideObjectRef) => (r.type === "text" ? textIds.has(r.id) : imageIds.has(r.id));
+  // A lookup table keyed by ref type, built from all three stackable
+  // arrays — generalized off an earlier hardcoded text/image ternary
+  // specifically so a future/new object kind (shapes, added here) can't
+  // silently fall through a two-way if/else the way it would have before.
+  const idsByType: Record<SlideObjectRef["type"], Set<string>> = {
+    text: new Set((config.text_boxes ?? []).map((b) => b.id)),
+    image: new Set((config.extra_images ?? []).map((i) => i.id)),
+    shape: new Set((config.shapes ?? []).map((s) => s.id)),
+  };
+  const stillExists = (r: SlideObjectRef) => idsByType[r.type].has(r.id);
   const order = (config.object_order ?? []).filter(stillExists);
   const known = new Set(order.map((r) => `${r.type}:${r.id}`));
   const missingText = (config.text_boxes ?? [])
@@ -454,7 +541,31 @@ export function normalizeObjectOrder(config: SlideConfig): SlideObjectRef[] {
   const missingImages = (config.extra_images ?? [])
     .filter((i) => !known.has(`image:${i.id}`))
     .map((i): SlideObjectRef => ({ type: "image", id: i.id }));
-  return [...order, ...missingText, ...missingImages];
+  const missingShapes = (config.shapes ?? [])
+    .filter((s) => !known.has(`shape:${s.id}`))
+    .map((s): SlideObjectRef => ({ type: "shape", id: s.id }));
+  return [...order, ...missingText, ...missingImages, ...missingShapes];
+}
+
+// "Last used" background for the sticky-default feature
+// (course-builder.tsx's handleAddSlide): scans `lesson.slides` by `order`
+// descending and returns the first slide's `background_fill` that's
+// actually been touched (see that field's own comment on why null and
+// undefined are kept distinct here). Returns `undefined` — meaning "don't
+// override anything, nothing in this lesson has ever touched this" — only
+// when NO slide in the lesson has touched it; note this is a POSITIONAL
+// approximation of "last used" (the last slide by order, not necessarily
+// the last one chronologically edited — an author editing an earlier
+// slide's background after adding later ones won't retroactively change
+// what the next new slide inherits). `excludeSlideId` lets a caller skip
+// the slide currently being duplicated/replaced, if that's ever needed.
+export function getLastBackgroundFill(lesson: Lesson, excludeSlideId?: string): BackgroundFill | null | undefined {
+  const sorted = [...lesson.slides].sort((a, b) => b.order - a.order);
+  for (const slide of sorted) {
+    if (slide.id === excludeSlideId) continue;
+    if (slide.config.background_fill !== undefined) return slide.config.background_fill;
+  }
+  return undefined;
 }
 
 export type Slide = {

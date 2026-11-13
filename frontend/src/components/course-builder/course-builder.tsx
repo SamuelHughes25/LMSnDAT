@@ -29,6 +29,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Course, CourseVersion, Lesson, Slide, SlideConfig, SlideTemplate, SlideType } from "@/lib/course-types";
+import { getLastBackgroundFill } from "@/lib/course-types";
 import { useUndoRedo, useUndoRedoShortcut } from "@/lib/use-undo-redo";
 import { ActiveEditorProvider, useActiveEditorContext } from "./active-editor-context";
 import { CourseEditLockGate } from "./course-edit-lock-gate";
@@ -38,7 +39,8 @@ import { SlideCanvas } from "./slide-canvas";
 import { SlideRail } from "./slide-rail";
 import { SlideSelectionProvider, useSlideSelection } from "./slide-selection-context";
 import { SnapGuideProvider } from "./snap-guide-context";
-import { TextBoxPlacementProvider } from "./text-box-placement-context";
+import { ObjectPlacementProvider } from "./object-placement-context";
+import { PaintBucketProvider } from "./paint-bucket-context";
 
 type Selection =
   | { type: "lesson"; lessonId: string }
@@ -71,6 +73,9 @@ function parseSelectedObject(selectedId: string | null, slideId: string | undefi
   if (suffix.startsWith("text:")) {
     return { type: "free-text", boxId: suffix.slice("text:".length) };
   }
+  if (suffix.startsWith("shape:")) {
+    return { type: "shape", shapeId: suffix.slice("shape:".length) };
+  }
   return null;
 }
 
@@ -89,9 +94,11 @@ export function CourseBuilder(props: { course: Course; initialVersion: CourseVer
       <ActiveEditorProvider>
         <SlideSelectionProvider>
           <SnapGuideProvider>
-            <TextBoxPlacementProvider>
-              <CourseBuilderInner {...props} />
-            </TextBoxPlacementProvider>
+            <ObjectPlacementProvider>
+              <PaintBucketProvider>
+                <CourseBuilderInner {...props} />
+              </PaintBucketProvider>
+            </ObjectPlacementProvider>
           </SnapGuideProvider>
         </SlideSelectionProvider>
       </ActiveEditorProvider>
@@ -469,14 +476,26 @@ function CourseBuilderInner({
     startTransition(async () => {
       const lesson = lessons.find((l) => l.id === lessonId);
       const order = lesson ? lesson.slides.length : 0;
-      const slide = await createSlide(lessonId, slideType, order);
+      // "Sticky" background: a brand-new slide starts with whatever
+      // background_fill the lesson's last slide (by position) used,
+      // including an explicit "no background" choice — see
+      // getLastBackgroundFill's own comment in course-types.ts.
+      // `undefined` means nothing in this lesson has ever touched it, so
+      // no override is passed at all (the slide_type's own plain default
+      // applies, same as before this feature existed). Captured once,
+      // here, and reused verbatim by the redo closure below — redo must
+      // replay the SAME override this creation used, not re-derive it
+      // from the lesson's possibly-since-changed current state.
+      const stickyFill = lesson ? getLastBackgroundFill(lesson) : undefined;
+      const configOverride = stickyFill !== undefined ? { background_fill: stickyFill } : undefined;
+      const slide = await createSlide(lessonId, slideType, order, configOverride);
       setLessons((prev) =>
         prev.map((l) => (l.id === lessonId ? { ...l, slides: [...l.slides, slide] } : l)),
       );
       setSelection({ type: "slide", lessonId, slideId: slide.id });
       pushSlideCreateHistory(lessonId, slide, () => {
         const latestLesson = lessons.find((l) => l.id === lessonId);
-        return createSlide(lessonId, slideType, latestLesson ? latestLesson.slides.length : order);
+        return createSlide(lessonId, slideType, latestLesson ? latestLesson.slides.length : order, configOverride);
       });
     });
   }

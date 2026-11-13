@@ -4,6 +4,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Trash2 } from "lucide-react";
 
+import { backgroundFillStyle } from "@/lib/background-fill-style";
 import type { Slide } from "@/lib/course-types";
 import { cn } from "@/lib/utils";
 import { CANVAS_H, CANVAS_W } from "./slide-canvas";
@@ -64,7 +65,13 @@ export function SlideThumbnail({
             canvas pixel size inside and is scaled down via CSS transform —
             a true miniature, not a separate simplified thumbnail renderer. */}
         <div
-          style={{ width: THUMB_W, height: THUMB_H, overflow: "hidden", position: "relative" }}
+          style={{
+            width: THUMB_W,
+            height: THUMB_H,
+            overflow: "hidden",
+            position: "relative",
+            ...backgroundFillStyle(slide.config.background_fill),
+          }}
           className="slide-surface rounded bg-white"
         >
           <div

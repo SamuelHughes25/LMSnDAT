@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { Bookmark } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { backgroundFillStyle } from "@/lib/background-fill-style";
 import type { Slide, SlideConfig } from "@/lib/course-types";
 import { SaveSlideTemplateDialog } from "./save-slide-template-dialog";
 import { SnapGuideLines } from "./snap-guide-lines";
@@ -104,6 +105,7 @@ export function SlideCanvas({
           <div
             ref={slideRef}
             className="slide-surface absolute inset-0 overflow-hidden rounded-sm bg-white shadow-lg"
+            style={backgroundFillStyle(slide.config.background_fill)}
           >
             {/* Renders nothing at all if no background image is set — see
                 background-image-field.tsx. z-0 pixels; the Face below sits

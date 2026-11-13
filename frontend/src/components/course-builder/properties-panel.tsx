@@ -1,7 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import { Trash2, Type } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  Circle,
+  Minus,
+  PaintBucket,
+  Shapes,
+  Square,
+  Star,
+  Trash2,
+  Triangle,
+  TriangleAlert,
+  Type,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,25 +26,66 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { DEFAULT_SLIDE_TITLE, SLIDE_TYPE_LABELS } from "@/lib/course-types";
 import type {
   ContentSlideLayout,
   Lesson,
   PositionableField,
+  ShapeKind,
   Slide,
   SlideConfig,
   SlideType,
 } from "@/lib/course-types";
 import { cn, stripHtml } from "@/lib/utils";
 import { useActiveEditorContext, useForceRerenderOnEditorTransaction } from "./active-editor-context";
+import { ColorPicker } from "./color-picker";
 import { FreeTextBoxProperties } from "./free-text-box-properties";
 import { ImageObjectProperties } from "./image-object-properties";
 import { LessonProperties } from "./lesson-properties";
-import { FreeformAddImageControl, SlideBackgroundPanel } from "./slide-background-panel";
+import { useObjectPlacement } from "./object-placement-context";
+import { usePaintBucket } from "./paint-bucket-context";
+import { ShapeObjectProperties } from "./shape-object-properties";
+import { BackgroundFillControl, FreeformAddImageControl, SlideBackgroundPanel } from "./slide-background-panel";
 import { SlideLayersPanel } from "./slide-layers-panel";
-import { useTextBoxPlacement } from "./text-box-placement-context";
 import { TextFormattingControls } from "./text-formatting-controls";
 import { TextObjectProperties } from "./text-object-properties";
+
+// The 5 basic shapes + 4 icon kinds offered from the Tools row's two
+// One merged "Add shape" button/dropdown (same convention as most other
+// apps' shape tools — one button, sectioned popup — rather than a
+// separate button per section), sectioned by this array so a future
+// section (arrows/connectors, callouts, whatever comes next) is a new
+// entry here, not a new button or a rewrite of the dropdown JSX.
+const SHAPE_SECTIONS: { label: string; options: { kind: ShapeKind; label: string; icon: typeof Type }[] }[] = [
+  {
+    label: "Shapes",
+    options: [
+      { kind: "rectangle", label: "Rectangle", icon: Square },
+      { kind: "ellipse", label: "Ellipse", icon: Circle },
+      { kind: "triangle", label: "Triangle", icon: Triangle },
+      { kind: "line", label: "Line", icon: Minus },
+      { kind: "arrow", label: "Arrow", icon: ArrowRight },
+    ],
+  },
+  {
+    label: "Icons",
+    options: [
+      { kind: "icon-check", label: "Checkmark", icon: Check },
+      { kind: "icon-star", label: "Star", icon: Star },
+      { kind: "icon-arrow-right", label: "Arrow right", icon: ArrowRight },
+      { kind: "icon-warning-triangle", label: "Warning triangle", icon: TriangleAlert },
+    ],
+  },
+];
 
 // Interactive/assessment slide types whose text fields were converted from
 // plain <input>/<textarea> to WidgetEditableText (widget-text-field.tsx) —
@@ -68,7 +122,11 @@ export type SelectedObject =
   // user-created id, and the two selection-id schemes
   // (`${slideId}:${field}` vs `${slideId}:text:${boxId}`) are genuinely
   // different shapes, not just a type-level widening.
-  | { type: "free-text"; boxId: string };
+  | { type: "free-text"; boxId: string }
+  // A freeform content slide's own shapes[] entry (see course-types.ts's
+  // ShapeObject) — covers both drawn shapes and icon glyphs, same single
+  // SlideObjectRef variant reasoning as there.
+  | { type: "shape"; shapeId: string };
 
 export type PropertiesPanelProps =
   | { kind: "empty" }
@@ -158,6 +216,10 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
           onConfigChange={props.onConfigChange}
         />
       );
+    } else if (props.object.type === "shape") {
+      content = (
+        <ShapeObjectProperties slide={props.slide} shapeId={props.object.shapeId} onConfigChange={props.onConfigChange} />
+      );
     } else {
       content = (
         <ImageObjectProperties
@@ -241,7 +303,8 @@ function SlideProperties({
   // means the dialog is closed. Only ever set when hasSlideContent(slide)
   // is true at click time; see handleLayoutChangeRequest.
   const [pendingLayout, setPendingLayout] = useState<ContentSlideLayout | null>(null);
-  const { startPlacing } = useTextBoxPlacement();
+  const { startPlacing } = useObjectPlacement();
+  const { armedColor, armBucket, disarmBucket } = usePaintBucket();
 
   // Widget-type slides (see WIDGET_TEXT_SLIDE_TYPES above) have no
   // "selectable object" concept — their text fields live directly in the
@@ -315,6 +378,10 @@ function SlideProperties({
     <div className="shrink-0 space-y-3 border-t border-border p-3">
       {isFreeformContent && <SlideLayersPanel slide={slide} onConfigChange={onConfigChange} />}
 
+      {/* Cross-cutting, every slide_type — same tier as the image
+          controls just below. See BackgroundFillControl's own comment. */}
+      <BackgroundFillControl fill={slide.config.background_fill} onConfigChange={onConfigChange} />
+
       {/* Unlike the layout picker above, this section applies to every
           slide_type — a background image (and, planned next, a background
           color) is cross-cutting styling, not something specific to
@@ -384,23 +451,85 @@ function SlideProperties({
             <div className="flex items-center justify-between">
               <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Tools</div>
               <div className="flex items-center gap-1">
-                {/* A small icon button, not a full-width labeled one — this
-                    section is meant to grow more tools over time (shapes,
-                    etc.), and a full-width button per tool would eat the
-                    whole panel's height before that even starts. Saving
-                    this slide as a template moved to a bookmark button on
-                    the canvas itself (slide-canvas.tsx) — it's about the
-                    slide being viewed, not a side-panel "tool." */}
+                {/* Small icon buttons, not full-width labeled ones — this
+                    row is meant to grow more tools over time, and a
+                    full-width button per tool would eat the whole panel's
+                    height before that even starts. Saving this slide as a
+                    template moved to a bookmark button on the canvas
+                    itself (slide-canvas.tsx) — it's about the slide being
+                    viewed, not a side-panel "tool." */}
                 <Button
                   type="button"
                   variant="outline"
                   size="icon-sm"
-                  onClick={startPlacing}
+                  onClick={() => startPlacing({ kind: "text" })}
                   aria-label="Add text box"
                   title="Add text box"
                 >
                   <Type className="h-4 w-4" />
                 </Button>
+
+                {/* One button, one popup sectioned into "Shapes"/"Icons"
+                    (SHAPE_SECTIONS above) — the usual convention for a
+                    shape tool in most design apps, rather than a
+                    separate button per section. A new section (arrows/
+                    connectors, callouts, whatever's next) is a new entry
+                    in that array, not a new button here. */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={<Button type="button" variant="outline" size="icon-sm" />}
+                    aria-label="Add shape or icon"
+                    title="Add shape or icon"
+                  >
+                    <Shapes className="h-4 w-4" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    {SHAPE_SECTIONS.map((section, index) => (
+                      <DropdownMenuGroup key={section.label}>
+                        {index > 0 && <DropdownMenuSeparator />}
+                        <DropdownMenuLabel>{section.label}</DropdownMenuLabel>
+                        {section.options.map(({ kind, label, icon: Icon }) => (
+                          <DropdownMenuItem key={kind} onClick={() => startPlacing({ kind: "shape", shapeKind: kind })}>
+                            <Icon className="h-3.5 w-3.5" />
+                            {label}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuGroup>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                {/* Paint bucket: armed/disarmed is a plain toggle (click
+                    again to turn it off), same as this panel's own format
+                    buttons elsewhere — the color itself comes from the
+                    small ColorPicker swatch right next to it, which stays
+                    armed at whatever color was last picked rather than
+                    re-prompting on every click (see paint-bucket-context.tsx's
+                    own comment on why). Applying it is handled entirely on
+                    the canvas side (shape-field.tsx's ShapeEditLayer,
+                    freeform-content-slide.tsx's background click) — this
+                    button only arms/disarms the tool. */}
+                <Button
+                  type="button"
+                  variant={armedColor ? "default" : "outline"}
+                  size="icon-sm"
+                  aria-pressed={!!armedColor}
+                  onClick={() => (armedColor ? disarmBucket() : armBucket("#2563eb"))}
+                  aria-label="Paint bucket"
+                  title="Paint bucket — click a shape, icon, or the background to recolor it"
+                >
+                  <PaintBucket className="h-4 w-4" />
+                </Button>
+                <ColorPicker
+                  value={armedColor}
+                  onChange={(color) => (color ? armBucket(color) : disarmBucket())}
+                  panelInteractingRef={panelInteractingRef}
+                  ariaLabel="Paint bucket color"
+                  triggerClassName="h-7 w-7 shrink-0 rounded-md border border-input p-0"
+                  renderTrigger={(current) => (
+                    <span className="block h-full w-full rounded-md" style={{ backgroundColor: current ?? "transparent" }} />
+                  )}
+                />
               </div>
             </div>
           </div>

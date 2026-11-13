@@ -4,17 +4,11 @@ import type { RefObject } from "react";
 import type { Editor } from "@tiptap/react";
 import { AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, Italic, List, ListOrdered, Underline as UnderlineIcon } from "lucide-react";
 
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { TextAlignValue } from "@/lib/tiptap-text-align";
 import { cn } from "@/lib/utils";
 import { useActiveEditorContext } from "./active-editor-context";
+import { ColorPicker } from "./color-picker";
 
 // Extracted out of text-object-properties.tsx so free-text-box-properties.tsx
 // (the generic freeform text box's panel) can share the exact same
@@ -39,15 +33,6 @@ const FONT_SIZE_OPTIONS: { key: string; label: string; value: string | null }[] 
     return { key: String(size), label: String(size), value: `${size}px` };
   }),
   ...[40, 48, 60, 72, 96].map((size) => ({ key: String(size), label: String(size), value: `${size}px` })),
-];
-
-const TEXT_COLOR_PRESETS: { label: string; value: string | null }[] = [
-  { label: "Default", value: null },
-  { label: "Black", value: "#000000" },
-  { label: "White", value: "#ffffff" },
-  { label: "Red", value: "#dc2626" },
-  { label: "Green", value: "#16a34a" },
-  { label: "Blue", value: "#2563eb" },
 ];
 
 // A curated, web-safe list rather than every font installed on the author's
@@ -459,7 +444,11 @@ function FormatButton({
   );
 }
 
-// Same preset-swatch-plus-native-picker shape as the old toolbar's version.
+// Thin wrapper around the generic ColorPicker (color-picker.tsx) — keeps
+// only this field's own closed-state look (the "A" + swatch bar), now
+// built on the shared COLOR_PRESETS list plus a "Default" none-option
+// (this field's own equivalent of "unset the mark entirely") instead of
+// its own local preset list.
 function TextColorPicker({
   currentColor,
   onChange,
@@ -470,49 +459,23 @@ function TextColorPicker({
   panelInteractingRef: RefObject<boolean>;
 }) {
   return (
-    <DropdownMenu
-      onOpenChange={(open) => {
-        panelInteractingRef.current = open;
-      }}
-    >
-      <DropdownMenuTrigger
-        render={<button type="button" />}
-        aria-label="Text color"
-        title="Text color"
-        onMouseDown={(e) => {
-          e.preventDefault();
-          panelInteractingRef.current = true;
-        }}
-        className="flex h-8 w-full shrink-0 items-center justify-center gap-1.5 rounded-md border border-input text-muted-foreground hover:bg-muted hover:text-foreground"
-      >
-        <span className="text-xs font-bold leading-none">A</span>
-        <span
-          className="h-1 w-4 rounded-sm border border-border/60"
-          style={{ backgroundColor: currentColor ?? "transparent" }}
-        />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
-        {TEXT_COLOR_PRESETS.map((preset) => (
-          <DropdownMenuItem key={preset.label} onClick={() => onChange(preset.value)}>
-            <span
-              className="h-3.5 w-3.5 shrink-0 rounded-full border border-border"
-              style={{ backgroundColor: preset.value ?? "transparent" }}
-            />
-            {preset.label}
-          </DropdownMenuItem>
-        ))}
-        <DropdownMenuSeparator />
-        <label className="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-sm">
-          <input
-            type="color"
-            value={currentColor ?? "#000000"}
-            onChange={(e) => onChange(e.target.value)}
-            onMouseDown={(e) => e.stopPropagation()}
-            className="h-5 w-5 shrink-0 cursor-pointer rounded border border-border p-0"
+    <ColorPicker
+      value={currentColor}
+      onChange={onChange}
+      allowNone
+      noneLabel="Default"
+      panelInteractingRef={panelInteractingRef}
+      ariaLabel="Text color"
+      triggerClassName="flex h-8 w-full shrink-0 items-center justify-center gap-1.5 rounded-md border border-input text-muted-foreground hover:bg-muted hover:text-foreground"
+      renderTrigger={(current) => (
+        <>
+          <span className="text-xs font-bold leading-none">A</span>
+          <span
+            className="h-1 w-4 rounded-sm border border-border/60"
+            style={{ backgroundColor: current ?? "transparent" }}
           />
-          Custom…
-        </label>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        </>
+      )}
+    />
   );
 }

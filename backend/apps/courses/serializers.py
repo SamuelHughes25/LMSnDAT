@@ -271,6 +271,66 @@ class SlideSerializer(serializers.ModelSerializer):
                             {'config': f'each extra image must have a numeric "{field}".'}
                         )
 
+        # Cross-cutting, same tier as extra_images above — a drawn shape or
+        # icon glyph on a freeform slide (frontend's ShapeObject/ShapeKind,
+        # course-types.ts). Not slide_type-gated for the same reason.
+        shapes = config.get('shapes')
+        if shapes is not None and not isinstance(shapes, list):
+            raise serializers.ValidationError({'config': '"shapes" must be a list.'})
+        if shapes:
+            if len(shapes) > 20:
+                raise serializers.ValidationError({'config': 'a slide allows at most 20 shapes.'})
+            valid_shape_kinds = {
+                'rectangle', 'ellipse', 'triangle', 'line', 'arrow',
+                'icon-check', 'icon-star', 'icon-arrow-right', 'icon-warning-triangle',
+            }
+            for shape in shapes:
+                if not isinstance(shape, dict):
+                    raise serializers.ValidationError({'config': 'each shape must be an object.'})
+                if not isinstance(shape.get('id'), str) or not shape.get('id'):
+                    raise serializers.ValidationError(
+                        {'config': 'each shape must have a non-empty "id" string.'}
+                    )
+                if shape.get('shapeKind') not in valid_shape_kinds:
+                    raise serializers.ValidationError(
+                        {'config': 'each shape must have a valid "shapeKind".'}
+                    )
+                for field in ('xPct', 'yPct', 'widthPct', 'heightPct'):
+                    value = shape.get(field)
+                    if not isinstance(value, (int, float)) or isinstance(value, bool):
+                        raise serializers.ValidationError(
+                            {'config': f'each shape must have a numeric "{field}".'}
+                        )
+
+        # The slide's own background color/gradient (frontend's
+        # BackgroundFill, course-types.ts) — same cross-cutting tier as
+        # background_image_url, so also unconditional.
+        background_fill = config.get('background_fill')
+        if background_fill is not None:
+            if not isinstance(background_fill, dict):
+                raise serializers.ValidationError({'config': '"background_fill" must be an object.'})
+            kind = background_fill.get('kind')
+            if kind == 'color':
+                if not isinstance(background_fill.get('color'), str) or not background_fill.get('color'):
+                    raise serializers.ValidationError(
+                        {'config': 'a "color" background_fill requires a non-empty "color" string.'}
+                    )
+            elif kind == 'gradient':
+                for field in ('from', 'to'):
+                    if not isinstance(background_fill.get(field), str) or not background_fill.get(field):
+                        raise serializers.ValidationError(
+                            {'config': f'a "gradient" background_fill requires a non-empty "{field}" string.'}
+                        )
+                angle = background_fill.get('angle')
+                if not isinstance(angle, (int, float)) or isinstance(angle, bool):
+                    raise serializers.ValidationError(
+                        {'config': 'a "gradient" background_fill requires a numeric "angle".'}
+                    )
+            else:
+                raise serializers.ValidationError(
+                    {'config': '"background_fill.kind" must be "color" or "gradient".'}
+                )
+
         return attrs
 
 

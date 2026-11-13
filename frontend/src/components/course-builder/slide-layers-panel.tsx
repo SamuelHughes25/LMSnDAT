@@ -1,13 +1,44 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, ImageIcon, Pencil, Trash2, Type } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Circle,
+  ImageIcon,
+  Minus,
+  Pencil,
+  Square,
+  Star,
+  Trash2,
+  Triangle,
+  TriangleAlert,
+  Type,
+} from "lucide-react";
 
 import { Input } from "@/components/ui/input";
-import type { Slide, SlideConfig, SlideObjectRef } from "@/lib/course-types";
+import type { ShapeKind, Slide, SlideConfig, SlideObjectRef } from "@/lib/course-types";
 import { normalizeObjectOrder } from "@/lib/course-types";
 import { cn } from "@/lib/utils";
 import { useSlideSelection } from "./slide-selection-context";
+
+// One icon per shape/icon kind for this panel's row — a plain lookup, not
+// derived from anything about how shape-field.tsx actually RENDERS that
+// kind (the layers panel just needs a recognizable glyph, same idea as
+// Type/ImageIcon for text/image rows).
+const SHAPE_KIND_ICONS: Record<ShapeKind, typeof Type> = {
+  rectangle: Square,
+  ellipse: Circle,
+  triangle: Triangle,
+  line: Minus,
+  arrow: ArrowRight,
+  "icon-check": Check,
+  "icon-star": Star,
+  "icon-arrow-right": ArrowRight,
+  "icon-warning-triangle": TriangleAlert,
+};
 
 function refKey(ref: SlideObjectRef): string {
   return `${ref.type}:${ref.id}`;
@@ -41,6 +72,7 @@ export function SlideLayersPanel({
   const { selectedIds, select, deselect } = useSlideSelection();
   const textBoxes = slide.config.text_boxes ?? [];
   const extraImages = slide.config.extra_images ?? [];
+  const shapes = slide.config.shapes ?? [];
   const hasBackground = !!slide.config.background_image_url;
   // normalizeObjectOrder, not a bare `slide.config.object_order ?? []` —
   // see its own comment in course-types.ts: this is what makes an
@@ -107,17 +139,35 @@ export function SlideLayersPanel({
       const box = textBoxes.find((b) => b.id === ref.id);
       return box?.name || `Text ${index + 1}`;
     }
+    if (ref.type === "shape") {
+      const shape = shapes.find((s) => s.id === ref.id);
+      const kindLabel = shape?.shapeKind.startsWith("icon-") ? "Icon" : "Shape";
+      return shape?.name || `${kindLabel} ${index + 1}`;
+    }
     const image = extraImages.find((i) => i.id === ref.id);
     return image?.name || `Image ${index + 1}`;
   }
 
+  function refIcon(ref: SlideObjectRef): typeof Type {
+    if (ref.type === "text") return Type;
+    if (ref.type === "shape") {
+      const shape = shapes.find((s) => s.id === ref.id);
+      return shape ? SHAPE_KIND_ICONS[shape.shapeKind] : Square;
+    }
+    return ImageIcon;
+  }
+
   function selectionIdFor(ref: SlideObjectRef): string {
-    return ref.type === "text" ? `${slide.id}:text:${ref.id}` : `${slide.id}:extra-image:${ref.id}`;
+    if (ref.type === "text") return `${slide.id}:text:${ref.id}`;
+    if (ref.type === "shape") return `${slide.id}:shape:${ref.id}`;
+    return `${slide.id}:extra-image:${ref.id}`;
   }
 
   function renameRef(ref: SlideObjectRef, name: string) {
     if (ref.type === "text") {
       onConfigChange({ text_boxes: textBoxes.map((b) => (b.id === ref.id ? { ...b, name } : b)) });
+    } else if (ref.type === "shape") {
+      onConfigChange({ shapes: shapes.map((s) => (s.id === ref.id ? { ...s, name } : s)) });
     } else {
       onConfigChange({ extra_images: extraImages.map((i) => (i.id === ref.id ? { ...i, name } : i)) });
     }
@@ -140,6 +190,8 @@ export function SlideLayersPanel({
     orderRef.current = nextOrder;
     if (ref.type === "text") {
       onConfigChange({ text_boxes: textBoxes.filter((b) => b.id !== ref.id), object_order: nextOrder });
+    } else if (ref.type === "shape") {
+      onConfigChange({ shapes: shapes.filter((s) => s.id !== ref.id), object_order: nextOrder });
     } else {
       onConfigChange({ extra_images: extraImages.filter((i) => i.id !== ref.id), object_order: nextOrder });
     }
@@ -230,7 +282,7 @@ export function SlideLayersPanel({
           return (
             <div key={key} ref={(el) => registerRowEl(key, el)}>
               <LayerRow
-                icon={ref.type === "text" ? Type : ImageIcon}
+                icon={refIcon(ref)}
                 name={refName(ref, orderIndex)}
                 selected={selectedIds.has(selectionIdFor(ref))}
                 onSelect={() => select(selectionIdFor(ref), false)}

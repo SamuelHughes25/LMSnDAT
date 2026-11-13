@@ -12,12 +12,13 @@ import {
   submitSlideResult,
 } from "@/app/actions/attempts";
 import { ActiveEditorProvider } from "@/components/course-builder/active-editor-context";
+import { ObjectPlacementProvider } from "@/components/course-builder/object-placement-context";
+import { PaintBucketProvider } from "@/components/course-builder/paint-bucket-context";
 import { CANVAS_H, CANVAS_W } from "@/components/course-builder/slide-canvas";
 import { SLIDE_TYPE_FACES } from "@/components/course-builder/slide-faces";
 import { ExtraImagesLayer, SlideBackgroundLayer } from "@/components/course-builder/slide-faces/background-image-field";
 import { SlideSelectionProvider } from "@/components/course-builder/slide-selection-context";
 import { SnapGuideProvider } from "@/components/course-builder/snap-guide-context";
-import { TextBoxPlacementProvider } from "@/components/course-builder/text-box-placement-context";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -28,6 +29,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { CourseAttempt } from "@/lib/attempt-types";
+import { backgroundFillStyle } from "@/lib/background-fill-style";
 import { QUESTION_SLIDE_TYPES, type Slide } from "@/lib/course-types";
 import type { SlideInteractionResult } from "@/lib/slide-interaction";
 import { cn } from "@/lib/utils";
@@ -477,30 +479,33 @@ export function CoursePreviewViewer({
     // useSlideSelection(), useActiveEditorContext(), AND useSnapGuides()
     // unconditionally — hooks, so they have to run on every render
     // regardless of mode, even though "present" mode's own early-return
-    // path never actually reads any of the three. All four (now including
-    // useTextBoxPlacement, called unconditionally by
-    // freeform-content-slide.tsx's FreeformContentSlide — a FREEFORM
-    // content slide's own present/static render path, not just "edit")
-    // throw if their provider isn't anywhere above them in the tree.
-    // course-builder.tsx already wraps its own tree in all four, but this
-    // viewer is a genuinely separate top-level component tree — its own
-    // route/page, never nested inside course-builder.tsx — so it never
-    // inherited any of them. Confirmed via a real browser: previewing ANY
-    // course containing a "content" slide 500'd the whole page — first on
-    // the missing SlideSelectionProvider, then (after fixing just that) on
-    // the missing ActiveEditorProvider, then the missing SnapGuideProvider
-    // (missed in both of those earlier fixes, since it only throws once a
-    // learner actually plays a course with a positioned text box rather
-    // than just opening the admin preview tab) — TextBoxPlacementProvider
-    // added proactively alongside the other three this time, specifically
-    // because of that exact history, rather than waiting to hit the same
-    // crash a fourth time. Same nesting order as course-builder.tsx, for
-    // no particular reason beyond consistency — the providers don't
-    // interact.
+    // path never actually reads any of the three. All of these (now
+    // including useObjectPlacement/usePaintBucket, both called
+    // unconditionally by freeform-content-slide.tsx's FreeformContentSlide
+    // — a FREEFORM content slide's own present/static render path, not
+    // just "edit") throw if their provider isn't anywhere above them in
+    // the tree. course-builder.tsx already wraps its own tree in all of
+    // these, but this viewer is a genuinely separate top-level component
+    // tree — its own route/page, never nested inside course-builder.tsx —
+    // so it never inherited any of them. Confirmed via a real browser:
+    // previewing ANY course containing a "content" slide 500'd the whole
+    // page — first on the missing SlideSelectionProvider, then (after
+    // fixing just that) on the missing ActiveEditorProvider, then the
+    // missing SnapGuideProvider (missed in both of those earlier fixes,
+    // since it only throws once a learner actually plays a course with a
+    // positioned text box rather than just opening the admin preview
+    // tab), then the missing TextBoxPlacementProvider. ObjectPlacement/
+    // PaintBucket (that same context's generalized successor, plus the
+    // new sibling it needed) are added proactively alongside the rest
+    // THIS time, specifically because of that exact history, rather than
+    // waiting to hit the same crash a fifth and sixth time. Same nesting
+    // order as course-builder.tsx, for no particular reason beyond
+    // consistency — the providers don't interact.
     <ActiveEditorProvider>
       <SlideSelectionProvider>
         <SnapGuideProvider>
-          <TextBoxPlacementProvider>
+          <ObjectPlacementProvider>
+          <PaintBucketProvider>
           {/* Forced choice, not a dismissible confirm — no close button, and
               onOpenChange/disablePointerDismissal both ignore an outside
               click or Escape, since "do nothing" isn't a valid third option
@@ -558,7 +563,7 @@ export function CoursePreviewViewer({
                 <div className="flex h-full w-full items-center justify-center">
                   <div
                     className="slide-surface relative overflow-hidden rounded-sm bg-white shadow-lg"
-                    style={{ width: CANVAS_W, height: CANVAS_H, zoom: scale }}
+                    style={{ width: CANVAS_W, height: CANVAS_H, zoom: scale, ...backgroundFillStyle(current.slide.config.background_fill) }}
                   >
                     {!isFreeformContent && (
                       <>
@@ -716,7 +721,8 @@ export function CoursePreviewViewer({
               </div>
             )}
           </div>
-          </TextBoxPlacementProvider>
+          </PaintBucketProvider>
+          </ObjectPlacementProvider>
         </SnapGuideProvider>
       </SlideSelectionProvider>
     </ActiveEditorProvider>

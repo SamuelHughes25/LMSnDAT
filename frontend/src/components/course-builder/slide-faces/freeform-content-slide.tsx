@@ -2,14 +2,30 @@
 
 import { useRef, useState } from "react";
 
-import type { ExtraImage, FreeTextBox, SlideObjectRef } from "@/lib/course-types";
+import type { ExtraImage, FreeTextBox, ShapeKind, ShapeObject, SlideObjectRef } from "@/lib/course-types";
 import { normalizeObjectOrder } from "@/lib/course-types";
+import { useObjectPlacement } from "../object-placement-context";
+import { usePaintBucket } from "../paint-bucket-context";
+import { CANVAS_H, CANVAS_W } from "../slide-canvas";
 import { useSlideSelection } from "../slide-selection-context";
-import { useTextBoxPlacement } from "../text-box-placement-context";
 import type { SlideFaceProps } from "./index";
 import { BackgroundImageEditLayer, BackgroundImagePixels, SlideBackgroundLayer } from "./background-image-field";
 import { EditableFreeTextBox } from "./free-text-box";
 import { PositionableBox } from "./positionable-box";
+import {
+  DEFAULT_SHAPE_BORDER_COLOR,
+  DEFAULT_SHAPE_BORDER_WIDTH,
+  DEFAULT_SHAPE_FILL,
+  ShapeEditLayer,
+  ShapePixels,
+} from "./shape-field";
+
+// line/arrow have no fillable interior (their one color is the stroke);
+// every other kind does — see ShapeObject's own comment in
+// course-types.ts. Used both for this file's own default-style-on-create
+// and to decide what the paint bucket actually recolors.
+const STROKE_ONLY_KINDS: ReadonlySet<ShapeKind> = new Set(["line", "arrow"]);
+const ICON_KIND_PREFIX = "icon-";
 
 // The "layout unset" render path for a content slide — see
 // content-slide-face.tsx's own top-of-file comment for the full legacy-vs-
@@ -65,6 +81,43 @@ function makeFreeTextBoxId(): string {
   return `text_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function makeShapeId(): string {
+  return `shape_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+// A brand-new shape's starting style — geometric kinds get a visible
+// fill and no border by default (adding a border is an explicit choice
+// in shape-object-properties.tsx, same "null until chosen" convention as
+// background_fill); line/arrow have no fill at all, so their stroke
+// needs a real default color/width or they'd render as nothing.
+function defaultShapeStyle(shapeKind: ShapeKind): Partial<ShapeObject> {
+  if (STROKE_ONLY_KINDS.has(shapeKind)) {
+    return { borderColor: DEFAULT_SHAPE_BORDER_COLOR, borderWidth: DEFAULT_SHAPE_BORDER_WIDTH };
+  }
+  if (shapeKind.startsWith(ICON_KIND_PREFIX)) {
+    return { fillColor: DEFAULT_SHAPE_FILL };
+  }
+  return { fillColor: DEFAULT_SHAPE_FILL, borderColor: null, borderWidth: 0, cornerRadiusPct: 0 };
+}
+
+// A plain click (not a drag) needs its own sensible default box per
+// shapeKind — DEFAULT_BOX_WIDTH_PCT/HEIGHT_PCT just below are tuned for
+// TEXT, not shapes. Geometric shapes/icons get a modest square; line/
+// arrow get a flatter, wider box so a plain click doesn't produce an
+// ambiguous-looking 45°-diagonal square.
+function defaultShapeSize(shapeKind: ShapeKind): { widthPct: number; heightPct: number } {
+  if (STROKE_ONLY_KINDS.has(shapeKind)) return { widthPct: 30, heightPct: 4 };
+  return { widthPct: 20, heightPct: 20 };
+}
+
+// What the paint bucket actually recolors on a shape — its fill for
+// anything with an interior (geometric shapes and icon glyphs alike),
+// its stroke (borderColor) for line/arrow, which have no fill at all.
+function bucketPatchForShape(shapeKind: ShapeKind, color: string): Partial<ShapeObject> {
+  if (STROKE_ONLY_KINDS.has(shapeKind)) return { borderColor: color };
+  return { fillColor: color };
+}
+
 export function FreeformContentSlide({
   slide,
   mode,
@@ -74,7 +127,8 @@ export function FreeformContentSlide({
 }: SlideFaceProps) {
   const slideRef = useRef<HTMLDivElement>(null);
   const { select } = useSlideSelection();
-  const { isPlacing, cancelPlacing } = useTextBoxPlacement();
+  const { placement, cancelPlacing } = useObjectPlacement();
+  const { armedColor } = usePaintBucket();
   const [previewRect, setPreviewRect] = useState<Rect | null>(null);
   // onUp (inside handlePointerDown below) is defined once per gesture and
   // never recreated as previewRect updates mid-drag, so its own closure
@@ -87,6 +141,7 @@ export function FreeformContentSlide({
 
   const textBoxes = slide.config.text_boxes ?? [];
   const extraImages = slide.config.extra_images ?? [];
+  const shapes = slide.config.shapes ?? [];
   const order = normalizeObjectOrder(slide.config);
   // A lookup, not a render order — see the big comment on the render below
   // for why object_order drives each object's zIndex STYLE only, never the
@@ -101,6 +156,10 @@ export function FreeformContentSlide({
     onConfigChange?.({ extra_images: extraImages.map((img) => (img.id === id ? { ...img, ...patch } : img)) });
   }
 
+  function updateShape(id: string, patch: Partial<ShapeObject>) {
+    onConfigChange?.({ shapes: shapes.map((s) => (s.id === id ? { ...s, ...patch } : s)) });
+  }
+
   function createTextBox(rect: Rect) {
     const id = makeFreeTextBoxId();
     const box: FreeTextBox = { id, html: "", ...rect };
@@ -109,13 +168,42 @@ export function FreeformContentSlide({
     select(`${slide.id}:text:${id}`, false);
   }
 
+  function createShape(rect: Rect, shapeKind: ShapeKind) {
+    const id = makeShapeId();
+    const shape: ShapeObject = { id, shapeKind, shadow: false, ...rect, ...defaultShapeStyle(shapeKind) };
+    const ref: SlideObjectRef = { type: "shape", id };
+    onConfigChange?.({ shapes: [...shapes, shape], object_order: [...order, ref] });
+    select(`${slide.id}:shape:${id}`, false);
+  }
+
   function handlePointerDown(e: React.PointerEvent) {
-    if (!isPlacing || mode !== "edit") return;
-    // Only the empty canvas itself should start a placement drag — a click
-    // that landed on an existing box (its own pointerdown already ran, and
-    // boxes sit above this layer) must never also start drawing a new one
-    // underneath it.
+    if (mode !== "edit") return;
+    // Only the empty canvas itself should start a placement drag (or take
+    // a bucket click) — a click that landed on an existing box (its own
+    // pointerdown already ran, and boxes sit above this layer) must never
+    // also start drawing a new one, or recolor the background, underneath
+    // it.
     if (e.target !== e.currentTarget) return;
+    // Bucket takes priority over placement — both are armed via separate
+    // toggle buttons in the Tools row, so nothing stops both being active
+    // at once; a bucket click recoloring the background is the more
+    // surprising of the two outcomes to accidentally suppress, so it wins.
+    // Never disarms itself (see paint-bucket-context.tsx) — several
+    // slides' backgrounds can be painted the same color in a row.
+    if (armedColor) {
+      e.preventDefault();
+      onConfigChange?.({ background_fill: { kind: "color", color: armedColor } });
+      return;
+    }
+    if (!placement) return;
+    // Captured once, here — same reasoning as `start`/`slideEl` just below:
+    // the nested onMove/onUp closures need a value TypeScript can still
+    // see as non-null, and this also pins the gesture to whichever
+    // placement was armed when it STARTED, immune to the (currently
+    // impossible, since nothing else can change it mid-gesture, but cheap
+    // to guard regardless) possibility of it changing underneath an
+    // in-flight drag.
+    const activePlacement = placement;
     e.preventDefault();
     const slideEl = slideRef.current;
     if (!slideEl) return;
@@ -187,16 +275,25 @@ export function FreeformContentSlide({
         // no-op — already released (e.g. the pointer left the window)
       }
       if (moved && previewRectRef.current) {
-        createTextBox(previewRectRef.current);
+        if (activePlacement.kind === "text") createTextBox(previewRectRef.current);
+        else createShape(previewRectRef.current, activePlacement.shapeKind);
       } else {
         // A plain click, not a drag — a sensibly-sized default box anchored
         // at the click point, clamped so it never overflows the canvas.
-        createTextBox({
-          xPct: Math.min(start.xPct, 100 - DEFAULT_BOX_WIDTH_PCT),
-          yPct: Math.min(start.yPct, 100 - DEFAULT_BOX_HEIGHT_PCT),
-          widthPct: DEFAULT_BOX_WIDTH_PCT,
-          heightPct: DEFAULT_BOX_HEIGHT_PCT,
-        });
+        // DEFAULT_BOX_WIDTH_PCT/HEIGHT_PCT are tuned for text;
+        // defaultShapeSize has its own per-shapeKind sizing.
+        const { widthPct, heightPct } =
+          activePlacement.kind === "text"
+            ? { widthPct: DEFAULT_BOX_WIDTH_PCT, heightPct: DEFAULT_BOX_HEIGHT_PCT }
+            : defaultShapeSize(activePlacement.shapeKind);
+        const rect: Rect = {
+          xPct: Math.min(start.xPct, 100 - widthPct),
+          yPct: Math.min(start.yPct, 100 - heightPct),
+          widthPct,
+          heightPct,
+        };
+        if (activePlacement.kind === "text") createTextBox(rect);
+        else createShape(rect, activePlacement.shapeKind);
       }
       previewRectRef.current = null;
       setPreviewRect(null);
@@ -221,7 +318,7 @@ export function FreeformContentSlide({
     <div
       ref={slideRef}
       className="relative h-full w-full text-foreground"
-      style={{ cursor: isPlacing && mode === "edit" ? "crosshair" : undefined }}
+      style={{ cursor: (placement || armedColor) && mode === "edit" ? "crosshair" : undefined }}
       onPointerDown={handlePointerDown}
     >
       {/* The universal background image — always first in paint order
@@ -340,6 +437,30 @@ export function FreeformContentSlide({
             zIndex={zIndex}
           />
         );
+      })}
+
+      {shapes.map((shape) => {
+        const zIndex = zIndexById.get(`shape:${shape.id}`) ?? 1;
+        const pxW = (shape.widthPct / 100) * CANVAS_W;
+        const pxH = (shape.heightPct / 100) * CANVAS_H;
+        if (editRefs) {
+          return (
+            <ShapeEditLayer
+              key={`shape:${shape.id}`}
+              shape={shape}
+              selectionId={`${slide.id}:shape:${shape.id}`}
+              pxW={pxW}
+              pxH={pxH}
+              onTransform={(t) => updateShape(shape.id, t)}
+              containerRef={editRefs.containerRef}
+              overlayRef={editRefs.overlayRef}
+              zIndex={zIndex}
+              bucketArmedColor={armedColor}
+              onBucketApply={(color) => updateShape(shape.id, bucketPatchForShape(shape.shapeKind, color))}
+            />
+          );
+        }
+        return <ShapePixels key={`shape:${shape.id}`} shape={shape} pxW={pxW} pxH={pxH} zIndex={zIndex} />;
       })}
 
       {previewRect && (

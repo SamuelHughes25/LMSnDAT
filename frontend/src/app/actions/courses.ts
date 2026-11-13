@@ -534,7 +534,18 @@ function defaultSlideConfig(slideType: SlideType): SlideConfig {
   }
 }
 
-export async function createSlide(lessonId: string, slideType: SlideType, order: number): Promise<Slide> {
+export async function createSlide(
+  lessonId: string,
+  slideType: SlideType,
+  order: number,
+  // Merged on top of the per-slide-type default — today only ever used
+  // for `background_fill`, to carry a lesson's "sticky" last-used
+  // background forward onto a brand-new slide (see course-builder.tsx's
+  // handleAddSlide). Left generic rather than a dedicated
+  // `backgroundFill` param in case a later feature needs the same
+  // "override part of what a new slide starts with" seam.
+  configOverride?: Partial<SlideConfig>,
+): Promise<Slide> {
   return djangoFetch<Slide>("/slides/", {
     method: "POST",
     body: JSON.stringify({
@@ -542,7 +553,7 @@ export async function createSlide(lessonId: string, slideType: SlideType, order:
       slide_type: slideType,
       title: DEFAULT_SLIDE_TITLE,
       order,
-      config: defaultSlideConfig(slideType),
+      config: { ...defaultSlideConfig(slideType), ...configOverride },
     }),
   });
 }

@@ -3,8 +3,16 @@
 import { ImagePlus, Loader2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import type { ExtraImage, Slide, SlideConfig, SlideObjectRef } from "@/lib/course-types";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { COLOR_PRESETS } from "@/lib/color-presets";
+import type { BackgroundFill, ExtraImage, Slide, SlideConfig, SlideObjectRef } from "@/lib/course-types";
 import { normalizeObjectOrder } from "@/lib/course-types";
+import { useActiveEditorContext } from "./active-editor-context";
 import { CANVAS_H, CANVAS_W } from "./slide-canvas";
 import {
   clampPositionPct,
@@ -12,6 +20,169 @@ import {
   loadNaturalSize,
   useImageUpload,
 } from "./slide-faces/image-shared";
+
+const DEFAULT_GRADIENT: Extract<BackgroundFill, { kind: "gradient" }> = { kind: "gradient", from: "#2563eb", to: "#9333ea", angle: 135 };
+
+function swatchBackground(fill: BackgroundFill | null | undefined): string {
+  if (!fill) return "transparent";
+  if (fill.kind === "color") return fill.color;
+  return `linear-gradient(${fill.angle}deg, ${fill.from}, ${fill.to})`;
+}
+
+// The background color/gradient setter — cross-cutting, same tier as
+// background_image_url (see its own comment), so this renders for every
+// slide_type, not just freeform content ones. A deliberately bespoke
+// small dropdown (DropdownMenu primitives used directly, not the generic
+// ColorPicker from color-picker.tsx) because a gradient needs two colors
+// plus an angle, a shape no single flat preset-swatch list fits — nesting
+// a whole second popover (ColorPicker is itself a complete trigger+content
+// unit) inside this one's content isn't a pattern Base UI's Menu supports
+// cleanly either way. The shared COLOR_PRESETS palette is still reused for
+// the solid-color swatches, just rendered as plain buttons here instead of
+// through ColorPicker's own trigger.
+//
+// "None" explicitly writes `background_fill: null` (not `undefined`) —
+// see that field's own comment in course-types.ts for why the two aren't
+// interchangeable: null is a real, rememberable choice the lesson's
+// "sticky default" (getLastBackgroundFill) carries forward to the next
+// new slide, same as an actual color would.
+export function BackgroundFillControl({
+  fill,
+  onConfigChange,
+}: {
+  fill: BackgroundFill | null | undefined;
+  onConfigChange: (config: Partial<SlideConfig>) => void;
+}) {
+  const { panelInteractingRef } = useActiveEditorContext();
+  const mode = fill?.kind ?? "none";
+
+  function setColor(color: string) {
+    onConfigChange({ background_fill: { kind: "color", color } });
+  }
+  function setGradient(patch: Partial<{ from: string; to: string; angle: number }>) {
+    const current = fill?.kind === "gradient" ? fill : DEFAULT_GRADIENT;
+    onConfigChange({ background_fill: { ...current, ...patch } });
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <div className="text-[11px] font-medium text-muted-foreground/70">Background</div>
+      <DropdownMenu
+        onOpenChange={(open) => {
+          panelInteractingRef.current = open;
+        }}
+      >
+        <DropdownMenuTrigger
+          render={<button type="button" />}
+          aria-label="Background"
+          title="Background"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            panelInteractingRef.current = true;
+          }}
+          className="flex h-8 w-full items-center gap-2 rounded-md border border-input px-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <span className="h-4 w-4 shrink-0 rounded border border-border" style={{ background: swatchBackground(fill) }} />
+          {mode === "none" ? "Default" : mode === "color" ? "Solid color" : "Gradient"}
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-64">
+          <div className="flex gap-1 p-1">
+            <Button
+              type="button"
+              size="sm"
+              variant={mode === "none" ? "default" : "outline"}
+              className="flex-1"
+              onClick={() => onConfigChange({ background_fill: null })}
+            >
+              None
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={mode === "color" ? "default" : "outline"}
+              className="flex-1"
+              onClick={() => setColor(fill?.kind === "color" ? fill.color : "#ffffff")}
+            >
+              Solid
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={mode === "gradient" ? "default" : "outline"}
+              className="flex-1"
+              onClick={() => setGradient({})}
+            >
+              Gradient
+            </Button>
+          </div>
+          <DropdownMenuSeparator />
+          {mode === "color" && (
+            <div className="space-y-2 p-2">
+              <div className="grid grid-cols-4 gap-1.5">
+                {COLOR_PRESETS.map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    title={preset.label}
+                    onClick={() => setColor(preset.value)}
+                    className="h-6 w-6 rounded-full border border-border"
+                    style={{ backgroundColor: preset.value }}
+                  />
+                ))}
+              </div>
+              <label className="flex cursor-pointer items-center gap-2 px-0.5 py-1 text-sm">
+                <input
+                  type="color"
+                  value={fill?.kind === "color" ? fill.color : "#ffffff"}
+                  onChange={(e) => setColor(e.target.value)}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  className="h-5 w-5 shrink-0 cursor-pointer rounded border border-border p-0"
+                />
+                Custom…
+              </label>
+            </div>
+          )}
+          {mode === "gradient" && fill?.kind === "gradient" && (
+            <div className="space-y-2 p-2">
+              <label className="flex items-center justify-between gap-2 text-sm">
+                From
+                <input
+                  type="color"
+                  value={fill.from}
+                  onChange={(e) => setGradient({ from: e.target.value })}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  className="h-5 w-5 shrink-0 cursor-pointer rounded border border-border p-0"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-2 text-sm">
+                To
+                <input
+                  type="color"
+                  value={fill.to}
+                  onChange={(e) => setGradient({ to: e.target.value })}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  className="h-5 w-5 shrink-0 cursor-pointer rounded border border-border p-0"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                Angle
+                <input
+                  type="range"
+                  min={0}
+                  max={360}
+                  value={fill.angle}
+                  onChange={(e) => setGradient({ angle: Number(e.target.value) })}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  className="flex-1"
+                />
+              </label>
+            </div>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
 
 // Total images allowed per slide (the background image, if set, plus every
 // extra_images entry) — one combined cap, not "1 background + 8 extra",

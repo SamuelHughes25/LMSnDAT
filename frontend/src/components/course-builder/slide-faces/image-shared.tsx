@@ -208,6 +208,8 @@ export function ResizeHandles({
   onLiveResize,
   onCommitResize,
   onGuidesChange,
+  minSizePct = MIN_SIZE_PCT,
+  maxSizePct = MAX_SIZE_PCT,
 }: {
   containerRef: React.RefObject<HTMLElement | null>;
   // The box's fixed center point — needed (in addition to width/height) to
@@ -226,7 +228,20 @@ export function ResizeHandles({
   // component calling useSnapGuides() itself so a future non-canvas caller
   // (there isn't one today) wouldn't be forced to render inside that provider.
   onGuidesChange?: (guides: { vertical: number[]; horizontal: number[] }) => void;
+  // Default to the module's own MIN_SIZE_PCT/MAX_SIZE_PCT (images' own
+  // floor/ceiling, tuned for a box that defaults to 100%) so every
+  // existing caller keeps identical behavior. shape-field.tsx's
+  // ShapeEditLayer passes a much smaller floor — a shape/icon/line can
+  // default to as little as 4% tall (a thin line), and reusing images'
+  // 20% floor meant ANY resize on one of those instantly snapped it up
+  // to 5x its own starting size with no way back down, reported directly
+  // as "resizing a little jumps to a large fixed minimum size."
+  minSizePct?: number;
+  maxSizePct?: number;
 }) {
+  function clamp(v: number): number {
+    return Math.min(maxSizePct, Math.max(minSizePct, v));
+  }
   function handlePointerDown(dir: HandleDir, e: React.PointerEvent) {
     e.preventDefault();
     e.stopPropagation();
@@ -313,25 +328,25 @@ export function ResizeHandles({
         // untouched — they still stretch a single axis on purpose.
         //
         // The scale itself — not w/h independently — is what gets clamped
-        // to keep both axes inside [MIN_SIZE_PCT, MAX_SIZE_PCT]: clamping
+        // to keep both axes inside [minSizePct, maxSizePct]: clamping
         // each axis separately (as the non-corner path above does) would
         // let one axis hit its floor/ceiling first and distort the ratio
         // right at that boundary; a small drag near either limit could
         // even send the OTHER (still-far-from-any-limit) axis's raw value
         // negative before clamping, which independent per-axis clamping
-        // would silently floor to MIN_SIZE_PCT instead of catching.
+        // would silently floor to minSizePct instead of catching.
         const relW = (w - startW) / startW;
         const relH = (h - startH) / startH;
         const rawScale = 1 + (Math.abs(relW) > Math.abs(relH) ? relW : relH);
-        const minScale = Math.max(MIN_SIZE_PCT / startW, MIN_SIZE_PCT / startH);
-        const maxScale = Math.min(MAX_SIZE_PCT / startW, MAX_SIZE_PCT / startH);
+        const minScale = Math.max(minSizePct / startW, minSizePct / startH);
+        const maxScale = Math.min(maxSizePct / startW, maxSizePct / startH);
         const scale = Math.min(maxScale, Math.max(minScale, rawScale));
         w = startW * scale;
         h = startH * scale;
       }
 
-      currentW = clampSizePct(w);
-      currentH = clampSizePct(h);
+      currentW = clamp(w);
+      currentH = clamp(h);
       onLiveResize(currentW, currentH);
     }
 

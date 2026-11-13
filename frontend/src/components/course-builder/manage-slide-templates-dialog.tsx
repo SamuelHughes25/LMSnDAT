@@ -24,6 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ViewToggle } from "@/components/view-toggle";
+import { backgroundFillStyle } from "@/lib/background-fill-style";
 import { SLIDE_TYPE_LABELS } from "@/lib/course-types";
 import type { Slide, SlideTemplate } from "@/lib/course-types";
 import { useViewMode } from "@/lib/use-view-mode";
@@ -62,7 +63,7 @@ function TemplatePreviewThumb({ template, width, height }: { template: SlideTemp
 
   return (
     <div
-      style={{ width, height, overflow: "hidden" }}
+      style={{ width, height, overflow: "hidden", ...backgroundFillStyle(template.config.background_fill) }}
       className="slide-surface shrink-0 rounded border border-border bg-white"
     >
       <div
@@ -117,7 +118,7 @@ function TemplateExpansionPanel({ template }: { template: SlideTemplate }) {
       <div ref={containerRef} className="flex h-full w-full items-center justify-center overflow-hidden">
         <div
           className="slide-surface relative overflow-hidden rounded-sm bg-white shadow-lg"
-          style={{ width: CANVAS_W, height: CANVAS_H, zoom: scale }}
+          style={{ width: CANVAS_W, height: CANVAS_H, zoom: scale, ...backgroundFillStyle(template.config.background_fill) }}
         >
           <Face slide={fakeSlideFor(template)} mode="present" />
         </div>
